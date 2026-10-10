@@ -7,10 +7,20 @@ if (-not (Test-Path -LiteralPath $sdk)) { $sdk = (Get-Command dotnet.exe -ErrorA
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 Push-Location $repo
 try {
+    $evidence = Join-Path $repo 'artifacts/validation'
+    New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+    $sdkVersion = & $sdk --version
     & $sdk build AutoNet.sln -c Release --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Build failed. Install a .NET 10 SDK if needed.' }
-    & $sdk 'tests/AutoNet.Tests/bin/Release/net10.0-windows/AutoNet.Tests.dll'
-    if ($LASTEXITCODE -ne 0) { throw 'Regression checks failed.' }
+    $testOutput = & $sdk 'tests/AutoNet.Tests/bin/Release/net10.0-windows/AutoNet.Tests.dll'
+    $testExit = $LASTEXITCODE
+    $testOutput | Tee-Object -FilePath (Join-Path $evidence 'tests.txt')
+    $commit = & git rev-parse HEAD
+    & git diff --quiet HEAD
+    $dirty = $LASTEXITCODE -ne 0
+    @{ time = [DateTimeOffset]::UtcNow.ToString('o'); commit = $commit; trackedChanges = $dirty; sdk = $sdkVersion; testExitCode = $testExit; result = $testOutput[-1] } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'build.json') -Encoding utf8
+    if ($testExit -ne 0) { throw 'Regression checks failed.' }
     if ($Publish) {
         $bundle = Join-Path $repo 'artifacts/AutoNet-win-x64'
         foreach ($project in @('Service', 'Tray')) {
@@ -21,6 +31,12 @@ try {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1'), (Join-Path $PSScriptRoot 'uninstall.ps1'), (Join-Path $PSScriptRoot 'Install.cmd'), (Join-Path $repo 'README.md') -Destination $bundle -Force
         New-Item -ItemType Directory -Force -Path (Join-Path $bundle 'docs') | Out-Null
         Copy-Item -LiteralPath (Join-Path $repo 'docs/VALIDATION.md') -Destination (Join-Path $bundle 'docs') -Force
+        Copy-Item -LiteralPath (Join-Path $evidence 'build.json'), (Join-Path $evidence 'tests.txt') -Destination $bundle -Force
+        $hashes = foreach ($file in Get-ChildItem -LiteralPath $bundle -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt') {
+            $hash = Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256
+            $hash.Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetRelativePath($bundle, $file.FullName).Replace('\', '/')
+        }
+        $hashes | Set-Content -LiteralPath (Join-Path $bundle 'SHA256SUMS.txt') -Encoding utf8
         Write-Host "Ready: $bundle"
     }
 }

@@ -26,6 +26,12 @@ internal static class Program
                 var settings = Storage.LoadSettings() ?? throw new InvalidOperationException("请先保存校园网设置。");
                 Storage.SaveSettings(settings with { Enabled = !settings.Enabled }); return;
             }
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AUTONET_CAPTURE_PATH")))
+            {
+                using var preview = new MainForm { AllowExit = true };
+                Application.Run(preview);
+                return;
+            }
             using var mutex = new Mutex(true, @"Local\AutoNet.Tray", out var first);
             if (!first) { MessageBox.Show("AutoNet 已在系统托盘运行，请双击托盘图标打开。", "AutoNet"); return; }
             Application.Run(new TrayContext(args.Contains("--tray")));

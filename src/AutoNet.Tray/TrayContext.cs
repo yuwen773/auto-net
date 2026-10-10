@@ -24,11 +24,11 @@ internal sealed class TrayContext : ApplicationContext
         timer.Tick += (_, _) =>
         {
             var status = window.RefreshStatus();
-            tray.Text = ("AutoNet · " + (status?.State ?? "服务未就绪"))[..Math.Min(63, ("AutoNet · " + (status?.State ?? "服务未就绪")).Length)];
+            tray.Text = ("AutoNet · " + (status?.State ?? "服务未就绪或状态过期"))[..Math.Min(63, ("AutoNet · " + (status?.State ?? "服务未就绪或状态过期")).Length)];
             if (status?.CredentialsBlocked == true && !notified)
             {
                 notified = true;
-                tray.ShowBalloonTip(8000, "AutoNet 需要检查认证", "请打开设置更新凭据或检查认证页面。网络检测仍在运行。", ToolTipIcon.Warning);
+                tray.ShowBalloonTip(8000, "AutoNet 需要检查认证", "自动认证已安全暂停。请先查看诊断和日志，勿仅为解锁而重存密码。", ToolTipIcon.Warning);
             }
             if (status?.CredentialsBlocked == false) notified = false;
         };

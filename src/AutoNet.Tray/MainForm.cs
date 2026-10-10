@@ -19,16 +19,18 @@ internal sealed class MainForm : Form
         Text = "AutoNet · 校园网连接守护";
         Font = new Font("Microsoft YaHei UI", 10);
         Icon = NetworkIcon.Create();
-        ClientSize = new Size(740, 620);
-        MinimumSize = new Size(700, 640);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(740, 720);
+        MinimumSize = new Size(740, 720);
+        AutoScroll = true;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(247, 249, 252);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(32, 26, 32, 24), ColumnCount = 1, RowCount = 8 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(32, 26, 32, 24), ColumnCount = 1, RowCount = 8 };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
@@ -36,19 +38,19 @@ internal sealed class MainForm : Form
         layout.Controls.Add(brand, 0, 0);
         layout.Controls.Add(state, 0, 1);
         layout.Controls.Add(detail, 0, 2);
-        var checks = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, BackColor = Color.White, Padding = new Padding(18, 12, 18, 12) };
+        var checks = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 5, BackColor = Color.White, Padding = new Padding(18, 12, 18, 12) };
         checks.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 142));
         checks.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         var row = 0;
-        foreach (var name in new[] { "校园 Wi-Fi", "校园网直连", "代理 / 系统路径", "UU 远程" })
+        foreach (var name in new[] { "校园 Wi-Fi", "校园网认证", "校园网直连", "代理 / 系统路径", "UU 远程" })
         {
-            checks.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+            checks.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             checks.Controls.Add(new Label { Text = name, AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = Color.FromArgb(65, 75, 88) }, 0, row);
             var value = new Label { Text = "待检测", AutoSize = true, MaximumSize = new Size(430, 0), Anchor = AnchorStyles.Left };
             checks.Controls.Add(value, 1, row++); values[name] = value;
         }
         layout.Controls.Add(checks, 0, 3);
-        timing.ForeColor = Color.FromArgb(65, 75, 88); timing.Padding = new Padding(0, 12, 0, 0);
+        timing.ForeColor = Color.FromArgb(65, 75, 88); timing.Padding = new Padding(0, 8, 0, 12); timing.MaximumSize = new Size(660, 0);
         layout.Controls.Add(timing, 0, 4);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 6, 0, 0) };
         var settings = Button("设置…"); settings.Click += (_, _) => EditSettings();
@@ -68,18 +70,26 @@ internal sealed class MainForm : Form
     public StatusSnapshot? RefreshStatus()
     {
         StatusSnapshot? status = null;
-        try { if (File.Exists(Storage.StatusPath)) status = JsonSerializer.Deserialize<StatusSnapshot>(Storage.ReadShared(Storage.StatusPath), Storage.Json); }
+        var statusPath = Environment.GetEnvironmentVariable("AUTONET_QA_STATUS_PATH") ?? Storage.StatusPath;
+        try { if (File.Exists(statusPath)) status = JsonSerializer.Deserialize<StatusSnapshot>(Storage.ReadShared(statusPath), Storage.Json); }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
-        var fresh = status is not null && DateTimeOffset.UtcNow - status.UpdatedAt < TimeSpan.FromSeconds(15);
-        state.Text = fresh ? status!.State : "后台服务未就绪";
+        var age = status is null ? TimeSpan.MaxValue : DateTimeOffset.UtcNow - status.UpdatedAt;
+        var fresh = status is not null && age >= TimeSpan.FromSeconds(-5) && age < TimeSpan.FromSeconds(15);
+        state.Text = fresh ? status!.State : status is null ? "后台服务未就绪" : "后台状态已过期";
         state.ForeColor = fresh && status!.Direct == "外网可达" ? Color.FromArgb(20, 108, 69) : Color.FromArgb(18, 72, 130);
-        detail.Text = fresh ? status!.Detail : "首次使用请安装服务，再保存校园 Wi-Fi 和账号密码。已有服务时，请检查是否正在运行。";
+        detail.Text = fresh ? status!.Detail : status is null
+            ? "尚未收到有效状态。首次使用请安装服务并保存设置；已有服务时请检查是否正在运行。"
+            : "最近状态已超过有效期或系统时间发生变化，不能据此判断当前联网情况。请检查服务和日志。";
         values["校园 Wi-Fi"].Text = fresh ? status!.Wifi : "待检测";
+        values["校园网认证"].Text = fresh ? status!.Portal : "未知";
         values["校园网直连"].Text = fresh ? status!.Direct : "待检测";
         values["代理 / 系统路径"].Text = fresh ? status!.Tunnel : "待检测";
         values["UU 远程"].Text = fresh ? status!.Uu : "待检测";
         toggle.Text = status?.Enabled == false ? "恢复自动连接" : "暂停自动恢复";
-        timing.Text = fresh ? $"本轮尝试 {status!.Attempts} 次  ·  上次观测恢复：{(status.LastRecoverySeconds is { } seconds ? seconds + " 秒" : "尚无记录")}" : "后台未运行时，不会自动恢复网络。";
+        timing.Text = fresh ? $"最近检测：{status!.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}  ·  本轮尝试 {status.Attempts} 次\n" +
+            $"上次恢复：{(status.LastRecoveryAt is { } recovered ? recovered.ToLocalTime().ToString("MM-dd HH:mm:ss") : "尚无记录")}  ·  观测耗时：{(status.LastRecoverySeconds is { } seconds ? seconds + " 秒" : "尚无记录")}\n" +
+            (status.LastError == "" ? "观测耗时从首次发现故障算起；真实端到端耗时需现场测量。" : "最近异常：" + status.LastError)
+            : status is null ? "后台未运行时，不会自动恢复网络。" : $"上次状态：{status.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}；当前状态未知。";
         return fresh ? status : null;
     }
 
@@ -108,6 +118,8 @@ internal sealed class MainForm : Form
     {
         var path = Environment.GetEnvironmentVariable("AUTONET_CAPTURE_PATH");
         if (string.IsNullOrEmpty(path)) return;
+        if (float.TryParse(Environment.GetEnvironmentVariable("AUTONET_QA_SCALE"), System.Globalization.CultureInfo.InvariantCulture, out var scale) && scale is >= 1 and <= 2)
+            Scale(new SizeF(scale, scale));
         using var bitmap = new Bitmap(Width, Height);
         DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(path);
         BeginInvoke(() => Application.Exit());

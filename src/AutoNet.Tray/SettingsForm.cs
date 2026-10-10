@@ -31,7 +31,7 @@ internal sealed class SettingsForm : Form
         AddRow(layout, 3, "校园网账号", username); AddRow(layout, 4, "校园网密码", password);
         AddRow(layout, 5, "本机代理检测", proxy); AddRow(layout, 6, "UU 服务检测", endpoint);
         layout.Controls.Add(enabled, 1, 7); layout.Controls.Add(awake, 1, 8);
-        var note = new Label { Text = "仅列出可供开机使用的所有用户 Wi-Fi 配置。\n更改账号时需要重新输入密码。UU 服务运行并不等同远程连接已成功。", AutoSize = true, MaximumSize = new Size(600, 0), ForeColor = Color.FromArgb(65, 75, 88) };
+        var note = new Label { Text = "仅列出可供开机使用的所有用户 Wi-Fi 配置。更改账号需重新输入密码。\n认证站点固定为长沙理工大学；协议变化时暂停认证，需人工检查。\n代理端口仅用于检测，不修改 Clash。UU 服务运行不等同远程会话成功。", AutoSize = true, MaximumSize = new Size(600, 0), ForeColor = Color.FromArgb(65, 75, 88) };
         layout.Controls.Add(note, 0, 9); layout.SetColumnSpan(note, 2);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         var save = MainForm.Button("保存设置"); save.Click += (_, _) => Save();

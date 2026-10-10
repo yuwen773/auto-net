@@ -1,0 +1,27 @@
+name: Windows offline regression
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.401'
+      - name: Build and run offline fixtures
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1 -Publish
+      - name: Upload build evidence and Windows package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoNet-win-x64
+          path: |
+            artifacts/validation/
+            artifacts/AutoNet-win-x64/
+          if-no-files-found: warn

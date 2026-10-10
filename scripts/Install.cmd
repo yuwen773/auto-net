@@ -6,4 +6,6 @@ if errorlevel 1 (
   exit /b 1
 )
 pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -LaunchSettings
-if errorlevel 1 pause
+set "autonet_exit=%errorlevel%"
+if not "%autonet_exit%"=="0" pause
+exit /b %autonet_exit%

@@ -5,3 +5,10 @@ artifacts/
 .vs/
 *.user
 *.suo
+# Local diagnostics and sensitive captures. Keep fixtures/example settings tracked.
+diagnostics/
+local-secrets/
+*.pcap
+*.pcapng
+credentials.dpapi
+auth-block.txt
