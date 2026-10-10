@@ -28,7 +28,7 @@ internal static class Program
             }
             if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AUTONET_CAPTURE_PATH")))
             {
-                using var preview = new MainForm { AllowExit = true };
+                using Form preview = args.Contains("--logs") ? new LogForm() : new MainForm { AllowExit = true };
                 Application.Run(preview);
                 return;
             }

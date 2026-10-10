@@ -55,7 +55,7 @@ internal sealed class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 6, 0, 0) };
         var settings = Button("设置…"); settings.Click += (_, _) => EditSettings();
         toggle.Click += (_, _) => Toggle();
-        var logs = Button("打开日志"); logs.Click += (_, _) => Program.OpenFolder(Storage.Logs);
+        var logs = Button("查看日志"); logs.Click += (_, _) => OpenLogs();
         var install = Button("安装服务…"); install.Click += (_, _) => InstallService();
         actions.Controls.AddRange([settings, toggle, logs, install]);
         layout.Controls.Add(actions, 0, 5);
@@ -87,6 +87,7 @@ internal sealed class MainForm : Form
         values["UU 远程"].Text = fresh ? status!.Uu : "待检测";
         toggle.Text = status?.Enabled == false ? "恢复自动连接" : "暂停自动恢复";
         timing.Text = fresh ? $"最近检测：{status!.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}  ·  本轮尝试 {status.Attempts} 次\n" +
+            (status.NextAttempt is { } next ? $"下次自动尝试：{next.ToLocalTime():HH:mm:ss}（期间继续检测）\n" : "") +
             $"上次恢复：{(status.LastRecoveryAt is { } recovered ? recovered.ToLocalTime().ToString("MM-dd HH:mm:ss") : "尚无记录")}  ·  观测耗时：{(status.LastRecoverySeconds is { } seconds ? seconds + " 秒" : "尚无记录")}\n" +
             (status.LastError == "" ? "观测耗时从首次发现故障算起；真实端到端耗时需现场测量。" : "最近异常：" + status.LastError)
             : status is null ? "后台未运行时，不会自动恢复网络。" : $"上次状态：{status.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}；当前状态未知。";
@@ -94,6 +95,7 @@ internal sealed class MainForm : Form
     }
 
     public void EditSettings() => RunAction(() => Program.Elevate("--settings"));
+    public void OpenLogs() => RunAction(() => { using var logs = new LogForm(); logs.ShowDialog(this); });
     public void Toggle() => RunAction(() => Program.Elevate("--toggle"));
     private void InstallService() => RunAction(() =>
     {
