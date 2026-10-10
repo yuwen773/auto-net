@@ -38,7 +38,7 @@ internal static class NetworkRegression
             var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
             var report = await NetworkDiagnostics.RunAsync(settings, link, http, new("Tun", 9), default);
             Require(report.DirectOnline == true && !report.Mutations && report.PhysicalExitEvidence.Contains("未核验"));
-            Require(handler.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+            Require(handler.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
             var count = handler.Requests.Count;
             var missingIp = await NetworkDiagnostics.RunAsync(settings, link with { Address = null }, http, new("Unknown"), default);
             Require(missingIp.DirectOnline is null && count == handler.Requests.Count);

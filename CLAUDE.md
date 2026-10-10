@@ -70,13 +70,20 @@ Design invariants to preserve when editing it:
 
 `DrcomPortal` walks a staged sequence against `https://login.csust.edu.cn`, recording which stage it reached:
 
-1. `Status` — `/drcom/chkstatus` JSONP → `LoggedIn` / `NeedsLogin` / `Unknown`
-2. `HomePage` — fetch `/`, regex-extract `v4ip` (the client IPv4)
-3. `Configuration` — port **802** `/eportal/portal/page/loadConfig`, base64 of the client IP
-4. `AuthenticationMode` — validate `en_md5`, `password_cut`, `enable_r3` are each present exactly once with value `0`
-5. `Submission` — only now `/drcom/login` with the credentials
+1. `Status` — `/drcom/chkstatus` JSONP → `LoggedIn` / `NeedsLogin` / `Unknown`, and the client IPv4 from its `v4ip` field
+2. `GatewayRedirect` — plain-HTTP probe of `www.msftconnecttest.com` with redirects disabled; accept context only from HTTP 302 with an absolute HTTPS 443 root `Location` on `login.csust.edu.cn`, without userinfo or fragment. Relative/untrusted targets, other statuses with Location, and repeated context fields are retriable failures without credential submission. A 200 without Location supplies no context and retains the IPv4 fallback.
+3. `HomePage` — **fallback only**, reached when neither the gateway nor the status response has an address; regex-extracts `v4ip` from `/`
+4. `Configuration` — port **802** `/eportal/portal/page/loadConfig`, base64 of the client IP
+5. `AuthenticationMode` — validate `en_md5`, `password_cut`, `enable_r3` are each present exactly once with value `0`
+6. `Submission` — port **802** `/eportal/portal/login`, with `user_account` / `user_password` and the gateway fields
 
-The credential-bearing GET exists in exactly one guarded branch, after all prerequisite checks pass. `LoginDetailedAsync` and `DiagnoseAsync` share this path — diagnosis simply passes `null` credentials, so it exercises identical prerequisites and can never send them.
+**Client IPv4 priority is gateway redirect → status response → home-page fallback.** The home page can omit `v4ip` before a session exists, so relying on it caused failures when login was needed. Keep the ordering if you touch it.
+
+If every IPv4 source is temporarily unavailable, return `Rejected/MissingClientIpv4` and back off rather than persisting a credential block. Addresses must be canonical unicast IPv4, excluding unspecified, loopback and broadcast addresses. The gateway MAC remains an opaque nonblank token without whitespace/control characters; do not assume it is a physical MAC address.
+
+**Submission is implemented but not verified end to end.** The parameter set comes from the portal's own request, but three things could not be confirmed without submitting a real password: the `,0,` account prefix, whether `wlanusermac` is stable per client or regenerated per redirect, and whether the `PHPSESSID` cookie the browser carried is required. A live test returned "只能绑定指定的VLAN设备", so **treat the MAC token as the most likely remaining defect.** Without a gateway MAC or AC address, `Submission` returns `MissingGatewayParameters` and sends nothing — better than a request that cannot succeed. It reports `LoginResult.Rejected`, not `Unsupported`, so it never sets `CredentialsBlocked` and never tells the user to re-enter a working password.
+
+`LoginDetailedAsync` and `DiagnoseAsync` share this path — diagnosis passes `null` credentials and checks required gateway MAC/AC context before returning success, so it exercises identical prerequisites and can never send them. Missing context returns `Rejected/MissingGatewayParameters` in both paths. Unknown historical block markers remain intact; current storage only records a credential fingerprint, so a successful diagnosis is not evidence that an old block can safely be cleared.
 
 `Classify` maps portal messages to `LoginResult`; only messages on an explicit allowlist (verified against the portal's public `a78.js`) become `RejectedCredentials`. Generic `result: 0` does not. This distinction matters: `RejectedCredentials`, `NeedsInteraction`, and `Unsupported` set `CredentialsBlocked`, which stops credential submission until credentials are re-saved — while plain `Rejected` merely backs off.
 

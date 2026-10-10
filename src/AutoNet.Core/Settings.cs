@@ -20,7 +20,7 @@ public sealed record Settings
         if (!Guid.TryParse(InterfaceId, out _) || string.IsNullOrWhiteSpace(WifiProfile))
             throw new ArgumentException("请选择校园 Wi-Fi 网卡和已保存的配置。");
         if (!Uri.TryCreate(PortalOrigin, UriKind.Absolute, out var portal) || !IsSupportedPortal(portal))
-            throw new ArgumentException("认证地址仅支持 https://login.csust.edu.cn:443 根地址；802 仅用于读取认证配置。");
+            throw new ArgumentException("认证地址仅支持 https://login.csust.edu.cn:443 根地址；802 端口由程序自行使用。");
         if (ProxyUrl != "" && (!Uri.TryCreate(ProxyUrl, UriKind.Absolute, out var proxy) ||
             proxy.Scheme != "http" || !proxy.IsLoopback || proxy.UserInfo != ""))
             throw new ArgumentException("代理检测地址应为本机 HTTP 代理，例如 http://127.0.0.1:7897。");

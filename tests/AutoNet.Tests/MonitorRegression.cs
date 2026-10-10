@@ -17,7 +17,7 @@ internal static class MonitorRegression
             var stalled = await worker.RunOnceAsync(default);
             Require(stalled.Attempts == 1 && stalled.ActionStartedAt is not null);
             Require(fixture.Disconnects == 1 && fixture.Connects == 0);
-            Require(!stalled.CredentialRequestStarted && fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+            Require(!stalled.CredentialRequestStarted && fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
         }),
         ("监测：卡死重连后连接原配置、确认需认证再登录、复测外网", async () =>
         {
@@ -31,7 +31,7 @@ internal static class MonitorRegression
             Require(fixture.Connects == 1);
             fixture.Link = new(true, null, null, 7, []);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
-            Require(fixture.Connects == 1 && fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+            Require(fixture.Connects == 1 && fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
             fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
             fixture.Http.PortalResult = "0";
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var accepted = await worker.RunOnceAsync(default);
@@ -69,7 +69,7 @@ internal static class MonitorRegression
             Require(fixture.Disconnects == 1);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var retry = await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 2 && retry.NextAttempt == fixture.Clock.GetUtcNow().AddSeconds(120));
-            Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+            Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
         }),
         ("监测：长期已认证离线也尝试重连，暂停和认证阻断不强行断网", async () =>
         {
@@ -82,7 +82,7 @@ internal static class MonitorRegression
                 await worker.RunOnceAsync(default);
                 fixture.Clock.Advance(TimeSpan.FromSeconds(20)); await worker.RunOnceAsync(default);
                 Require(fixture.Disconnects == (mode == "authenticated" ? 1 : 0));
-                Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+                Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
             }
         }),
         ("监测：卡死后用户切网或取消检测不触发断网", async () =>
@@ -158,7 +158,7 @@ internal static class MonitorRegression
                 var fixture = new MonitorFixture(); fixture.Http.PortalResult = state;
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
                 var status = await worker.RunOnceAsync(default);
-                Require(!status.CredentialRequestStarted && fixture.Connects == 0 && fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+                Require(!status.CredentialRequestStarted && fixture.Connects == 0 && fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
             }
         }),
         ("监测：日志和状态写入失败后主恢复继续", async () =>
@@ -231,11 +231,11 @@ internal static class MonitorRegression
         }),
         ("认证首页失败必须指出阶段且不发送凭据", async () =>
         {
-            var handler = new MonitorHttp { FailurePath = "/", FailureStatus = HttpStatusCode.ServiceUnavailable };
+            var handler = new MonitorHttp { StatusClientIpv4 = null, GatewayLocation = null, FailurePath = "/", FailureStatus = HttpStatusCode.ServiceUnavailable };
             using var http = new HttpClient(handler);
             var result = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginDetailedAsync(new("test", "never-real"), default);
             Require(result.Stage == PortalStage.HomePage && result.Failure == PortalFailure.HttpStatus && result.HttpStatus == 503);
-            Require(!result.CredentialRequestStarted && handler.Requests.All(r => r.AbsolutePath != "/drcom/login"));
+            Require(!result.CredentialRequestStarted && handler.Requests.All(r => r.AbsolutePath != "/eportal/portal/login"));
         }),
         ("辅助检测异常后可重试且主恢复继续", async () =>
         {
@@ -314,9 +314,22 @@ internal sealed class ManualClock : TimeProvider
 
 internal sealed class MonitorHttp : HttpMessageHandler
 {
+    // Location the campus gateway answers a plain HTTP probe with while unauthenticated.
+    // Synthetic values, not the ones a real campus gateway emits — the shape matters to the
+    // parser, the identities do not belong in source. Shared with PortalFixture so the two
+    // cannot drift apart silently.
+    internal const string GatewayRedirect =
+        "https://login.csust.edu.cn/?wlanuserip=10.0.0.1&wlanacname=TEST-AP-1&wlanacip=192.168.100.254" +
+        "&wlanusermac=001122334455667700112233445566778899aabbccddeeff";
+
     public bool Online { get; set; }
     public string PortalResult { get; set; } = "0";
+    // The real status endpoint always reports v4ip; null exercises the home-page fallback.
+    public string? StatusClientIpv4 { get; set; } = "10.0.0.1";
     public string LoginResult { get; set; } = "{\"result\":1}";
+    // null forces the home-page fallback, exercising the address resolution chain.
+    public string? GatewayLocation { get; set; } = GatewayRedirect;
+    public HttpStatusCode GatewayStatus { get; set; } = HttpStatusCode.Found;
     public string HomePage { get; set; } = "<script>v4ip='10.0.0.1';</script>";
     public string ConfigJson { get; set; } = "{\"data\":{\"en_md5\":0,\"password_cut\":0,\"enable_r3\":0}}";
     public string? FailurePath { get; set; }
@@ -334,13 +347,20 @@ internal sealed class MonitorHttp : HttpMessageHandler
             failure.Headers.Location = new Uri("https://untrusted.example/redirect");
             return Task.FromResult(failure);
         }
+        if (uri.AbsolutePath == "/connecttest.txt" && GatewayLocation is not null)
+        {
+            var redirected = new HttpResponseMessage(GatewayStatus) { Content = new StringContent("") };
+            redirected.Headers.Location = new Uri(GatewayLocation, UriKind.RelativeOrAbsolute);
+            return Task.FromResult(redirected);
+        }
         var body = uri.AbsolutePath switch
         {
             "/robots.txt" => Online ? "User-agent: *" : "offline",
-            "/drcom/chkstatus" => "{\"result\":" + PortalResult + "}",
+            "/connecttest.txt" => "Microsoft Connect Test",
+            "/drcom/chkstatus" => "{\"result\":" + PortalResult + (StatusClientIpv4 is null ? "" : ",\"v4ip\":\"" + StatusClientIpv4 + "\"") + "}",
             "/" => HomePage,
             "/eportal/portal/page/loadConfig" => ConfigJson,
-            "/drcom/login" => LoginResult,
+            "/eportal/portal/login" => LoginResult,
             _ => throw new InvalidOperationException("未知夹具请求")
         };
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });

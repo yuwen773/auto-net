@@ -49,25 +49,35 @@ var tests = new (string Name, Func<Task> Run)[]
         Throws<InvalidDataException>(() => DrcomPortal.ParseJsonp("evil(); dr1001({\"result\":1});"));
     })),
     ("凭据完整编码而非直接拼接查询串", () => Sync(() => {
-        var q = DrcomPortal.BuildLoginQuery(new("测试&account", "p&=#?+ %"));
-        True(q.Contains("upass=p%26%3D%23%3F%2B%20%25")); True(!q.Contains("captcha="));
-        True(q.Contains("DDDDD=%E6%B5%8B%E8%AF%95%26account"));
+        var gateway = new DrcomPortal.GatewayContext("10.0.0.1", "192.168.100.254", "TEST-AP-1", "aabb");
+        var q = DrcomPortal.BuildLoginQuery(new("测试&account", "p&=#?+ %"), "10.0.0.1", gateway);
+        True(q.Contains("user_password=p%26%3D%23%3F%2B%20%25")); True(!q.Contains("captcha="));
+        True(q.Contains("user_account=%2C0%2C%E6%B5%8B%E8%AF%95%26account"));
+        True(q.Contains("wlan_user_mac=aabb") && q.Contains("wlan_ac_name=TEST-AP-1"));
     })),
     ("真实适配路径：状态、配置、认证", async () => {
         var handler = new PortalFixture(); using var http = new HttpClient(handler);
         var result = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default);
-        Equal(LoginResult.Accepted, result); Equal(4, handler.Calls.Count); True(handler.Calls[^1].AbsolutePath == "/drcom/login");
-        True(handler.Calls[2].Port == 802); True(handler.Calls.All(u => u.Host == "login.csust.edu.cn" && u.Scheme == "https"));
+        Equal(LoginResult.Accepted, result); Equal(4, handler.Calls.Count);
+        True(handler.Calls[0].AbsolutePath == "/drcom/chkstatus"); True(handler.Calls[1].AbsolutePath == "/connecttest.txt");
+        True(handler.Calls[2].Port == 802); True(handler.Calls[3].AbsolutePath == "/eportal/portal/login");
+        // Only the gateway probe leaves the portal host, and it is plain HTTP on purpose.
+        // Asserted by exclusion rather than by call index so a new stage cannot pass for the wrong reason.
+        True(handler.Calls.Count(u => u.Host != "login.csust.edu.cn") == 1 &&
+            handler.Calls.Single(u => u.Host != "login.csust.edu.cn").Scheme == "http" &&
+            handler.Calls.Where(u => u.Host == "login.csust.edu.cn").All(u => u.Scheme == "https"));
+        // The credential-bearing request is the last one, and nothing else carries the password.
+        True(handler.Calls.Count(u => u.Query.Contains("user_password")) == 1);
     }),
     ("已经在线时不会发送凭据", async () => {
         var handler = new PortalFixture { AlreadyOnline = true }; using var http = new HttpClient(handler);
         await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default);
-        Equal(1, handler.Calls.Count); True(!handler.Calls[0].Query.Contains("upass"));
+        Equal(1, handler.Calls.Count); True(!handler.Calls[0].Query.Contains("user_password"));
     }),
     ("认证模式变化时不猜测登录", async () => {
         var handler = new PortalFixture { ChangedMode = true }; using var http = new HttpClient(handler);
         Equal(LoginResult.Unsupported, await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default));
-        True(handler.Calls.All(u => !u.Query.Contains("upass")));
+        True(handler.Calls.All(u => !u.Query.Contains("user_password")));
     }),
     ("认证配置缺失、空值、异常结构均不发送凭据", async () => {
         foreach (var data in new[] {
@@ -82,7 +92,7 @@ var tests = new (string Name, Func<Task> Run)[]
             var handler = new PortalFixture { ConfigJson = "dr1001({\"data\":" + data + "});" };
             using var http = new HttpClient(handler);
             Equal(LoginResult.Unsupported, await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default));
-            True(handler.Calls.All(u => u.AbsolutePath != "/drcom/login" && !u.Query.Contains("upass")));
+            True(handler.Calls.All(u => u.AbsolutePath != "/eportal/portal/login" && !u.Query.Contains("user_password")));
         }
     }),
     ("重定向和伪造成功页不视为外网在线", async () => {
@@ -147,12 +157,18 @@ sealed class PortalFixture : HttpMessageHandler
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri!; Calls.Add(uri);
+        if (uri.AbsolutePath == "/connecttest.txt")
+        {
+            var redirected = new HttpResponseMessage(HttpStatusCode.Found) { Content = new StringContent("") };
+            redirected.Headers.Location = new Uri(MonitorHttp.GatewayRedirect);
+            return Task.FromResult(redirected);
+        }
         var body = uri.AbsolutePath switch
         {
-            "/drcom/chkstatus" => "dr1001({\"result\":" + (AlreadyOnline ? "1" : "0") + "});",
+            "/drcom/chkstatus" => "dr1001({\"result\":" + (AlreadyOnline ? "1" : "0") + ",\"v4ip\":\"10.0.0.1\"});",
             "/" => "<html><script>v4ip='10.0.0.1';</script></html>",
             "/eportal/portal/page/loadConfig" => ConfigJson ?? "dr1001({\"code\":200,\"data\":{\"en_md5\":" + (ChangedMode ? "1" : "0") + ",\"password_cut\":0,\"enable_r3\":0}});",
-            "/drcom/login" => "dr1001({\"result\":1});",
+            "/eportal/portal/login" => "dr1003({\"result\":1});",
             _ => throw new Exception("Unexpected fixture path")
         };
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });

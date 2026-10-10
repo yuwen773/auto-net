@@ -1,7 +1,7 @@
 namespace AutoNet.Core;
 
-public enum PortalStage { Unknown, Status, HomePage, ClientIpv4, Configuration, AuthenticationMode, Submission, Complete }
-public enum PortalFailure { None, InvalidTarget, AlreadyAuthenticated, StatusUnknown, HttpStatus, MissingClientIpv4, MalformedConfiguration, MissingFlag, InvalidFlagType, UnsupportedFlag, DuplicateFlag, InvalidResponse, Timeout, Transport, Tls, CredentialsRejected, InteractionRequired, LoginRejected }
+public enum PortalStage { Unknown, Status, GatewayRedirect, HomePage, ClientIpv4, Configuration, AuthenticationMode, Submission, Complete }
+public enum PortalFailure { None, InvalidTarget, AlreadyAuthenticated, StatusUnknown, HttpStatus, MissingClientIpv4, MalformedConfiguration, MissingFlag, InvalidFlagType, UnsupportedFlag, DuplicateFlag, InvalidResponse, Timeout, Transport, Tls, CredentialsRejected, InteractionRequired, LoginRejected, MissingGatewayParameters }
 
 public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, PortalFailure Failure, int? HttpStatus = null, string? Field = null, bool CredentialRequestStarted = false)
 {
@@ -14,7 +14,8 @@ public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, Portal
 
     private string StageText => Stage switch
     {
-        PortalStage.Status => "认证状态查询", PortalStage.HomePage => "登录首页读取", PortalStage.ClientIpv4 => "客户端 IPv4 提取",
+        PortalStage.Status => "认证状态查询", PortalStage.GatewayRedirect => "网关重定向读取",
+        PortalStage.HomePage => "登录首页读取", PortalStage.ClientIpv4 => "客户端 IPv4 提取",
         PortalStage.Configuration => "802 配置读取", PortalStage.AuthenticationMode => "认证模式校验", PortalStage.Submission => "认证提交",
         PortalStage.Complete => "认证前置检查", _ => "认证目标校验"
     };
@@ -28,6 +29,7 @@ public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, Portal
         PortalFailure.UnsupportedFlag => "字段值不受支持", PortalFailure.DuplicateFlag => "字段重复",
         PortalFailure.InvalidResponse => "响应无法解析", PortalFailure.Timeout => "请求超时", PortalFailure.Transport => "网络请求失败",
         PortalFailure.Tls => "TLS 校验或握手失败", PortalFailure.CredentialsRejected => "服务器明确拒绝凭据",
-        PortalFailure.InteractionRequired => "需要人工验证", _ => "接口未接受认证"
+        PortalFailure.InteractionRequired => "需要人工验证",
+        PortalFailure.MissingGatewayParameters => "网关未返回登录所需参数", _ => "接口未接受认证"
     };
 }
