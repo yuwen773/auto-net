@@ -12,6 +12,24 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
 {
     public async Task<PortalState> InspectAsync(CancellationToken ct) => (await ReadStateAsync(ct)).State;
 
+    public async Task<PortalAttempt> InspectDetailedAsync(CancellationToken ct)
+    {
+        PortalAttempt Unknown(PortalFailure failure) => new(LoginResult.Rejected, PortalStage.Status, failure);
+        if (!Settings.IsSupportedPortal(origin)) return Unknown(PortalFailure.InvalidTarget);
+        try
+        {
+            var (state, status) = await ReadStateAsync(ct);
+            var failure = status is not null && status != 200 ? PortalFailure.HttpStatus :
+                state == PortalState.Unknown ? PortalFailure.StatusUnknown : PortalFailure.None;
+            return new PortalAttempt(failure == PortalFailure.None ? LoginResult.Accepted : LoginResult.Rejected,
+                PortalStage.Status, failure, status) { ObservedState = state };
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Unknown(PortalFailure.Timeout); }
+        catch (HttpRequestException e) { return Unknown(e.HttpRequestError == HttpRequestError.SecureConnectionError ? PortalFailure.Tls : PortalFailure.Transport); }
+        catch (Exception e) when (e is JsonException or InvalidDataException) { return Unknown(PortalFailure.InvalidResponse); }
+        catch (IOException) { return Unknown(PortalFailure.Transport); }
+    }
+
     private async Task<(PortalState State, int? HttpStatus)> ReadStateAsync(CancellationToken ct)
     {
         if (!Settings.IsSupportedPortal(origin)) return (PortalState.Unknown, null);

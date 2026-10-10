@@ -114,6 +114,7 @@ var tests = new (string Name, Func<Task> Run)[]
 tests = tests.Concat(MonitorRegression.Cases).ToArray();
 tests = tests.Concat(PortalRegression.Cases).ToArray();
 tests = tests.Concat(NetworkRegression.Cases).ToArray();
+tests = tests.Concat(LogRegression.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

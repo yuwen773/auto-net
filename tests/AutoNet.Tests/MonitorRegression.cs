@@ -6,6 +6,122 @@ internal static class MonitorRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("监测：Wi-Fi 已连接但持续断网不能无限等待零次恢复", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.PortalResult = "-1";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var first = await worker.RunOnceAsync(default);
+            Require(first.Attempts == 0);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(10));
+            var stalled = await worker.RunOnceAsync(default);
+            Require(stalled.Attempts == 1 && stalled.ActionStartedAt is not null);
+            Require(fixture.Disconnects == 1 && fixture.Connects == 0);
+            Require(!stalled.CredentialRequestStarted && fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+        }),
+        ("监测：卡死重连后连接原配置、确认需认证再登录、复测外网", async () =>
+        {
+            var fixture = new MonitorFixture(); fixture.Http.PortalResult = "-1";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(10)); await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 1 && fixture.Connects == 0);
+            fixture.Link = new(false, null, null, 7, []);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
+            Require(fixture.Connects == 1);
+            fixture.Link = new(true, null, null, 7, []);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
+            Require(fixture.Connects == 1 && fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+            fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
+            fixture.Http.PortalResult = "0";
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var accepted = await worker.RunOnceAsync(default);
+            Require(accepted.CredentialRequestStarted && accepted.AuthenticationAcceptedAt is not null && accepted.Direct != "外网可达");
+            fixture.Http.Online = true;
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var recovered = await worker.RunOnceAsync(default);
+            Require(recovered.State == "校园网在线" && recovered.LastRecoverySeconds == 18 && recovered.Attempts == 0);
+            Require(fixture.Logs.Any(e => e.Action == "重连校园 Wi-Fi" && e.NextAttempt is not null && e.Attempts == 1));
+            Require(fixture.Logs.Any(e => e.Action == "观测到联网恢复" && e.Attempts == 3 && e.Detail.Contains("来源无法确认")));
+        }),
+        ("监测：短暂离线恢复不切断 Wi-Fi，下一次故障重新计时", async () =>
+        {
+            var fixture = new MonitorFixture(); fixture.Http.PortalResult = "-1";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(8)); fixture.Http.Online = true; await worker.RunOnceAsync(default);
+            fixture.Http.Online = false;
+            fixture.Clock.Advance(TimeSpan.FromSeconds(20)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(8)); await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 0);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 1);
+        }),
+        ("监测：未知与已认证状态切换不绕过卡死重连退避", async () =>
+        {
+            var fixture = new MonitorFixture(); fixture.Http.PortalResult = "-1";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(10)); await worker.RunOnceAsync(default);
+            for (var i = 0; i < 29; i++)
+            {
+                fixture.Http.PortalResult = i % 2 == 0 ? "1" : "-1";
+                fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
+            }
+            Require(fixture.Disconnects == 1);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var retry = await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 2 && retry.NextAttempt == fixture.Clock.GetUtcNow().AddSeconds(120));
+            Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+        }),
+        ("监测：长期已认证离线也尝试重连，暂停和认证阻断不强行断网", async () =>
+        {
+            foreach (var mode in new[] { "authenticated", "paused", "blocked", "missing" })
+            {
+                var fixture = new MonitorFixture { Blocked = mode == "blocked", HasCredentials = mode != "missing" };
+                fixture.Settings = fixture.Settings with { Enabled = mode != "paused" };
+                fixture.Http.PortalResult = "1";
+                using var worker = new MonitorWorker(fixture, fixture.Clock);
+                await worker.RunOnceAsync(default);
+                fixture.Clock.Advance(TimeSpan.FromSeconds(20)); await worker.RunOnceAsync(default);
+                Require(fixture.Disconnects == (mode == "authenticated" ? 1 : 0));
+                Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/drcom/login"));
+            }
+        }),
+        ("监测：卡死后用户切网或取消检测不触发断网", async () =>
+        {
+            var fixture = new MonitorFixture(); fixture.Http.PortalResult = "-1";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(20));
+            try { await worker.RunOnceAsync(new CancellationToken(true)); throw new Exception("未响应取消"); }
+            catch (OperationCanceledException) { }
+            Require(fixture.Disconnects == 0);
+            fixture.Link = fixture.Link with { OtherProfile = true };
+            await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 0);
+        }),
+        ("监测：卡死重连请求失败仍按冷却重试，不阻断检测", async () =>
+        {
+            var fixture = new MonitorFixture { FailDisconnect = true }; fixture.Http.PortalResult = "-1";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(10)); var failed = await worker.RunOnceAsync(default);
+            Require(failed.Detail.Contains("Windows 错误 5") && !failed.Detail.Contains("secret") && failed.NextAttempt is not null);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 1);
+            fixture.FailDisconnect = false;
+            fixture.Clock.Advance(TimeSpan.FromSeconds(58)); await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 2);
+        }),
+        ("监测：认证状态异常记录受控原因，不泄露异常原文", async () =>
+        {
+            var fixture = new MonitorFixture(); fixture.Http.FailurePath = "/drcom/chkstatus";
+            fixture.Http.FailureException = new HttpRequestException("fixture-secret-url");
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var status = await worker.RunOnceAsync(default);
+            Require(status.Detail.Contains("网络请求失败") && !status.Detail.Contains("secret"));
+            Require(fixture.Logs.Any(e => e.Detail.Contains("网络请求失败")));
+            fixture.Http.FailureException = null; fixture.Http.FailureStatus = HttpStatusCode.ServiceUnavailable;
+            Require((await worker.RunOnceAsync(default)).Detail.Contains("HTTP 503"));
+        }),
         ("监测：反复切换断连与认证不绕过各自退避", () =>
         {
             var policy = new RecoveryPolicy();
@@ -150,13 +266,17 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public Func<int, CancellationToken, Task<(string, string)>> Auxiliary { get; set; } = (_, _) => Task.FromResult(("系统路径样本未知", "UU 会话待实测"));
     public int AuxiliaryCalls { get; private set; }
     public int Connects { get; private set; }
+    public int Disconnects { get; private set; }
     public bool FailStatus { get; set; }
     public bool FailLog { get; set; }
     public bool FailPower { get; set; }
+    public bool FailDisconnect { get; set; }
     public bool Blocked { get; set; }
     public bool FailBlock { get; set; }
+    public bool HasCredentials { get; set; } = true;
+    public List<ActivityLog> Logs { get; } = [];
     public Settings? LoadSettings() => Settings;
-    public Credentials? LoadCredentials() => new("test", "never-real");
+    public Credentials? LoadCredentials() => HasCredentials ? new("test", "never-real") : null;
     public string CredentialFingerprint() => "fixture-fingerprint";
     public bool AuthenticationBlocked(string fingerprint) => Blocked;
     public void BlockAuthentication(string fingerprint)
@@ -166,11 +286,20 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     }
     public WifiLink ReadWifi(Settings settings) => Link;
     public void ConnectWifi(Settings settings) => Connects++;
+    public void DisconnectWifi(Settings settings)
+    {
+        Disconnects++;
+        if (FailDisconnect) throw new System.ComponentModel.Win32Exception(5, "fixture-secret-url");
+    }
     public HttpClient CreateDirectClient(WifiLink link) => new(Http, disposeHandler: false);
     public Task<(string SystemPath, string Uu)> CheckAuxiliaryAsync(Settings settings, WifiLink link, CancellationToken ct) => Auxiliary(++AuxiliaryCalls, ct);
     public void UpdatePower(bool enabled) { if (FailPower) throw new System.ComponentModel.Win32Exception(5); }
     public void WriteStatus(StatusSnapshot status) { if (FailStatus) throw new UnauthorizedAccessException("fixture-secret-url"); }
-    public void WriteLog(string action, string detail, double? seconds, StatusSnapshot? snapshot) { if (FailLog) throw new IOException("fixture-secret-url"); }
+    public void WriteLog(string action, string detail, double? seconds, StatusSnapshot? snapshot)
+    {
+        if (FailLog) throw new IOException("fixture-secret-url");
+        Logs.Add(ActivityLog.Create(Clock.GetUtcNow(), action, detail, seconds, snapshot));
+    }
 }
 
 internal sealed class ManualClock : TimeProvider

@@ -95,6 +95,16 @@ public static class Wifi
         Check(WlanConnect(client.Handle, ref id, ref parameters, IntPtr.Zero));
     }
 
+    public static void Disconnect(Settings settings)
+    {
+        // Recheck the selected profile immediately before the disruptive request.
+        if (Read(settings).State != WifiState.Ready) return;
+        using var client = new WlanClient();
+        var id = Guid.Parse(settings.InterfaceId);
+        Check(WlanDisconnect(client.Handle, ref id, IntPtr.Zero));
+        // The monitoring loop waits for disconnection before requesting the saved profile.
+    }
+
     private static string Current(IntPtr handle, Guid id)
     {
         var result = WlanQueryInterface(handle, ref id, 7, IntPtr.Zero, out _, out var data, out _);
@@ -145,5 +155,6 @@ public static class Wifi
     [DllImport("wlanapi.dll")] private static extern uint WlanGetProfileList(IntPtr handle, ref Guid id, IntPtr reserved, out IntPtr list);
     [DllImport("wlanapi.dll")] private static extern uint WlanQueryInterface(IntPtr handle, ref Guid id, int opcode, IntPtr reserved, out uint size, out IntPtr data, out uint type);
     [DllImport("wlanapi.dll", CharSet = CharSet.Unicode)] private static extern uint WlanConnect(IntPtr handle, ref Guid id, ref ConnectionParameters parameters, IntPtr reserved);
+    [DllImport("wlanapi.dll")] private static extern uint WlanDisconnect(IntPtr handle, ref Guid id, IntPtr reserved);
     [DllImport("wlanapi.dll")] private static extern void WlanFreeMemory(IntPtr memory);
 }

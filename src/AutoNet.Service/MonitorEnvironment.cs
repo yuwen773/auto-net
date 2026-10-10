@@ -13,6 +13,7 @@ public interface IMonitorEnvironment
     void BlockAuthentication(string fingerprint);
     WifiLink ReadWifi(Settings settings);
     void ConnectWifi(Settings settings);
+    void DisconnectWifi(Settings settings);
     HttpClient CreateDirectClient(WifiLink link);
     Task<(string SystemPath, string Uu)> CheckAuxiliaryAsync(Settings settings, WifiLink link, CancellationToken ct);
     void UpdatePower(bool enabled);
@@ -30,6 +31,7 @@ internal sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
     public void BlockAuthentication(string fingerprint) => Storage.AtomicWrite(Storage.AuthBlockPath, fingerprint);
     public WifiLink ReadWifi(Settings settings) => Wifi.Read(settings);
     public void ConnectWifi(Settings settings) => Wifi.Connect(settings);
+    public void DisconnectWifi(Settings settings) => Wifi.Disconnect(settings);
     public HttpClient CreateDirectClient(WifiLink link) => DirectNetwork.CreateClient(link);
     public void UpdatePower(bool enabled) => power.Update(enabled);
     public void WriteStatus(StatusSnapshot status) => Storage.AtomicWrite(Storage.StatusPath, JsonSerializer.Serialize(status, Storage.Json));
@@ -52,12 +54,7 @@ internal sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
         Directory.CreateDirectory(Storage.Logs);
         var now = DateTimeOffset.Now;
         var path = Path.Combine(Storage.Logs, $"autonet-{now:yyyy-MM-dd}.jsonl");
-        File.AppendAllText(path, JsonSerializer.Serialize(new { time = now, action, detail, seconds,
-            wifi = snapshot?.Wifi, direct = snapshot?.Direct, portal = snapshot?.Portal, systemPath = snapshot?.Tunnel, uu = snapshot?.Uu,
-            actionStartedAt = snapshot?.ActionStartedAt, actionFinishedAt = snapshot?.ActionFinishedAt,
-            authenticationAcceptedAt = snapshot?.AuthenticationAcceptedAt, recoveredAt = snapshot?.LastRecoveryAt,
-            authenticationStage = snapshot?.AuthenticationStage, authenticationFailure = snapshot?.AuthenticationFailure,
-            authenticationHttpStatus = snapshot?.AuthenticationHttpStatus, credentialRequestStarted = snapshot?.CredentialRequestStarted }) + Environment.NewLine);
+        File.AppendAllText(path, JsonSerializer.Serialize(ActivityLog.Create(now, action, detail, seconds, snapshot), ActivityLog.Json) + Environment.NewLine);
         foreach (var old in Directory.EnumerateFiles(Storage.Logs, "autonet-????-??-??.jsonl"))
             if (File.GetLastWriteTimeUtc(old) < DateTime.UtcNow.AddDays(-14)) File.Delete(old);
     }

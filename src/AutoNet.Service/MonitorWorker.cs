@@ -93,14 +93,15 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         var direct = false;
         var portalState = PortalState.Unknown;
+        PortalAttempt? inspection = null;
         if (link.State == WifiState.Ready)
         {
             var http = DirectClient(link);
             direct = await HealthChecks.InternetAsync(http, ct);
             if (!direct)
             {
-                try { portalState = await new DrcomPortal(http, new Uri(settings.PortalOrigin)).InspectAsync(ct); }
-                catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException or JsonException) { ct.ThrowIfCancellationRequested(); }
+                inspection = await new DrcomPortal(http, new Uri(settings.PortalOrigin)).InspectDetailedAsync(ct);
+                portalState = inspection.ObservedState;
             }
         }
         else { directHttp?.Dispose(); directHttp = null; directKey = ""; }
@@ -114,7 +115,10 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         {
             lastRecoverySeconds = Math.Round((PolicyNow - since).TotalSeconds, 2);
             lastRecoveryAt = clock.GetUtcNow();
-            Log("恢复联网", "从首次观测故障到 HTTPS 恢复的耗时", lastRecoverySeconds);
+            Log("观测到联网恢复", $"HTTPS 外网检查已通过；本轮自动动作 {policy.Attempts} 次。恢复来源无法确认，可能包含人工处理或网络自行恢复。", lastRecoverySeconds,
+                new StatusSnapshot { Wifi = "已连接", Direct = "外网可达", Attempts = policy.Attempts, OutageSince = outageObservedAt,
+                    ActionStartedAt = actionStartedAt, ActionFinishedAt = actionFinishedAt, AuthenticationAcceptedAt = authenticationAcceptedAt,
+                    LastRecoveryAt = lastRecoveryAt, Tunnel = systemPath, Uu = uu });
         }
         var observation = new Observation(link.State, direct, portalState);
         var action = policy.Decide(observation, PolicyNow, settings.Enabled, credentials is not null);
@@ -122,22 +126,41 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         else outageObservedAt ??= clock.GetUtcNow();
         var detail = direct ? "指定 Wi-Fi 绑定的 HTTPS 内容检查通过；物理出口需抓包核验。" : observation.Condition switch
         {
-            NetworkCondition.AuthenticatedOffline => "校园网仍显示已认证，外网不可达；继续检测，不重复提交密码。",
+            NetworkCondition.AuthenticatedOffline => "校园网显示已认证，但两个外网检查均未通过；持续离线 10 秒后重连校园 Wi-Fi，再检查认证。",
             NetworkCondition.NeedsAuthentication => credentials is null ? "需要认证，请在设置中保存账号密码。" : "校园网认证已失效。",
             NetworkCondition.WaitingForAddress => "Wi-Fi 已关联，等待 IPv4/DHCP；不反复重连。",
             NetworkCondition.Associating => "Wi-Fi 正在关联或链路认证，等待完成。",
             NetworkCondition.InterfaceUnavailable => "选定 Wi-Fi 网卡尚未就绪，等待恢复。",
             NetworkCondition.WifiDisconnected => "等待校园 Wi-Fi 连接。",
-            _ => "外网和认证状态暂不可确认；持续检测，不提交密码。"
+            _ => "两个外网检查均未通过，认证状态未知；持续离线 10 秒后重连校园 Wi-Fi，确认需认证后再登录。"
         };
+        if (inspection is { Failure: not PortalFailure.None }) detail += " " + inspection.SafeSummary;
+        if (!direct && link.State == WifiState.Ready && credentials is null) detail = "外网检查未通过；未保存认证信息，请在设置中保存账号密码。";
+        if (!settings.Enabled) detail = "自动恢复已暂停；仅检测网络，不重连或认证。";
+        string? actionEvent = null;
         if (action != ActionKind.None)
         {
             ct.ThrowIfCancellationRequested();
             actionStartedAt = clock.GetUtcNow();
+            var plannedAction = action switch { ActionKind.DisconnectWifi => "准备断开并重连校园 Wi-Fi", ActionKind.ReconnectWifi => "准备连接校园 Wi-Fi", _ => "准备重新认证" };
+            Log("开始恢复动作", plannedAction + "；原因：" + detail, snapshot: new StatusSnapshot { Wifi = link.Connected ? "已连接" : "未连接", Direct = "外网检查未通过",
+                Portal = portalState switch { PortalState.LoggedIn => "已认证", PortalState.NeedsLogin => "需认证", _ => "未知" },
+                Attempts = policy.Attempts + 1, OutageSince = outageObservedAt, ActionStartedAt = actionStartedAt });
             if (action == ActionKind.ReconnectWifi)
             {
                 try { environment.ConnectWifi(settings); detail = "已请求连接保存的校园 Wi-Fi。"; }
                 catch (System.ComponentModel.Win32Exception) { detail = "Wi-Fi 连接请求失败，将退避重试。"; }
+            }
+            else if (action == ActionKind.DisconnectWifi)
+            {
+                try
+                {
+                    environment.DisconnectWifi(settings);
+                    detail = "持续离线，已请求断开选定校园 Wi-Fi；等待断开后连接原配置，再检查是否需要认证。";
+                }
+                catch (System.ComponentModel.Win32Exception e) { detail = $"校园 Wi-Fi 重连准备失败（Windows 错误 {e.NativeErrorCode}），将退避重试。"; }
+                // Drop pooled connections even if the WLAN request failed; the next probe uses fresh sockets.
+                directHttp?.Dispose(); directHttp = null; directKey = "";
             }
             else
             {
@@ -159,12 +182,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             }
             actionFinishedAt = clock.GetUtcNow();
             policy.Attempted(PolicyNow);
-            Log(action == ActionKind.ReconnectWifi ? "重连 Wi-Fi" : "重新认证", detail);
+            actionEvent = action switch { ActionKind.ReconnectWifi => "连接校园 Wi-Fi", ActionKind.DisconnectWifi => "重连校园 Wi-Fi", _ => "重新认证" };
         }
         if (policy.CredentialsBlocked) detail = lastAuthentication is null
             ? "自动认证因历史安全标记暂停，原失败阶段未知；请先运行只读认证诊断，勿仅为解锁而重存密码。"
             : "自动认证已暂停；" + lastAuthentication.SafeSummary;
-        var state = !settings.Enabled ? "已暂停恢复" : direct ? "校园网在线" : policy.CredentialsBlocked ? "需要处理认证" : observation.Condition switch
+        var state = !settings.Enabled ? "已暂停恢复" : direct ? "校园网在线" : policy.CredentialsBlocked ? "需要处理认证" : action == ActionKind.DisconnectWifi ? "正在重连校园 Wi-Fi" : observation.Condition switch
         {
             NetworkCondition.WaitingForAddress => "等待网络地址",
             NetworkCondition.Associating => "Wi-Fi 正在连接",
@@ -173,7 +196,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             NetworkCondition.InterfaceUnavailable => "网卡未就绪",
             _ => "正在恢复"
         };
-        return Publish(new StatusSnapshot
+        var status = new StatusSnapshot
         {
             Enabled = settings.Enabled, State = state, Detail = detail,
             Wifi = link.State switch { WifiState.Ready => "已连接", WifiState.WaitingForAddress => "已关联，等待 IPv4", WifiState.Associating => "正在连接", WifiState.Unavailable => "网卡未就绪", _ => "未连接" },
@@ -186,7 +209,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             AuthenticationStage = lastAuthentication?.Stage.ToString() ?? "Unknown", AuthenticationFailure = lastAuthentication?.Failure.ToString() ?? "None",
             AuthenticationHttpStatus = lastAuthentication?.HttpStatus, CredentialRequestStarted = lastAuthentication?.CredentialRequestStarted ?? false,
             CredentialsBlocked = policy.CredentialsBlocked
-        });
+        };
+        if (actionEvent is not null) Log(actionEvent, detail, snapshot: status with { LastError = lastError });
+        return Publish(status);
     }
 
     private HttpClient DirectClient(WifiLink link)
@@ -284,7 +309,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private StatusSnapshot Publish(StatusSnapshot status)
     {
         status = status with { UpdatedAt = clock.GetUtcNow(), LastError = lastError };
-        var key = status.State + "/" + status.Detail + "/" + status.Tunnel + "/" + status.Uu;
+        var key = status.State + "/" + status.Detail + "/" + status.Wifi + "/" + status.Direct + "/" + status.Portal + "/" + status.Tunnel + "/" + status.Uu + "/" + status.LastError;
         if (key != lastEvent && Log(status.State, status.Detail, snapshot: status)) lastEvent = key;
         status = status with { LastError = lastError };
         try { environment.WriteStatus(status); }
