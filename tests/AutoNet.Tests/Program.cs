@@ -1,0 +1,136 @@
+using System.Buffers.Binary;
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using AutoNet.Core;
+
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+var tests = new (string Name, Func<Task> Run)[]
+{
+    ("正常联网不执行修复", () => Sync(() => {
+        var p = new RecoveryPolicy(); Equal(ActionKind.None, p.Decide(new(true, true, false), Now(), true, true)); Equal(0, p.Attempts);
+    })),
+    ("断连请求重连而非认证", () => Sync(() => {
+        var p = new RecoveryPolicy(); Equal(ActionKind.ReconnectWifi, p.Decide(new(false, false, false), Now(), true, true));
+    })),
+    ("认证失效立即认证且首轮无需等待", () => Sync(() => {
+        var p = new RecoveryPolicy(); Equal(ActionKind.Authenticate, p.Decide(new(true, false, true), Now(), true, true));
+    })),
+    ("校园网已认证但上游故障不重复提交密码", () => Sync(() => {
+        Equal(ActionKind.None, new RecoveryPolicy().Decide(new(true, false, false), Now(), true, true));
+    })),
+    ("暂停和凭据缺失时不提交认证", () => Sync(() => {
+        Equal(ActionKind.None, new RecoveryPolicy().Decide(new(true, false, true), Now(), false, true));
+        Equal(ActionKind.None, new RecoveryPolicy().Decide(new(true, false, true), Now(), true, false));
+    })),
+    ("快重试、退避和恢复后重置", () => Sync(() => {
+        var p = new RecoveryPolicy(); var now = Now(); p.Decide(new(false, false, false), now, true, true);
+        p.Attempted(now); Equal(now.AddSeconds(2), p.NextAttempt);
+        Equal(ActionKind.None, p.Decide(new(false, false, false), now.AddSeconds(1), true, true));
+        for (var i = 0; i < 12; i++) p.Attempted(now.AddSeconds(20 + i * 60));
+        Equal(TimeSpan.FromSeconds(60), p.NextAttempt - now.AddSeconds(20 + 11 * 60));
+        p.Decide(new(true, true, false), now.AddHours(1), true, true); Equal(0, p.Attempts); True(p.OutageSince is null);
+    })),
+    ("明确凭据错误后持续检测且不再认证", () => Sync(() => {
+        var p = new RecoveryPolicy { CredentialsBlocked = true };
+        Equal(ActionKind.None, p.Decide(new(true, false, true), Now(), true, true));
+        p.Decide(new(true, true, false), Now(), true, true);
+        True(p.CredentialsBlocked);
+        Equal(ActionKind.ReconnectWifi, p.Decide(new(false, false, false), Now(), true, true));
+    })),
+    ("只识别已核实的凭据错误", () => Sync(() => {
+        foreach (var message in new[] { "userid error1", "userid error2", "auth error99", "auth error198", "密码错误" })
+        { using var j = JsonDocument.Parse(JsonSerializer.Serialize(new { result = 0, msg = message })); Equal(LoginResult.RejectedCredentials, DrcomPortal.Classify(j.RootElement)); }
+        using var unknown = JsonDocument.Parse("{\"result\":0,\"Msg\":\"ldap timeout\"}"); Equal(LoginResult.Rejected, DrcomPortal.Classify(unknown.RootElement));
+        using var captcha = JsonDocument.Parse("{\"result\":0,\"msg\":\"captcha required\"}"); Equal(LoginResult.NeedsInteraction, DrcomPortal.Classify(captcha.RootElement));
+    })),
+    ("JSONP 解析不执行页面代码", () => Sync(() => {
+        using var j = DrcomPortal.ParseJsonp("dr1001({\"result\":1});"); Equal(1, j.RootElement.GetProperty("result").GetInt32());
+        Throws<InvalidDataException>(() => DrcomPortal.ParseJsonp("evil(); dr1001({\"result\":1});"));
+    })),
+    ("凭据完整编码而非直接拼接查询串", () => Sync(() => {
+        var q = DrcomPortal.BuildLoginQuery(new("测试&account", "p&=#?+ %"));
+        True(q.Contains("upass=p%26%3D%23%3F%2B%20%25")); True(!q.Contains("captcha="));
+        True(q.Contains("DDDDD=%E6%B5%8B%E8%AF%95%26account"));
+    })),
+    ("真实适配路径：状态、配置、认证", async () => {
+        var handler = new PortalFixture(); using var http = new HttpClient(handler);
+        var result = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default);
+        Equal(LoginResult.Accepted, result); Equal(4, handler.Calls.Count); True(handler.Calls[^1].AbsolutePath == "/drcom/login");
+        True(handler.Calls[2].Port == 802); True(handler.Calls.All(u => u.Host == "login.csust.edu.cn" && u.Scheme == "https"));
+    }),
+    ("已经在线时不会发送凭据", async () => {
+        var handler = new PortalFixture { AlreadyOnline = true }; using var http = new HttpClient(handler);
+        await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default);
+        Equal(1, handler.Calls.Count); True(!handler.Calls[0].Query.Contains("upass"));
+    }),
+    ("认证模式变化时不猜测登录", async () => {
+        var handler = new PortalFixture { ChangedMode = true }; using var http = new HttpClient(handler);
+        Equal(LoginResult.Unsupported, await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default));
+        True(handler.Calls.All(u => !u.Query.Contains("upass")));
+    }),
+    ("重定向和伪造成功页不视为外网在线", async () => {
+        foreach (var status in new[] { HttpStatusCode.Redirect, HttpStatusCode.OK })
+        {
+            using var http = new HttpClient(new StaticHandler(status, "<html>login</html>"));
+            True(!await HealthChecks.InternetAsync(http, default));
+        }
+    }),
+    ("DNS 压缩记录、错误事务和截断响应", () => Sync(() => {
+        var query = DnsPacket.Query("example.com", 123);
+        var response = query.Concat(new byte[] { 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 20, 0, 4, 1, 2, 3, 4 }).ToArray();
+        response[2] = 0x81; response[3] = 0x80; response[7] = 1;
+        Equal("1.2.3.4", DnsPacket.Parse(response, 123).Single().ToString());
+        Throws<InvalidDataException>(() => DnsPacket.Parse(response, 321));
+        for (var length = 0; length < response.Length; length++)
+        { var truncated = response[..length]; Throws<InvalidDataException>(() => DnsPacket.Parse(truncated, 123)); }
+    })),
+    ("设置拒绝不安全或带令牌的地址", () => Sync(() => {
+        var valid = new Settings { InterfaceId = Guid.NewGuid().ToString(), WifiProfile = "test" }; valid.Validate();
+        Throws<ArgumentException>(() => (valid with { PortalOrigin = "http://example.com" }).Validate());
+        Throws<ArgumentException>(() => (valid with { PortalOrigin = "https://example.com/login?token=x" }).Validate());
+        Throws<ArgumentException>(() => (valid with { ProxyUrl = "http://remote.example.com:8080" }).Validate());
+        Throws<ArgumentException>(() => (valid with { UuEndpoint = "https://example.com/?token=x" }).Validate());
+    }))
+};
+
+var failures = 0;
+foreach (var (name, run) in tests)
+{
+    try { await run(); Console.WriteLine("PASS " + name); }
+    catch (Exception e) { failures++; Console.WriteLine("FAIL " + name + ": " + e.Message); }
+}
+Console.WriteLine($"{tests.Length - failures}/{tests.Length} passed");
+return failures == 0 ? 0 : 1;
+
+static DateTimeOffset Now() => new(2026, 10, 10, 0, 0, 0, TimeSpan.Zero);
+static Task Sync(Action action) { action(); return Task.CompletedTask; }
+static void True(bool condition) { if (!condition) throw new Exception("Assertion failed"); }
+static void Equal<T>(T expected, T actual) { if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new Exception($"Expected {expected}; got {actual}"); }
+static void Throws<T>(Action action) where T : Exception { try { action(); } catch (T) { return; } throw new Exception("Expected " + typeof(T).Name); }
+
+sealed class PortalFixture : HttpMessageHandler
+{
+    public List<Uri> Calls { get; } = [];
+    public bool AlreadyOnline { get; init; }
+    public bool ChangedMode { get; init; }
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var uri = request.RequestUri!; Calls.Add(uri);
+        var body = uri.AbsolutePath switch
+        {
+            "/drcom/chkstatus" => "dr1001({\"result\":" + (AlreadyOnline ? "1" : "0") + "});",
+            "/" => "<html><script>v4ip='10.0.0.1';</script></html>",
+            "/eportal/portal/page/loadConfig" => "dr1001({\"code\":200,\"data\":{\"en_md5\":" + (ChangedMode ? "1" : "0") + ",\"password_cut\":0,\"enable_r3\":0}});",
+            "/drcom/login" => "dr1001({\"result\":1});",
+            _ => throw new Exception("Unexpected fixture path")
+        };
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+    }
+}
+
+sealed class StaticHandler(HttpStatusCode status, string body) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+}
