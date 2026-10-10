@@ -30,7 +30,9 @@ try {
         }
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1'), (Join-Path $PSScriptRoot 'uninstall.ps1'), (Join-Path $PSScriptRoot 'Install.cmd'), (Join-Path $repo 'README.md') -Destination $bundle -Force
         New-Item -ItemType Directory -Force -Path (Join-Path $bundle 'docs') | Out-Null
-        Copy-Item -LiteralPath (Join-Path $repo 'docs/VALIDATION.md') -Destination (Join-Path $bundle 'docs') -Force
+        foreach ($doc in @('VALIDATION.md', 'IMPLEMENTATION_PLAN.md', 'PORTAL_DIAGNOSIS_20261010.md', 'CODE_REVIEW_20261010.md')) {
+            Copy-Item -LiteralPath (Join-Path $repo "docs/$doc") -Destination (Join-Path $bundle 'docs') -Force
+        }
         Copy-Item -LiteralPath (Join-Path $evidence 'build.json'), (Join-Path $evidence 'tests.txt') -Destination $bundle -Force
         $hashes = foreach ($file in Get-ChildItem -LiteralPath $bundle -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt') {
             $hash = Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256

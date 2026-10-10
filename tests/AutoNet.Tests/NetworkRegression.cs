@@ -6,6 +6,21 @@ internal static class NetworkRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("网络诊断：原生关联状态不查询当前连接，属性缺失不误判断连", () =>
+        {
+            var link = new WifiLink(false, null, null, 7, []);
+            foreach (var state in new[] { 0, 2, 3, 5, 6, 7, 99 })
+            {
+                var observed = Wifi.ReadConnection(link, state, "campus", () => throw new Exception("不应查询当前连接"));
+                var policy = new RecoveryPolicy();
+                Require(policy.Decide(new(observed.State, false, PortalState.Unknown), DateTimeOffset.UtcNow, true, true) == ActionKind.None);
+            }
+            Require(Wifi.ReadConnection(link, 1, "campus", () => "").State == WifiState.Unavailable);
+            Require(Wifi.ReadConnection(link, 4, "campus", () => throw new Exception()).State == WifiState.Disconnected);
+            Require(Wifi.ReadConnection(link, 1, "campus", () => "other").State == WifiState.OtherProfile);
+            Require(Wifi.ReadConnection(link, 1, "campus", () => "campus").State == WifiState.WaitingForAddress);
+            return Task.CompletedTask;
+        }),
         ("网络诊断：TUN与Wi-Fi仅显示路由推断，未知不伪装成直连", () =>
         {
             foreach (var kind in new[] { "Tun", "Wifi", "Unknown" })

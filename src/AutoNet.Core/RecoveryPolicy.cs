@@ -22,6 +22,7 @@ public sealed record Observation(WifiState Wifi, bool DirectOnline, PortalState 
 public sealed class RecoveryPolicy
 {
     private ActionKind lastAction;
+    private readonly Dictionary<ActionKind, (int Attempts, DateTimeOffset NextAttempt)> retries = [];
     public DateTimeOffset? OutageSince { get; private set; }
     public DateTimeOffset NextAttempt { get; private set; } = DateTimeOffset.MinValue;
     public int Attempts { get; private set; }
@@ -40,7 +41,7 @@ public sealed class RecoveryPolicy
             observation.Condition == NetworkCondition.NeedsAuthentication && hasCredentials && !CredentialsBlocked
                 ? ActionKind.Authenticate : ActionKind.None;
         if (action == ActionKind.None) return ActionKind.None;
-        if (lastAction != ActionKind.None && lastAction != action) { Attempts = 0; NextAttempt = DateTimeOffset.MinValue; }
+        NextAttempt = retries.TryGetValue(action, out var retry) ? retry.NextAttempt : DateTimeOffset.MinValue;
         if (now < NextAttempt) return ActionKind.None;
         lastAction = action;
         return action;
@@ -49,10 +50,12 @@ public sealed class RecoveryPolicy
     public void Attempted(DateTimeOffset finishedAt)
     {
         Attempts++;
+        var actionAttempts = retries.TryGetValue(lastAction, out var retry) ? retry.Attempts + 1 : 1;
         var fast = OutageSince is { } start && finishedAt - start < TimeSpan.FromSeconds(15);
         // Fast phase <= 2s gaps; long failures use 10, 20, 40, 60 second gaps.
-        var delay = fast ? 2 : Math.Min(60, 10 * (1 << Math.Min(Math.Max(Attempts - 3, 0), 3)));
+        var delay = fast ? 2 : Math.Min(60, 10 * (1 << Math.Min(Math.Max(actionAttempts - 3, 0), 3)));
         NextAttempt = finishedAt.AddSeconds(delay);
+        retries[lastAction] = (actionAttempts, NextAttempt);
     }
 
     public void Reset()
@@ -61,6 +64,7 @@ public sealed class RecoveryPolicy
         NextAttempt = DateTimeOffset.MinValue;
         Attempts = 0;
         lastAction = ActionKind.None;
+        retries.Clear();
         // Credential rejection persists until credentials change, even if connectivity recovers.
     }
 }

@@ -55,14 +55,35 @@ public static class Wifi
             Guid.TryParse(n.Id, out var id) && id == Guid.Parse(settings.InterfaceId));
         if (adapter is null) return new(false, null, null, 0, []);
         using var client = new WlanClient();
-        var profile = Current(client.Handle, Guid.Parse(settings.InterfaceId), out var state);
+        var id = Guid.Parse(settings.InterfaceId);
+        Check(WlanEnumInterfaces(client.Handle, IntPtr.Zero, out var list));
+        var state = 0;
+        try
+        {
+            for (var i = 0; i < Marshal.ReadInt32(list); i++)
+            {
+                var info = Marshal.PtrToStructure<InterfaceInfo>(list + 8 + i * Marshal.SizeOf<InterfaceInfo>());
+                if (info.Id == id) { state = info.State; break; }
+            }
+        }
+        finally { WlanFreeMemory(list); }
         var properties = adapter.GetIPProperties();
         var address = properties.UnicastAddresses.Select(a => a.Address).FirstOrDefault(a =>
             a.AddressFamily == AddressFamily.InterNetwork && !a.ToString().StartsWith("169.254.", StringComparison.Ordinal));
-        return new(adapter.OperationalStatus == OperationalStatus.Up && profile == settings.WifiProfile,
+        var link = new WifiLink(false,
             adapter, address, properties.GetIPv4Properties()?.Index ?? 0,
-            properties.DnsAddresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork).ToArray(),
-            profile != "" && profile != settings.WifiProfile, state is 3 or 5 or 6 or 7, state == 0);
+            properties.DnsAddresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork).ToArray());
+        return ReadConnection(link, state, settings.WifiProfile, () => Current(client.Handle, id));
+    }
+
+    // Native WLAN boundary: interface state is independent of current_connection availability.
+    internal static WifiLink ReadConnection(WifiLink link, int state, string targetProfile, Func<string> currentProfile)
+    {
+        if (state is 3 or 5 or 6 or 7) return link with { Connecting = true };
+        if (state == 4) return link;
+        if (state != 1) return link with { Unavailable = true };
+        var profile = currentProfile();
+        return link with { Connected = profile == targetProfile, OtherProfile = profile != "" && profile != targetProfile, Unavailable = profile == "" };
     }
 
     public static void Connect(Settings settings)
@@ -74,17 +95,14 @@ public static class Wifi
         Check(WlanConnect(client.Handle, ref id, ref parameters, IntPtr.Zero));
     }
 
-    private static string Current(IntPtr handle, Guid id) => Current(handle, id, out _);
-
-    private static string Current(IntPtr handle, Guid id, out int state)
+    private static string Current(IntPtr handle, Guid id)
     {
-        state = 0;
         var result = WlanQueryInterface(handle, ref id, 7, IntPtr.Zero, out _, out var data, out _);
-        if (result == 5023) { state = 4; return ""; } // ERROR_INVALID_STATE: no active connection.
+        if (result == 5023) return ""; // ERROR_INVALID_STATE does not establish disconnected state.
         Check(result); // A privacy/access failure must not be mistaken for a disconnected Wi-Fi.
         try
         {
-            state = Marshal.ReadInt32(data);
+            var state = Marshal.ReadInt32(data);
             return state == 1 ? Marshal.PtrToStringUni(data + 8, 256)?.TrimEnd('\0') ?? "" : "";
         }
         finally { WlanFreeMemory(data); }

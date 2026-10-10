@@ -59,7 +59,7 @@ try {
         if (Test-Path -LiteralPath $path) { $originalAcls[$path] = Get-Acl -LiteralPath $path }
     }
     foreach ($target in @($serviceExe, $trayExe, (Join-Path $destination 'uninstall.ps1'), $shortcut)) {
-        if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installation target is a reparse point.' }
+        if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '安装目标是重解析点，已停止安装。' }
     }
     $existing = Get-Service -Name AutoNet -ErrorAction SilentlyContinue
     if ($existing) {

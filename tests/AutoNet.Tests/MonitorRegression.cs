@@ -6,6 +6,23 @@ internal static class MonitorRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("监测：反复切换断连与认证不绕过各自退避", () =>
+        {
+            var policy = new RecoveryPolicy();
+            var now = new DateTimeOffset(2026, 10, 10, 0, 0, 0, TimeSpan.Zero);
+            policy.Decide(new(false, false, false), now, true, true);
+            var authentications = 0;
+            for (var seconds = 100; seconds <= 300; seconds += 2)
+            {
+                var tick = now.AddSeconds(seconds);
+                var action = policy.Decide(new(seconds % 4 != 0, false, seconds % 4 != 0), tick, true, true);
+                if (action == ActionKind.None) continue;
+                if (action == ActionKind.Authenticate) authentications++;
+                policy.Attempted(tick);
+            }
+            Require(authentications > 0 && authentications <= 10 && policy.Attempts > 1);
+            return Task.CompletedTask;
+        }),
         ("监测：关联、DHCP、不可用网卡和用户切网不触发重连", async () =>
         {
             foreach (var link in new WifiLink[] {
