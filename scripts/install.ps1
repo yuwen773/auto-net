@@ -1,5 +1,5 @@
 #requires -Version 7.0
-param([switch]$LaunchSettings)
+param([switch]$LaunchSettings, [switch]$Quiet)
 $ErrorActionPreference = 'Stop'
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -7,6 +7,7 @@ if (-not $isAdmin) {
     $start.UseShellExecute = $true; $start.Verb = 'runas'; $start.WindowStyle = 'Hidden'
     foreach ($arg in @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)) { $start.ArgumentList.Add($arg) }
     if ($LaunchSettings) { $start.ArgumentList.Add('-LaunchSettings') }
+    if ($Quiet) { $start.ArgumentList.Add('-Quiet') }
     $child = [Diagnostics.Process]::Start($start)
     $child.WaitForExit()
     if ($child.ExitCode -eq 0 -and $LaunchSettings) {
@@ -116,8 +117,11 @@ try {
     Start-Service -Name AutoNet
     (Get-Service -Name AutoNet).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
     if ($LaunchSettings) { Start-Process -FilePath $trayExe -ArgumentList '--settings' }
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(('安装完成。请保存校园 Wi-Fi 和账号密码；后台服务已启动。旧程序备份保留于：' + $backup), 'AutoNet') | Out-Null
+    if ($Quiet) { Write-Host 'AutoNet 安装完成，后台服务已启动。' }
+    else {
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(('安装完成。请保存校园 Wi-Fi 和账号密码；后台服务已启动。旧程序备份保留于：' + $backup), 'AutoNet') | Out-Null
+    }
 }
 catch {
     $failure = $_.Exception.Message
@@ -148,7 +152,10 @@ catch {
         }
         catch { $rollback = '自动回滚未完成，请在本机接管并使用备份恢复：' + $backup + '；错误类型：' + $_.Exception.GetType().Name }
     }
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(('安装未完成：' + $failure + [Environment]::NewLine + $rollback), 'AutoNet') | Out-Null
+    if ($Quiet) { [Console]::Error.WriteLine('安装未完成：' + $failure + [Environment]::NewLine + $rollback) }
+    else {
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(('安装未完成：' + $failure + [Environment]::NewLine + $rollback), 'AutoNet') | Out-Null
+    }
     exit 1
 }
