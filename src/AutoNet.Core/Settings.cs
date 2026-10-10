@@ -23,7 +23,7 @@ public sealed record Settings
             throw new ArgumentException("认证地址仅支持 https://login.csust.edu.cn:443 根地址；802 仅用于读取认证配置。");
         if (ProxyUrl != "" && (!Uri.TryCreate(ProxyUrl, UriKind.Absolute, out var proxy) ||
             proxy.Scheme != "http" || !proxy.IsLoopback || proxy.UserInfo != ""))
-            throw new ArgumentException("代理检测地址应为本机 HTTP 代理，例如 http://127.0.0.1:7892。");
+            throw new ArgumentException("代理检测地址应为本机 HTTP 代理，例如 http://127.0.0.1:7897。");
         if (UuEndpoint != "" && (!Uri.TryCreate(UuEndpoint, UriKind.Absolute, out var uu) ||
             uu.Scheme != "https" || uu.UserInfo != "" || uu.Query != "" || uu.Fragment != ""))
             throw new ArgumentException("UU 检测地址必须是不含令牌的真实 HTTPS 服务地址。");

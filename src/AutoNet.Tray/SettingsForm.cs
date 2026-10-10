@@ -7,7 +7,7 @@ internal sealed class SettingsForm : Form
     private readonly ComboBox profiles = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     private readonly TextBox username = new() { Dock = DockStyle.Fill };
     private readonly TextBox password = new() { Dock = DockStyle.Fill, UseSystemPasswordChar = true, PlaceholderText = "留空则保留已保存的密码" };
-    private readonly TextBox proxy = new() { Dock = DockStyle.Fill, PlaceholderText = "可选，例如 http://127.0.0.1:7892" };
+    private readonly TextBox proxy = new() { Dock = DockStyle.Fill, PlaceholderText = "可选，例如 http://127.0.0.1:7897" };
     private readonly TextBox endpoint = new() { Dock = DockStyle.Fill, PlaceholderText = "可选，真实 UU 服务检测地址" };
     private readonly CheckBox awake = new() { Text = "接通电源时保持唤醒，允许屏幕关闭", AutoSize = true, Checked = true };
     private readonly CheckBox enabled = new() { Text = "启用自动恢复校园网", AutoSize = true, Checked = true };
