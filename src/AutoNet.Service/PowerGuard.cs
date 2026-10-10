@@ -10,18 +10,19 @@ internal sealed class PowerGuard : IDisposable
 
     public void Update(bool enabled)
     {
-        GetSystemPowerStatus(out var power);
+        if (!GetSystemPowerStatus(out var power)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         var needed = enabled && power.AcLineStatus == 1;
         if (needed == active) return;
         if (needed)
         {
             var reason = new ReasonContext { Version = 0, Flags = 1, Reason = "AutoNet 校园网无人值守连接" };
-            handle ??= PowerCreateRequest(ref reason);
-            if (!handle.IsInvalid) active = PowerSetRequest(handle, 1);
+            if (handle is null || handle.IsInvalid) { handle?.Dispose(); handle = PowerCreateRequest(ref reason); }
+            if (handle.IsInvalid || !PowerSetRequest(handle, 1)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            active = true;
         }
         else
         {
-            if (handle is not null && !handle.IsInvalid) PowerClearRequest(handle, 1);
+            if (handle is not null && !handle.IsInvalid && !PowerClearRequest(handle, 1)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
             active = false;
         }
     }
@@ -39,7 +40,7 @@ internal sealed class PowerGuard : IDisposable
         public byte AcLineStatus, BatteryFlag, BatteryLifePercent, SystemStatusFlag;
         public uint BatteryLifeTime, BatteryFullLifeTime;
     }
-    [DllImport("kernel32.dll")] private static extern bool GetSystemPowerStatus(out PowerStatus status);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetSystemPowerStatus(out PowerStatus status);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern SafeFileHandle PowerCreateRequest(ref ReasonContext context);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool PowerSetRequest(SafeFileHandle handle, int requestType);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool PowerClearRequest(SafeFileHandle handle, int requestType);

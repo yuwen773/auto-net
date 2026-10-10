@@ -10,51 +10,132 @@ public enum LoginResult { Accepted, RejectedCredentials, NeedsInteraction, Rejec
 
 public sealed class DrcomPortal(HttpClient http, Uri origin)
 {
-    public async Task<PortalState> InspectAsync(CancellationToken ct)
+    public async Task<PortalState> InspectAsync(CancellationToken ct) => (await ReadStateAsync(ct)).State;
+
+    private async Task<(PortalState State, int? HttpStatus)> ReadStateAsync(CancellationToken ct)
     {
+        if (!Settings.IsSupportedPortal(origin)) return (PortalState.Unknown, null);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(2000);
-        ct = timeout.Token;
-        using var response = await http.GetAsync(new Uri(origin, "/drcom/chkstatus?callback=dr1001&v=" + Random.Shared.Next(100000, 999999)), HttpCompletionOption.ResponseHeadersRead, ct);
-        if (response.StatusCode != HttpStatusCode.OK) return PortalState.Unknown;
-        using var json = ParseJsonp(await ReadLimitedAsync(response, ct));
-        if (!json.RootElement.TryGetProperty("result", out var result)) return PortalState.Unknown;
-        return result.ToString() switch { "1" => PortalState.LoggedIn, "0" => PortalState.NeedsLogin, _ => PortalState.Unknown };
+        using var response = await http.GetAsync(new Uri(origin, "/drcom/chkstatus?callback=dr1001&v=" + Random.Shared.Next(100000, 999999)), HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        if (response.StatusCode != HttpStatusCode.OK) return (PortalState.Unknown, (int)response.StatusCode);
+        using var json = ParseJsonp(await ReadLimitedAsync(response, timeout.Token));
+        if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("result", out var result))
+            return (PortalState.Unknown, (int)response.StatusCode);
+        var state = result.ToString() switch { "1" => PortalState.LoggedIn, "0" => PortalState.NeedsLogin, _ => PortalState.Unknown };
+        return (state, (int)response.StatusCode);
     }
 
-    public async Task<LoginResult> LoginAsync(Credentials credentials, CancellationToken ct)
+    public async Task<LoginResult> LoginAsync(Credentials credentials, CancellationToken ct) =>
+        (await LoginDetailedAsync(credentials, ct)).Result;
+
+    public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct) => ExecuteAsync(credentials, ct);
+
+    // Reads the same prerequisites as login; this path has no credentials and cannot submit them.
+    public Task<PortalAttempt> DiagnoseAsync(CancellationToken ct) => ExecuteAsync(null, ct);
+
+    private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct)
     {
-        // Never transmit credentials unless the configured, TLS-validated portal says logged out.
-        if (await InspectAsync(ct) != PortalState.NeedsLogin) return LoginResult.Rejected;
-        using var pageResponse = await http.GetAsync(new Uri(origin, "/"), HttpCompletionOption.ResponseHeadersRead, ct);
-        if (pageResponse.StatusCode != HttpStatusCode.OK) return LoginResult.Unsupported;
-        var page = await ReadLimitedAsync(pageResponse, ct);
-        var clientIp = Regex.Match(page, @"\bv4ip\s*=\s*['"" ]([^'"" ;]+)").Groups[1].Value;
-        if (!IPAddress.TryParse(clientIp, out _)) return LoginResult.Unsupported;
-        var configQuery = new Dictionary<string, string>
+        var stage = PortalStage.Unknown;
+        var state = PortalState.Unknown;
+        var submitted = false;
+        Dictionary<string, string>? flags = null;
+        PortalAttempt Outcome(LoginResult result, PortalFailure failure, int? status = null, string? field = null) =>
+            new(result, stage, failure, status, field, submitted) { ObservedState = state, Flags = flags };
+        if (!Settings.IsSupportedPortal(origin)) return Outcome(LoginResult.Unsupported, PortalFailure.InvalidTarget);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+        var requestToken = linked.Token;
+        try
         {
-            ["callback"] = "dr1001", ["jsVersion"] = "4.X", ["v"] = Random.Shared.Next(100000, 999999).ToString(), ["program_index"] = "", ["wlan_vlan_id"] = "1",
-            ["wlan_user_ip"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(clientIp)),
-            ["wlan_user_ipv6"] = "", ["wlan_user_ssid"] = "", ["wlan_user_areaid"] = "",
-            ["wlan_ac_ip"] = "", ["wlan_ap_mac"] = "000000000000", ["gw_id"] = "000000000000"
-        };
-        var configUri = new UriBuilder(origin) { Port = 802, Path = "/eportal/portal/page/loadConfig",
-            Query = string.Join('&', configQuery.Select(p => Uri.EscapeDataString(p.Key) + "=" + Uri.EscapeDataString(p.Value))) };
-        using var configResponse = await http.GetAsync(configUri.Uri, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (configResponse.StatusCode != HttpStatusCode.OK) return LoginResult.Unsupported;
-        using var config = ParseJsonp(await ReadLimitedAsync(configResponse, ct));
-        if (!config.RootElement.TryGetProperty("data", out var data)) return LoginResult.Unsupported;
-        // Refuse changed authentication modes rather than guessing challenge/MD5/suffix semantics.
-        if (NonZero(data, "en_md5") || NonZero(data, "password_cut") || NonZero(data, "enable_r3"))
-            return LoginResult.Unsupported;
-        var query = BuildLoginQuery(credentials);
-        using var response = await http.GetAsync(new Uri(origin, "/drcom/login?" + query), HttpCompletionOption.ResponseHeadersRead, ct);
-        if (response.StatusCode != HttpStatusCode.OK) return LoginResult.Rejected;
-        using var json = ParseJsonp(await ReadLimitedAsync(response, ct));
-        return Classify(json.RootElement);
+            stage = PortalStage.Status;
+            var inspection = await ReadStateAsync(requestToken);
+            state = inspection.State;
+            if (credentials is not null && state != PortalState.NeedsLogin)
+                return Outcome(LoginResult.Rejected, state == PortalState.LoggedIn ? PortalFailure.AlreadyAuthenticated : PortalFailure.StatusUnknown, inspection.HttpStatus);
+
+            stage = PortalStage.HomePage;
+            using var pageResponse = await http.GetAsync(new Uri(origin, "/"), HttpCompletionOption.ResponseHeadersRead, requestToken);
+            if (pageResponse.StatusCode != HttpStatusCode.OK)
+                return Outcome(HttpFailureResult(pageResponse.StatusCode), PortalFailure.HttpStatus, (int)pageResponse.StatusCode);
+            var page = await ReadLimitedAsync(pageResponse, requestToken);
+            stage = PortalStage.ClientIpv4;
+            var clientIp = Regex.Match(page, @"\bv4ip\s*=\s*['"" ]([^'"" ;]+)").Groups[1].Value;
+            if (!IPAddress.TryParse(clientIp, out var ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                return Outcome(LoginResult.Unsupported, PortalFailure.MissingClientIpv4);
+            var configQuery = new Dictionary<string, string>
+            {
+                ["callback"] = "dr1001", ["jsVersion"] = "4.X", ["v"] = Random.Shared.Next(100000, 999999).ToString(), ["program_index"] = "", ["wlan_vlan_id"] = "1",
+                ["wlan_user_ip"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(clientIp)),
+                ["wlan_user_ipv6"] = "", ["wlan_user_ssid"] = "", ["wlan_user_areaid"] = "",
+                ["wlan_ac_ip"] = "", ["wlan_ap_mac"] = "000000000000", ["gw_id"] = "000000000000"
+            };
+            var configUri = new UriBuilder(origin) { Port = 802, Path = "/eportal/portal/page/loadConfig",
+                Query = string.Join('&', configQuery.Select(p => Uri.EscapeDataString(p.Key) + "=" + Uri.EscapeDataString(p.Value))) };
+            stage = PortalStage.Configuration;
+            using var configResponse = await http.GetAsync(configUri.Uri, HttpCompletionOption.ResponseHeadersRead, requestToken);
+            if (configResponse.StatusCode != HttpStatusCode.OK)
+                return Outcome(HttpFailureResult(configResponse.StatusCode), PortalFailure.HttpStatus, (int)configResponse.StatusCode);
+            using var config = ParseJsonp(await ReadLimitedAsync(configResponse, requestToken));
+            if (config.RootElement.ValueKind != JsonValueKind.Object || config.RootElement.EnumerateObject().Count(p => p.Name == "data") != 1 ||
+                !config.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+                return Outcome(LoginResult.Unsupported, PortalFailure.MalformedConfiguration);
+            stage = PortalStage.AuthenticationMode;
+            flags = new Dictionary<string, string>();
+            PortalFailure firstFailure = PortalFailure.None;
+            string? firstField = null;
+            foreach (var name in new[] { "en_md5", "password_cut", "enable_r3" })
+            {
+                var failure = CheckFlag(data, name);
+                flags[name] = failure == PortalFailure.None ? "Zero" : failure.ToString();
+                if (firstFailure == PortalFailure.None && failure != PortalFailure.None) { firstFailure = failure; firstField = name; }
+            }
+            if (firstFailure != PortalFailure.None) return Outcome(LoginResult.Unsupported, firstFailure, field: firstField);
+            if (credentials is null) { stage = PortalStage.Complete; return Outcome(LoginResult.Accepted, PortalFailure.None); }
+
+            stage = PortalStage.Submission;
+            submitted = true;
+            // Production transport disables redirects; only this guarded branch constructs a credential-bearing request.
+            using var response = await http.GetAsync(new Uri(origin, "/drcom/login?" + BuildLoginQuery(credentials)), HttpCompletionOption.ResponseHeadersRead, requestToken);
+            if (response.StatusCode != HttpStatusCode.OK)
+                return Outcome(HttpFailureResult(response.StatusCode), PortalFailure.HttpStatus, (int)response.StatusCode);
+            using var json = ParseJsonp(await ReadLimitedAsync(response, requestToken));
+            var result = Classify(json.RootElement);
+            return Outcome(result, result switch
+            {
+                LoginResult.Accepted => PortalFailure.None,
+                LoginResult.RejectedCredentials => PortalFailure.CredentialsRejected,
+                LoginResult.NeedsInteraction => PortalFailure.InteractionRequired,
+                _ => PortalFailure.LoginRejected
+            });
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Outcome(LoginResult.Rejected, PortalFailure.Timeout); }
+        catch (HttpRequestException e)
+        {
+            var tls = e.HttpRequestError == HttpRequestError.SecureConnectionError;
+            return Outcome(tls ? LoginResult.Unsupported : LoginResult.Rejected, tls ? PortalFailure.Tls : PortalFailure.Transport);
+        }
+        catch (Exception e) when (e is JsonException or InvalidDataException) { return Outcome(LoginResult.Unsupported, PortalFailure.InvalidResponse); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException) { return Outcome(LoginResult.Unsupported, PortalFailure.InvalidResponse); }
+        catch (IOException) { return Outcome(LoginResult.Rejected, PortalFailure.Transport); }
     }
 
-    private static bool NonZero(JsonElement element, string name) => element.TryGetProperty(name, out var value) && value.ToString() is not ("" or "0");
+    private static LoginResult HttpFailureResult(HttpStatusCode status) =>
+        (int)status >= 500 || status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
+            ? LoginResult.Rejected : LoginResult.Unsupported;
+
+    private static PortalFailure CheckFlag(JsonElement data, string name)
+    {
+        var count = data.EnumerateObject().Count(p => p.Name == name);
+        if (count == 0) return PortalFailure.MissingFlag;
+        if (count != 1) return PortalFailure.DuplicateFlag;
+        var value = data.GetProperty(name);
+        if (value.ValueKind == JsonValueKind.Number)
+            return value.TryGetInt32(out var number) ? number == 0 ? PortalFailure.None : PortalFailure.UnsupportedFlag : PortalFailure.InvalidFlagType;
+        if (value.ValueKind == JsonValueKind.String)
+            return value.GetString() == "0" ? PortalFailure.None : PortalFailure.UnsupportedFlag;
+        return PortalFailure.InvalidFlagType;
+    }
 
     public static string BuildLoginQuery(Credentials credentials) => string.Join('&', new Dictionary<string, string>
     {
@@ -66,6 +147,7 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
 
     public static LoginResult Classify(JsonElement json)
     {
+        if (json.ValueKind != JsonValueKind.Object) return LoginResult.Rejected;
         if (json.TryGetProperty("result", out var result) && result.ToString() is "1" or "ok") return LoginResult.Accepted;
         var message = string.Join(' ', new[] { "msg", "Msg", "message" }.Select(key =>
             json.TryGetProperty(key, out var value) ? value.ToString() : "")).ToLowerInvariant();

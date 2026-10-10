@@ -69,6 +69,22 @@ var tests = new (string Name, Func<Task> Run)[]
         Equal(LoginResult.Unsupported, await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default));
         True(handler.Calls.All(u => !u.Query.Contains("upass")));
     }),
+    ("认证配置缺失、空值、异常结构均不发送凭据", async () => {
+        foreach (var data in new[] {
+            "{}", "null", "[]", "0", "\"0\"",
+            "{\"en_md5\":0,\"password_cut\":0}",
+            "{\"en_md5\":null,\"password_cut\":0,\"enable_r3\":0}",
+            "{\"en_md5\":\"\",\"password_cut\":0,\"enable_r3\":0}",
+            "{\"en_md5\":false,\"password_cut\":0,\"enable_r3\":0}",
+            "{\"en_md5\":[],\"password_cut\":0,\"enable_r3\":0}",
+            "{\"en_md5\":0,\"en_md5\":1,\"password_cut\":0,\"enable_r3\":0}" })
+        {
+            var handler = new PortalFixture { ConfigJson = "dr1001({\"data\":" + data + "});" };
+            using var http = new HttpClient(handler);
+            Equal(LoginResult.Unsupported, await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginAsync(new("test", "never-real"), default));
+            True(handler.Calls.All(u => u.AbsolutePath != "/drcom/login" && !u.Query.Contains("upass")));
+        }
+    }),
     ("重定向和伪造成功页不视为外网在线", async () => {
         foreach (var status in new[] { HttpStatusCode.Redirect, HttpStatusCode.OK })
         {
@@ -91,16 +107,28 @@ var tests = new (string Name, Func<Task> Run)[]
         Throws<ArgumentException>(() => (valid with { PortalOrigin = "https://example.com/login?token=x" }).Validate());
         Throws<ArgumentException>(() => (valid with { ProxyUrl = "http://remote.example.com:8080" }).Validate());
         Throws<ArgumentException>(() => (valid with { UuEndpoint = "https://example.com/?token=x" }).Validate());
+        foreach (var address in new[] { "https://evil.example", "https://login.csust.edu.cn.evil.example", "https://login.csust.edu.cn:802", "https://login.csust.edu.cn:444", "https://user@login.csust.edu.cn", "https://login.csust.edu.cn/#x", "https://login.csust.edu.cn/?x=y", "https://login.csust.edu.cn./" })
+            Throws<ArgumentException>(() => (valid with { PortalOrigin = address }).Validate());
     }))
 };
+tests = tests.Concat(MonitorRegression.Cases).ToArray();
+tests = tests.Concat(PortalRegression.Cases).ToArray();
+tests = tests.Concat(NetworkRegression.Cases).ToArray();
 
+if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
+{
+    Console.WriteLine("用法：AutoNet.Tests [--filter 测试名称片段]");
+    return 2;
+}
+var selected = args.Length == 0 ? tests : tests.Where(t => t.Name.Contains(args[1], StringComparison.Ordinal)).ToArray();
+if (selected.Length == 0) { Console.WriteLine("没有匹配的测试。"); return 2; }
 var failures = 0;
-foreach (var (name, run) in tests)
+foreach (var (name, run) in selected)
 {
     try { await run(); Console.WriteLine("PASS " + name); }
     catch (Exception e) { failures++; Console.WriteLine("FAIL " + name + ": " + e.Message); }
 }
-Console.WriteLine($"{tests.Length - failures}/{tests.Length} passed");
+Console.WriteLine($"{selected.Length - failures}/{selected.Length} passed");
 return failures == 0 ? 0 : 1;
 
 static DateTimeOffset Now() => new(2026, 10, 10, 0, 0, 0, TimeSpan.Zero);
@@ -114,6 +142,7 @@ sealed class PortalFixture : HttpMessageHandler
     public List<Uri> Calls { get; } = [];
     public bool AlreadyOnline { get; init; }
     public bool ChangedMode { get; init; }
+    public string? ConfigJson { get; init; }
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri!; Calls.Add(uri);
@@ -121,7 +150,7 @@ sealed class PortalFixture : HttpMessageHandler
         {
             "/drcom/chkstatus" => "dr1001({\"result\":" + (AlreadyOnline ? "1" : "0") + "});",
             "/" => "<html><script>v4ip='10.0.0.1';</script></html>",
-            "/eportal/portal/page/loadConfig" => "dr1001({\"code\":200,\"data\":{\"en_md5\":" + (ChangedMode ? "1" : "0") + ",\"password_cut\":0,\"enable_r3\":0}});",
+            "/eportal/portal/page/loadConfig" => ConfigJson ?? "dr1001({\"code\":200,\"data\":{\"en_md5\":" + (ChangedMode ? "1" : "0") + ",\"password_cut\":0,\"enable_r3\":0}});",
             "/drcom/login" => "dr1001({\"result\":1});",
             _ => throw new Exception("Unexpected fixture path")
         };

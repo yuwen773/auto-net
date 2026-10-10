@@ -1,10 +1,27 @@
 namespace AutoNet.Core;
 
 public enum ActionKind { None, ReconnectWifi, Authenticate }
-public sealed record Observation(bool WifiConnected, bool DirectOnline, bool PortalNeedsLogin);
+public enum WifiState { Unavailable, Disconnected, Associating, WaitingForAddress, Ready, OtherProfile }
+public enum NetworkCondition { Online, InterfaceUnavailable, WifiDisconnected, Associating, WaitingForAddress, OtherProfile, PortalUnknown, NeedsAuthentication, AuthenticatedOffline }
+public sealed record Observation(WifiState Wifi, bool DirectOnline, PortalState Portal)
+{
+    public Observation(bool wifiConnected, bool directOnline, bool portalNeedsLogin)
+        : this(wifiConnected ? WifiState.Ready : WifiState.Disconnected, directOnline, portalNeedsLogin ? PortalState.NeedsLogin : PortalState.Unknown) { }
+
+    public NetworkCondition Condition => DirectOnline ? NetworkCondition.Online : Wifi switch
+    {
+        WifiState.Unavailable => NetworkCondition.InterfaceUnavailable,
+        WifiState.Disconnected => NetworkCondition.WifiDisconnected,
+        WifiState.Associating => NetworkCondition.Associating,
+        WifiState.WaitingForAddress => NetworkCondition.WaitingForAddress,
+        WifiState.OtherProfile => NetworkCondition.OtherProfile,
+        _ => Portal switch { PortalState.LoggedIn => NetworkCondition.AuthenticatedOffline, PortalState.NeedsLogin => NetworkCondition.NeedsAuthentication, _ => NetworkCondition.PortalUnknown }
+    };
+}
 
 public sealed class RecoveryPolicy
 {
+    private ActionKind lastAction;
     public DateTimeOffset? OutageSince { get; private set; }
     public DateTimeOffset NextAttempt { get; private set; } = DateTimeOffset.MinValue;
     public int Attempts { get; private set; }
@@ -19,10 +36,14 @@ public sealed class RecoveryPolicy
         }
         if (!enabled) { Reset(); return ActionKind.None; }
         OutageSince ??= now;
+        var action = observation.Wifi == WifiState.Disconnected ? ActionKind.ReconnectWifi :
+            observation.Condition == NetworkCondition.NeedsAuthentication && hasCredentials && !CredentialsBlocked
+                ? ActionKind.Authenticate : ActionKind.None;
+        if (action == ActionKind.None) return ActionKind.None;
+        if (lastAction != ActionKind.None && lastAction != action) { Attempts = 0; NextAttempt = DateTimeOffset.MinValue; }
         if (now < NextAttempt) return ActionKind.None;
-        if (!observation.WifiConnected) return ActionKind.ReconnectWifi;
-        return observation.PortalNeedsLogin && hasCredentials && !CredentialsBlocked
-            ? ActionKind.Authenticate : ActionKind.None;
+        lastAction = action;
+        return action;
     }
 
     public void Attempted(DateTimeOffset finishedAt)
@@ -39,6 +60,7 @@ public sealed class RecoveryPolicy
         OutageSince = null;
         NextAttempt = DateTimeOffset.MinValue;
         Attempts = 0;
+        lastAction = ActionKind.None;
         // Credential rejection persists until credentials change, even if connectivity recovers.
     }
 }
@@ -51,11 +73,21 @@ public sealed record StatusSnapshot
     public bool Enabled { get; init; }
     public string Wifi { get; init; } = "待检测";
     public string Direct { get; init; } = "待检测";
+    public string Portal { get; init; } = "待检测";
     public string Tunnel { get; init; } = "未配置检测";
     public string Uu { get; init; } = "未核验";
     public int Attempts { get; init; }
     public DateTimeOffset? OutageSince { get; init; }
     public DateTimeOffset? NextAttempt { get; init; }
     public double? LastRecoverySeconds { get; init; }
+    public DateTimeOffset? LastRecoveryAt { get; init; }
+    public DateTimeOffset? ActionStartedAt { get; init; }
+    public DateTimeOffset? ActionFinishedAt { get; init; }
+    public DateTimeOffset? AuthenticationAcceptedAt { get; init; }
+    public string AuthenticationStage { get; init; } = "Unknown";
+    public string AuthenticationFailure { get; init; } = "None";
+    public int? AuthenticationHttpStatus { get; init; }
+    public bool CredentialRequestStarted { get; init; }
+    public string LastError { get; init; } = "";
     public bool CredentialsBlocked { get; init; }
 }

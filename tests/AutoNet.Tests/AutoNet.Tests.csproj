@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Core/AutoNet.Core.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/AutoNet.Service/AutoNet.Service.csproj" /></ItemGroup>
 </Project>

@@ -19,10 +19,8 @@ public sealed record Settings
     {
         if (!Guid.TryParse(InterfaceId, out _) || string.IsNullOrWhiteSpace(WifiProfile))
             throw new ArgumentException("请选择校园 Wi-Fi 网卡和已保存的配置。");
-        if (!Uri.TryCreate(PortalOrigin, UriKind.Absolute, out var portal) ||
-            portal.Scheme != "https" || portal.UserInfo != "" || portal.Query != "" ||
-            portal.Fragment != "" || portal.AbsolutePath != "/")
-            throw new ArgumentException("认证地址必须是 HTTPS 域名根地址。");
+        if (!Uri.TryCreate(PortalOrigin, UriKind.Absolute, out var portal) || !IsSupportedPortal(portal))
+            throw new ArgumentException("认证地址仅支持 https://login.csust.edu.cn:443 根地址；802 仅用于读取认证配置。");
         if (ProxyUrl != "" && (!Uri.TryCreate(ProxyUrl, UriKind.Absolute, out var proxy) ||
             proxy.Scheme != "http" || !proxy.IsLoopback || proxy.UserInfo != ""))
             throw new ArgumentException("代理检测地址应为本机 HTTP 代理，例如 http://127.0.0.1:7892。");
@@ -30,6 +28,11 @@ public sealed record Settings
             uu.Scheme != "https" || uu.UserInfo != "" || uu.Query != "" || uu.Fragment != ""))
             throw new ArgumentException("UU 检测地址必须是不含令牌的真实 HTTPS 服务地址。");
     }
+
+    public static bool IsSupportedPortal(Uri portal) => portal.IsAbsoluteUri &&
+        portal.Scheme == "https" && portal.Host.Equals("login.csust.edu.cn", StringComparison.OrdinalIgnoreCase) &&
+        portal.Port == 443 && portal.UserInfo == "" && portal.Query == "" &&
+        portal.Fragment == "" && portal.AbsolutePath == "/";
 }
 
 public sealed record Credentials(string Username, string Password);

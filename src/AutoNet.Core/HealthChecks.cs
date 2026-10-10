@@ -6,6 +6,8 @@ using System.ServiceProcess;
 
 namespace AutoNet.Core;
 
+public sealed record RouteSelection(string Kind, uint? InterfaceIndex = null, string? Destination = null, string Reason = "");
+
 public static class HealthChecks
 {
     public static readonly Uri[] InternetTargets = [new("https://www.baidu.com/robots.txt"), new("https://www.microsoft.com/robots.txt")];
@@ -44,7 +46,20 @@ public static class HealthChecks
         using var http = SystemClient(settings.ProxyUrl);
         var ok = await InternetAsync(http, ct);
         if (settings.ProxyUrl != "") return ok ? "本机代理可达" : "本机代理不可达";
-        // Verify the selected route instead of assuming that disabling an HTTP proxy bypasses TUN.
+        return DescribeSystemPath(ok, await ReadRouteAsync(wifi, ct));
+    }
+
+    public static string DescribeSystemPath(bool reachable, RouteSelection route) =>
+        (reachable ? "系统路径可达" : "系统路径不可达") + (route.Kind switch
+        {
+            "Tun" => "（路由样本推断为 TUN，出口未核验）",
+            "Wifi" => "（路由样本推断为 Wi-Fi，出口未核验）",
+            _ => "（路由未知，出口未核验）"
+        });
+
+    public static async Task<RouteSelection> ReadRouteAsync(WifiLink wifi, CancellationToken ct)
+    {
+        // This is one DNS/route sample, not evidence about the actual HTTP socket or physical exit.
         try
         {
             using var dnsTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -55,14 +70,15 @@ public static class HealthChecks
             {
                 var adapter = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(a => a.GetIPProperties().GetIPv4Properties()?.Index == index);
                 if (adapter is not null && (adapter.Name + " " + adapter.Description).Contains("tun", StringComparison.OrdinalIgnoreCase))
-                    return ok ? "TUN 路径可达" : "TUN 路径不可达";
-                if (index == wifi.Index) return ok ? "系统直连可达（未经过隧道）" : "系统直连不可达";
+                    return new("Tun", index, ip.ToString());
+                if (index == wifi.Index) return new("Wifi", index, ip.ToString());
+                return new("Unknown", index, ip.ToString(), "选路接口未识别");
             }
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
-        catch (System.Net.Sockets.SocketException) { }
-        catch (NetworkInformationException) { }
-        return ok ? "系统路径可达（隧道未核验）" : "系统路径不可达（隧道未核验）";
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new("Unknown", Reason: "DNS 查询超时"); }
+        catch (System.Net.Sockets.SocketException) { return new("Unknown", Reason: "DNS 查询失败"); }
+        catch (NetworkInformationException) { return new("Unknown", Reason: "接口查询失败"); }
+        return new("Unknown", Reason: "无可用 IPv4 选路样本");
     }
 
     public static string UuService()

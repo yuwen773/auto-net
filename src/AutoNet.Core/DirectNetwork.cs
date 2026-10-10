@@ -8,11 +8,11 @@ namespace AutoNet.Core;
 
 public static class DirectNetwork
 {
-    private static readonly ConcurrentDictionary<string, (DateTimeOffset Until, IPAddress[] Addresses)> Cache = new();
-
     public static HttpClient CreateClient(WifiLink link)
     {
         if (link.Address is null || link.Index == 0) throw new InvalidOperationException("Wi-Fi 尚未取得 IPv4 地址。");
+        // A recreated Wi-Fi client must not reuse DNS answers from a previous association.
+        var cache = new ConcurrentDictionary<string, (DateTimeOffset Until, IPAddress[] Addresses)>();
         var handler = new SocketsHttpHandler
         {
             UseProxy = false, AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.All,
@@ -20,7 +20,7 @@ public static class DirectNetwork
             ConnectCallback = async (context, ct) =>
             {
                 var addresses = IPAddress.TryParse(context.DnsEndPoint.Host, out var literal)
-                    ? new[] { literal } : await ResolveAsync(context.DnsEndPoint.Host, link, ct);
+                    ? new[] { literal } : await ResolveAsync(context.DnsEndPoint.Host, link, cache, ct);
                 foreach (var address in addresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork))
                 {
                     var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -46,10 +46,9 @@ public static class DirectNetwork
         socket.Bind(new IPEndPoint(link.Address!, 0));
     }
 
-    private static async Task<IPAddress[]> ResolveAsync(string host, WifiLink link, CancellationToken ct)
+    private static async Task<IPAddress[]> ResolveAsync(string host, WifiLink link, ConcurrentDictionary<string, (DateTimeOffset Until, IPAddress[] Addresses)> cache, CancellationToken ct)
     {
-        var key = $"{link.Index}/{link.Address}/{string.Join(',', link.DnsServers.Select(a => a.ToString()))}/{host}";
-        if (Cache.TryGetValue(key, out var cached) && cached.Until > DateTimeOffset.UtcNow) return cached.Addresses;
+        if (cache.TryGetValue(host, out var cached) && cached.Until > DateTimeOffset.UtcNow) return cached.Addresses;
         foreach (var dns in link.DnsServers.Take(2))
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -63,9 +62,9 @@ public static class DirectNetwork
                 await socket.SendAsync(DnsPacket.Query(host, id), SocketFlags.None, timeout.Token);
                 var buffer = new byte[4096];
                 var length = await socket.ReceiveAsync(buffer, SocketFlags.None, timeout.Token);
-                var addresses = DnsPacket.Parse(buffer.AsSpan(0, length), id);
+                var addresses = DnsPacket.Parse(buffer.AsSpan(0, length), id, host);
                 if (addresses.Length == 0) continue;
-                Cache[key] = (DateTimeOffset.UtcNow.AddSeconds(30), addresses);
+                cache[host] = (DateTimeOffset.UtcNow.AddSeconds(30), addresses);
                 return addresses;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
@@ -97,50 +96,75 @@ public static class DnsPacket
         return stream.ToArray();
     }
 
-    public static IPAddress[] Parse(ReadOnlySpan<byte> data, ushort id)
+    public static IPAddress[] Parse(ReadOnlySpan<byte> data, ushort id, string? expectedHost = null)
     {
         if (data.Length < 12 || BinaryPrimitives.ReadUInt16BigEndian(data) != id ||
-            (data[2] & 0x80) == 0 || (data[2] & 2) != 0 || (data[3] & 15) != 0)
+            (data[2] & 0xf8) != 0x80 || (data[2] & 2) != 0 || (data[3] & 15) != 0)
             throw new InvalidDataException("Invalid DNS response.");
         var offset = 12;
         var questions = BinaryPrimitives.ReadUInt16BigEndian(data[4..]);
         var answers = BinaryPrimitives.ReadUInt16BigEndian(data[6..]);
-        for (var i = 0; i < questions; i++)
-        {
-            SkipName(data, ref offset);
-            if (offset + 4 > data.Length) throw new InvalidDataException("Truncated DNS question.");
-            offset += 4;
-        }
-        var result = new List<IPAddress>();
+        if (questions != 1) throw new InvalidDataException("Unexpected DNS question count.");
+        var question = ReadName(data, ref offset);
+        if (offset + 4 > data.Length || BinaryPrimitives.ReadUInt16BigEndian(data[offset..]) != 1 ||
+            BinaryPrimitives.ReadUInt16BigEndian(data[(offset + 2)..]) != 1)
+            throw new InvalidDataException("Invalid DNS question.");
+        if (expectedHost is not null && !question.Equals(new System.Globalization.IdnMapping().GetAscii(expectedHost).TrimEnd('.'), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Mismatched DNS question.");
+        offset += 4;
+        var addresses = new List<(string Owner, IPAddress Address)>();
+        var aliases = new List<(string Owner, string Target)>();
         for (var i = 0; i < answers; i++)
         {
-            SkipName(data, ref offset);
+            var owner = ReadName(data, ref offset);
             if (offset + 10 > data.Length) throw new InvalidDataException("Truncated DNS record.");
             var type = BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
             var cls = BinaryPrimitives.ReadUInt16BigEndian(data[(offset + 2)..]);
             var length = BinaryPrimitives.ReadUInt16BigEndian(data[(offset + 8)..]);
             offset += 10;
             if (offset + length > data.Length) throw new InvalidDataException("Truncated DNS address.");
-            if (type == 1 && cls == 1 && length == 4) result.Add(new IPAddress(data.Slice(offset, 4)));
+            if (type == 1 && cls == 1 && length == 4) addresses.Add((owner, new IPAddress(data.Slice(offset, 4))));
+            if (type == 5 && cls == 1)
+            {
+                var end = offset;
+                var target = ReadName(data, ref end);
+                if (end != offset + length) throw new InvalidDataException("Invalid CNAME length.");
+                aliases.Add((owner, target));
+            }
             offset += length;
         }
-        return result.ToArray();
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { question };
+        for (var i = 0; i < aliases.Count; i++)
+            foreach (var alias in aliases)
+                if (names.Contains(alias.Owner)) names.Add(alias.Target);
+        return addresses.Where(a => names.Contains(a.Owner)).Select(a => a.Address).Distinct().ToArray();
     }
 
-    private static void SkipName(ReadOnlySpan<byte> data, ref int offset)
+    private static string ReadName(ReadOnlySpan<byte> data, ref int offset)
     {
-        for (var labels = 0; labels < 128; labels++)
+        var labels = new List<string>();
+        var seen = new HashSet<int>();
+        var cursor = offset;
+        var jumped = false;
+        for (var count = 0; count < 128; count++)
         {
-            if (offset >= data.Length) throw new InvalidDataException("Truncated DNS name.");
-            var length = data[offset++];
-            if (length == 0) return;
+            if (cursor >= data.Length || !seen.Add(cursor)) throw new InvalidDataException("Invalid DNS name.");
+            var length = data[cursor++];
+            if (!jumped) offset = cursor;
+            if (length == 0) return string.Join('.', labels);
             if ((length & 0xc0) == 0xc0)
             {
-                if (offset >= data.Length) throw new InvalidDataException("Truncated DNS pointer.");
-                offset++; return;
+                if (cursor >= data.Length) throw new InvalidDataException("Truncated DNS pointer.");
+                var target = ((length & 0x3f) << 8) | data[cursor++];
+                if (!jumped) offset = cursor;
+                jumped = true;
+                cursor = target;
+                continue;
             }
-            if (length > 63 || offset + length > data.Length) throw new InvalidDataException("Invalid DNS label.");
-            offset += length;
+            if (length > 63 || cursor + length > data.Length) throw new InvalidDataException("Invalid DNS label.");
+            labels.Add(Encoding.ASCII.GetString(data.Slice(cursor, length)));
+            cursor += length;
+            if (!jumped) offset = cursor;
         }
         throw new InvalidDataException("DNS name too long.");
     }

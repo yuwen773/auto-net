@@ -11,7 +11,11 @@ public sealed record WifiProfile(string InterfaceId, string InterfaceName, strin
     public override string ToString() => $"{InterfaceName} · {Name}" + (AllUsers ? "" : "（仅当前用户）");
 }
 
-public sealed record WifiLink(bool Connected, NetworkInterface? Adapter, IPAddress? Address, int Index, IPAddress[] DnsServers, bool OtherProfile = false);
+public sealed record WifiLink(bool Connected, NetworkInterface? Adapter, IPAddress? Address, int Index, IPAddress[] DnsServers, bool OtherProfile = false, bool Connecting = false, bool Unavailable = false)
+{
+    public WifiState State => OtherProfile ? WifiState.OtherProfile : Connecting ? WifiState.Associating : Index == 0 || Unavailable ? WifiState.Unavailable :
+        !Connected ? WifiState.Disconnected : Address is null ? WifiState.WaitingForAddress : WifiState.Ready;
+}
 
 public static class Wifi
 {
@@ -51,14 +55,14 @@ public static class Wifi
             Guid.TryParse(n.Id, out var id) && id == Guid.Parse(settings.InterfaceId));
         if (adapter is null) return new(false, null, null, 0, []);
         using var client = new WlanClient();
-        var profile = Current(client.Handle, Guid.Parse(settings.InterfaceId));
+        var profile = Current(client.Handle, Guid.Parse(settings.InterfaceId), out var state);
         var properties = adapter.GetIPProperties();
         var address = properties.UnicastAddresses.Select(a => a.Address).FirstOrDefault(a =>
             a.AddressFamily == AddressFamily.InterNetwork && !a.ToString().StartsWith("169.254.", StringComparison.Ordinal));
         return new(adapter.OperationalStatus == OperationalStatus.Up && profile == settings.WifiProfile,
             adapter, address, properties.GetIPv4Properties()?.Index ?? 0,
             properties.DnsAddresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork).ToArray(),
-            profile != "" && profile != settings.WifiProfile);
+            profile != "" && profile != settings.WifiProfile, state is 3 or 5 or 6 or 7, state == 0);
     }
 
     public static void Connect(Settings settings)
@@ -70,12 +74,19 @@ public static class Wifi
         Check(WlanConnect(client.Handle, ref id, ref parameters, IntPtr.Zero));
     }
 
-    private static string Current(IntPtr handle, Guid id)
+    private static string Current(IntPtr handle, Guid id) => Current(handle, id, out _);
+
+    private static string Current(IntPtr handle, Guid id, out int state)
     {
+        state = 0;
         var result = WlanQueryInterface(handle, ref id, 7, IntPtr.Zero, out _, out var data, out _);
-        if (result == 5023) return ""; // ERROR_INVALID_STATE: no active connection.
+        if (result == 5023) { state = 4; return ""; } // ERROR_INVALID_STATE: no active connection.
         Check(result); // A privacy/access failure must not be mistaken for a disconnected Wi-Fi.
-        try { return Marshal.ReadInt32(data) == 1 ? Marshal.PtrToStringUni(data + 8, 256)?.TrimEnd('\0') ?? "" : ""; }
+        try
+        {
+            state = Marshal.ReadInt32(data);
+            return state == 1 ? Marshal.PtrToStringUni(data + 8, 256)?.TrimEnd('\0') ?? "" : "";
+        }
         finally { WlanFreeMemory(data); }
     }
 
