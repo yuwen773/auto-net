@@ -9,7 +9,7 @@ internal static class TrayRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
-        ("NEW-01：主窗口已暂停、过期和缺失状态的恢复操作语义一致", () => RunSta(() =>
+        ("NEW-01：主窗口已暂停、过期和缺失状态的恢复操作语义一致", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             fixture.WriteStatus(Online() with { Enabled = false });
@@ -43,7 +43,7 @@ internal static class TrayRegression
             Require(commands.Count == 0, "不可信状态不应产生任何设置命令");
             Capture(form, "recovery-action-unconfirmed.png");
         })),
-        ("NEW-01：托盘入口同步已暂停、过期和缺失状态且禁止绕过", () => RunSta(() =>
+        ("NEW-01：托盘入口同步已暂停、过期和缺失状态且禁止绕过", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             fixture.WriteStatus(Online() with { Enabled = false });
@@ -68,7 +68,7 @@ internal static class TrayRegression
             }
             finally { context.ExitThread(); }
         })),
-        ("NEW-01：主窗口与托盘发送明确意图且点击时重新验证快照", () => RunSta(() =>
+        ("NEW-01：主窗口与托盘发送明确意图且点击时重新验证快照", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             fixture.WriteStatus(Online());
@@ -109,7 +109,7 @@ internal static class TrayRegression
             }
             finally { context.ExitThread(); }
         })),
-        ("NEW-01：管理员执行明确状态命令不会反转配置且保留最新其他设置", () => RunSta(() =>
+        ("NEW-01：管理员执行明确状态命令不会反转配置且保留最新其他设置", () => RunStaAsync(() =>
         {
             Require(AutoNet.Tray.Program.RecoveryTarget(["--enable-recovery"]) == true);
             Require(AutoNet.Tray.Program.RecoveryTarget(["--disable-recovery"]) == false);
@@ -131,7 +131,7 @@ internal static class TrayRegression
                     }
                 }
         })),
-        ("托盘加固：五万次固定标志刷新复用控件且资源稳定", () => RunSta(() =>
+        ("托盘加固：五万次固定标志刷新复用控件且资源稳定", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             fixture.WriteStatus(Online());
@@ -178,7 +178,7 @@ internal static class TrayRegression
             Require(afterChanges.Gdi <= baseline.Gdi + 8, "切换标志后 GDI 未释放");
             Evidence("resources.json", new { baseline, samples, afterChanges, fixedRefreshes = 50_000, fullRefreshes = 500, transitions = 1000 });
         })),
-        ("托盘加固：空值、未来、过期状态在标题服务诊断区域一致降级", () => RunSta(() =>
+        ("托盘加固：空值、未来、过期状态在标题服务诊断区域一致降级", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             fixture.WriteStatus(Online() with { CredentialsBlocked = true, AuthenticationFailure = "BindingRejected" });
@@ -206,7 +206,7 @@ internal static class TrayRegression
             File.WriteAllText(fixture.StatusPath, "{not json");
             Require(form.RefreshStatus() is null);
         })),
-        ("托盘加固：两千次日志切换合并为单一读取且仅最新结果可见", () => RunSta(() =>
+        ("托盘加固：两千次日志切换合并为单一读取且仅最新结果可见", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             using var started = new ManualResetEventSlim();
@@ -251,7 +251,7 @@ internal static class TrayRegression
             Require(Field<List<ActivityLog>>(form, "loaded").Single().Action == "autonet-2026-10-10.jsonl", "旧结果覆盖了最新日期");
             Evidence("log-loading.json", new { requests = 2000, reads = calls, maxConcurrentReads = maxActive });
         })),
-        ("托盘加固：日志关闭取消读取且读取失败后仍可刷新", () => RunSta(() =>
+        ("托盘加固：日志关闭取消读取且读取失败后仍可刷新", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             using var started = new ManualResetEventSlim();
@@ -281,7 +281,7 @@ internal static class TrayRegression
             PumpUntil(() => Field<Task>(retry, "pending").IsCompleted);
             Require(Field<List<ActivityLog>>(retry, "loaded").Count == 1 && calls == 2);
         })),
-        ("托盘加固：日志界面按全部结构化代码筛选并可渲染", () => RunSta(() =>
+        ("托盘加固：日志界面按全部结构化代码筛选并可渲染", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
             var label = typeof(AutoNet.Service.MonitorWorker).Assembly.GetType("AutoNet.Service.RecoveryJournal")!
@@ -311,7 +311,7 @@ internal static class TrayRegression
         Portal = "未查询（外网检查已通过）", Tunnel = "系统路径可达，出口未核验", Uu = "未核验"
     };
 
-    private static Task RunSta(Action test)
+    internal static Task RunStaAsync(Action test)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
@@ -332,7 +332,7 @@ internal static class TrayRegression
         return Task.CompletedTask;
     }
 
-    private static void PumpUntil(Func<bool> condition)
+    internal static void PumpUntil(Func<bool> condition)
     {
         var timeout = Stopwatch.StartNew();
         while (!condition())
@@ -343,9 +343,9 @@ internal static class TrayRegression
         }
     }
 
-    private static T Field<T>(object instance, string name) =>
+    internal static T Field<T>(object instance, string name) =>
         (T)instance.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(instance)!;
-    private static MethodInfo Method(object instance, string name) =>
+    internal static MethodInfo Method(object instance, string name) =>
         instance.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!;
 
     private static string EvidenceDirectory => Path.Combine(Environment.CurrentDirectory, "artifacts", "validation", "ui-fix");
@@ -355,7 +355,7 @@ internal static class TrayRegression
         File.WriteAllText(Path.Combine(EvidenceDirectory, name), JsonSerializer.Serialize(value, Storage.Json));
     }
 
-    private static void Capture(Form form, string name)
+    internal static void Capture(Form form, string name)
     {
         Directory.CreateDirectory(EvidenceDirectory);
         if (!form.Visible) ShowForQa(form);
@@ -371,7 +371,7 @@ internal static class TrayRegression
         image.Save(Path.Combine(EvidenceDirectory, name));
     }
 
-    private static void ShowForQa(Form form)
+    internal static void ShowForQa(Form form)
     {
         form.ShowInTaskbar = false;
         form.Opacity = 0;
@@ -391,7 +391,7 @@ internal static class TrayRegression
     [DllImport("user32.dll")]
     private static extern int GetGuiResources(IntPtr process, int flags);
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         private readonly string directory = Path.Combine(Path.GetTempPath(), "autonet-ui-fix-" + Guid.NewGuid().ToString("N"));
         private readonly string? previousStatus = Environment.GetEnvironmentVariable("AUTONET_QA_STATUS_PATH");

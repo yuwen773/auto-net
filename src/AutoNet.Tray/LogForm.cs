@@ -9,6 +9,7 @@ namespace AutoNet.Tray;
 /// </summary>
 internal sealed class LogForm : Form
 {
+    private const string ValidationNotice = "物理出口、UU 会话与真实认证仍待现场验收；此处记录不等于已通过验证。";
     private readonly ComboBox date = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220, AccessibleName = "日志日期" };
     private readonly ComboBox filter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150, AccessibleName = "事件筛选" };
     private readonly ListView list = new()
@@ -246,17 +247,22 @@ internal sealed class LogForm : Form
 
     private void ShowDetail()
     {
+        if (disposed) return;
+        try { detail.Text = SelectedDetail() + Environment.NewLine + Environment.NewLine + ValidationNotice; }
+        catch (Exception e)
+        {
+            // An incomplete record must not escape a selection event into the UI message loop.
+            detail.Text = "该条日志详情不可读取；可选择其他事件或刷新重试。" + Environment.NewLine + Environment.NewLine + ValidationNotice;
+            summary.Text = "详情读取失败：" + e.GetType().Name;
+        }
+    }
+
+    private string SelectedDetail()
+    {
         if (list.SelectedIndices.Count == 0 || list.SelectedIndices[0] >= visible.Count)
-        {
-            detail.Text = visible.Count == 0 ? "没有符合筛选条件的事件。" : "请选择一个事件查看技术诊断详情。";
-            return;
-        }
+            return visible.Count == 0 ? "没有符合筛选条件的事件。" : "请选择一个事件查看技术诊断详情。";
         var entry = visible[list.SelectedIndices[0]];
-        if (entry.SchemaVersion >= 2)
-        {
-            detail.Text = entry.ToReadableText();
-            return;
-        }
+        if (entry.SchemaVersion >= 2) return entry.ToReadableText();
         var lines = new List<string>
         {
             $"时间：{entry.Time.ToLocalTime():yyyy-MM-dd HH:mm:ss}",
@@ -277,9 +283,7 @@ internal sealed class LogForm : Form
         lines.Add("");
         lines.Add("说明：");
         lines.Add(entry.Detail);
-        lines.Add("");
-        lines.Add("物理出口、UU 会话与真实认证仍待现场验收；此处记录不等于已通过验证。");
-        detail.Text = string.Join(Environment.NewLine, lines);
+        return string.Join(Environment.NewLine, lines);
     }
 
     /// <summary>
@@ -318,5 +322,5 @@ internal sealed class LogForm : Form
         base.Dispose(disposing);
     }
 
-    private void CaptureForQa() => QaCapture.Run(this, () => pending);
+    private void CaptureForQa() => QaCapture.RunAsync(this, () => pending);
 }

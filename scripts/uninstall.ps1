@@ -18,8 +18,8 @@ if ($PurgeData) {
     if (Test-Path -LiteralPath $data) {
         $resolved = (Resolve-Path -LiteralPath $data).ProviderPath
         if (-not [string]::Equals($resolved, $data, [StringComparison]::OrdinalIgnoreCase) -or
-            ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Refusing to clear an unexpected data path.' }
-        if (Get-ChildItem -LiteralPath $data -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'Refusing to clear data containing reparse points.' }
+            ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '数据路径不符合预期，已拒绝清除。' }
+        if (Get-ChildItem -LiteralPath $data -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw '数据目录包含重解析点，已拒绝清除。' }
     }
 }
 $serviceExe = Join-Path $env:ProgramFiles 'AutoNet/service/AutoNet.Service.exe'
@@ -41,7 +41,7 @@ if ($PurgeData -and (Test-Path -LiteralPath $data)) {
     # Recheck the absolute target immediately before recursive deletion.
     $expected = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'AutoNet'))
     if (-not [string]::Equals($data, $expected, [StringComparison]::OrdinalIgnoreCase) -or
-        ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Data path changed; refusing deletion.' }
+        ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '数据路径已变化，已拒绝删除。' }
     Remove-Item -LiteralPath $data -Recurse -Force
     Write-Host '已移除 AutoNet 服务、自启及本机数据；程序文件保留。'
 }

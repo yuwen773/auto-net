@@ -115,7 +115,8 @@ internal static class LogCentreRegression
         }),
         ("日志尾部读取：损坏行被跳过且不影响同批其他记录", () =>
         {
-            var records = LogTailReader.Parse(["{\"action\":\"恢复联网\"}", "{not json", "", "{\"action\":\"重连校园 Wi-Fi\"}"]);
+            var records = LogTailReader.Parse(["{\"time\":\"2026-10-10T00:00:00Z\",\"action\":\"恢复联网\",\"detail\":\"\"}", "{not json", "",
+                "{\"time\":\"2026-10-10T00:00:01Z\",\"action\":\"重连校园 Wi-Fi\",\"detail\":\"\"}"]);
             Require(records.Count == 2, $"应跳过损坏行，实际 {records.Count}");
             Require(records[0].Action == "恢复联网" && records[1].Action == "重连校园 Wi-Fi");
             return Task.CompletedTask;

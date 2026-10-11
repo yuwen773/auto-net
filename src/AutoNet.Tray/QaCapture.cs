@@ -22,7 +22,7 @@ internal static class QaCapture
     /// different thing from Windows reporting a different display DPI. Real 100/125/150% acceptance
     /// remains outstanding.
     /// </summary>
-    public static async void Run(Form form, Func<Task>? ready = null)
+    public static async void RunAsync(Form form, Func<Task>? ready = null)
     {
         var path = Environment.GetEnvironmentVariable("AUTONET_CAPTURE_PATH");
         if (string.IsNullOrEmpty(path)) return;

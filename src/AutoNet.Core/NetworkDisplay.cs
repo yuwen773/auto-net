@@ -97,8 +97,9 @@ public static class NetworkDisplayMap
 
     private static NetworkPrimaryState Primary(StatusSnapshot s, NetworkAdditional additional)
     {
+        if (!KnownStates.Contains(s.State)) return NetworkPrimaryState.Unrecognized;
         // A retained authentication block must not overwrite current connectivity evidence.
-        if (s.State == "校园网在线" && s.Direct == "外网可达") return NetworkPrimaryState.Online;
+        if (s.Direct == "外网可达" && s.State is "校园网在线" or "已暂停恢复") return NetworkPrimaryState.Online;
         if (s.AuthenticationFailure == nameof(PortalFailure.BindingRejected)) return NetworkPrimaryState.BindingRejected;
         if (!s.Enabled && s.Direct != "外网可达") return NetworkPrimaryState.RecoveryPaused;
         return s.State switch

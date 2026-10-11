@@ -26,7 +26,7 @@ internal static class AcceptanceRegression
             var fixture = Stalled();
             option!.SetValue(fixture.Settings, false);
             using var worker = new MonitorWorker(fixture, fixture.Clock);
-            await ObserveStall(worker, fixture);
+            await ObserveStallAsync(worker, fixture);
             Require(fixture.Disconnects == 0, "独立关闭后不应主动断线");
             fixture.Http.PortalResult = "0";
             Require((await worker.RunOnceAsync(default)).CredentialRequestStarted, "关闭主动断线不应关闭认证恢复");
@@ -40,7 +40,7 @@ internal static class AcceptanceRegression
                 return Task.FromResult(("系统路径样本", "UU会话未知"));
             };
             using var worker = new MonitorWorker(fixture, fixture.Clock);
-            await ObserveStall(worker, fixture);
+            await ObserveStallAsync(worker, fixture);
             Require(fixture.AuxiliaryCalls == 2 && fixture.Http.Online, "夹具未在最后失败探测与动作间恢复HTTPS");
             Require(fixture.Disconnects == 0, "HTTPS已恢复仍发出断线请求");
         }),
@@ -48,7 +48,7 @@ internal static class AcceptanceRegression
         {
             var fixture = Stalled();
             using var worker = new MonitorWorker(fixture, fixture.Clock);
-            await ObserveStall(worker, fixture);
+            await ObserveStallAsync(worker, fixture);
             fixture.Http.PortalResult = "0";
             fixture.Clock.Advance(TimeSpan.FromSeconds(2));
             Require((await worker.RunOnceAsync(default)).CredentialRequestStarted, "应优先恢复明确失效的认证");
@@ -73,7 +73,7 @@ internal static class AcceptanceRegression
                     AfterBudgetSave = () => { if (times.Count == 0) fixture.Clock.Advance(TimeSpan.FromSeconds(20)); }
                 };
                 using var worker = new MonitorWorker(environment, fixture.Clock);
-                ObserveStall(worker, fixture).GetAwaiter().GetResult();
+                ObserveStallAsync(worker, fixture).GetAwaiter().GetResult();
                 fixture.Clock.Advance(TimeSpan.FromSeconds(100)); worker.RunOnceAsync(default).GetAwaiter().GetResult();
             });
             Require(times.Count < 2 || times[1] - times[0] >= TimeSpan.FromSeconds(120),
@@ -88,7 +88,7 @@ internal static class AcceptanceRegression
                 var environment = new StoredEnvironment(fixture, store);
                 using (var worker = new MonitorWorker(environment, fixture.Clock))
                 {
-                    ObserveStall(worker, fixture).GetAwaiter().GetResult();
+                    ObserveStallAsync(worker, fixture).GetAwaiter().GetResult();
                     fixture.Clock.Advance(TimeSpan.FromSeconds(120)); worker.RunOnceAsync(default).GetAwaiter().GetResult();
                     fixture.Clock.Advance(TimeSpan.FromSeconds(120)); worker.RunOnceAsync(default).GetAwaiter().GetResult();
                 }
@@ -170,7 +170,7 @@ internal static class AcceptanceRegression
         return fixture;
     }
 
-    private static async Task ObserveStall(MonitorWorker worker, MonitorFixture fixture)
+    private static async Task ObserveStallAsync(MonitorWorker worker, MonitorFixture fixture)
     {
         await worker.RunOnceAsync(default);
         fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);

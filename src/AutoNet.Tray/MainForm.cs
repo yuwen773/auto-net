@@ -364,5 +364,5 @@ internal sealed class MainForm : Form
 
     internal static Button Button(string text) => Ui.Button(text);
 
-    private void CaptureForQa() => QaCapture.Run(this);
+    private void CaptureForQa() => QaCapture.RunAsync(this);
 }

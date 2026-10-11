@@ -26,7 +26,7 @@ internal static class SafetyRegression
         {
             var fixture = Stalled();
             using var worker = new MonitorWorker(fixture, fixture.Clock);
-            await FirstDisconnect(worker, fixture);
+            await FirstDisconnectAsync(worker, fixture);
             fixture.Clock.Advance(TimeSpan.FromSeconds(119)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 1);
             fixture.Clock.Advance(TimeSpan.FromSeconds(1)); await worker.RunOnceAsync(default);
@@ -42,7 +42,7 @@ internal static class SafetyRegression
         ("安全门控：重启保留额度且重新等待完整冷却，墙钟前跳不绕过", async () =>
         {
             var fixture = Stalled();
-            using (var worker = new MonitorWorker(fixture, fixture.Clock)) await FirstDisconnect(worker, fixture);
+            using (var worker = new MonitorWorker(fixture, fixture.Clock)) await FirstDisconnectAsync(worker, fixture);
             fixture.Clock.Advance(TimeSpan.FromSeconds(1), TimeSpan.FromDays(10));
             using (var restarted = new MonitorWorker(fixture, fixture.Clock))
             {
@@ -64,7 +64,7 @@ internal static class SafetyRegression
         {
             var fixture = Stalled();
             using var worker = new MonitorWorker(fixture, fixture.Clock);
-            await FirstDisconnect(worker, fixture);
+            await FirstDisconnectAsync(worker, fixture);
             fixture.Settings = fixture.Settings with { Enabled = false };
             fixture.Clock.Advance(TimeSpan.FromSeconds(20)); await worker.RunOnceAsync(default);
             fixture.Link = fixture.Link with { OtherProfile = true };
@@ -84,7 +84,7 @@ internal static class SafetyRegression
             var fixture = Stalled();
             using (var worker = new MonitorWorker(fixture, fixture.Clock))
             {
-                await FirstDisconnect(worker, fixture);
+                await FirstDisconnectAsync(worker, fixture);
                 fixture.Http.Online = true; await worker.RunOnceAsync(default);
                 fixture.Clock.Advance(TimeSpan.FromSeconds(59));
                 Require((await worker.RunOnceAsync(default)).DisconnectAttempts == 1);
@@ -97,14 +97,14 @@ internal static class SafetyRegression
             }
             fixture.Http.Online = false;
             using var restarted = new MonitorWorker(fixture, fixture.Clock);
-            await FirstDisconnect(restarted, fixture);
+            await FirstDisconnectAsync(restarted, fixture);
             Require(fixture.Disconnects == 2);
         }),
         ("安全门控：额度写入失败不执行断线，写入成功后才能重试", async () =>
         {
             var fixture = Stalled(); fixture.FailBudget = true;
             using var worker = new MonitorWorker(fixture, fixture.Clock);
-            await FirstDisconnect(worker, fixture, expected: 0);
+            await FirstDisconnectAsync(worker, fixture, expected: 0);
             Require(fixture.Budgets.Count == 0);
             fixture.FailBudget = false;
             fixture.Clock.Advance(TimeSpan.FromSeconds(120)); await worker.RunOnceAsync(default);
@@ -117,7 +117,7 @@ internal static class SafetyRegression
             var fixture = Stalled(); fixture.FailDisconnect = true;
             fixture.BeforeDisconnect = () => Require(fixture.Budgets.Values.Single().Attempts == fixture.Disconnects);
             using var worker = new MonitorWorker(fixture, fixture.Clock);
-            await FirstDisconnect(worker, fixture);
+            await FirstDisconnectAsync(worker, fixture);
             fixture.Clock.Advance(TimeSpan.FromSeconds(120)); await worker.RunOnceAsync(default);
             fixture.Clock.Advance(TimeSpan.FromSeconds(120)); await worker.RunOnceAsync(default);
             fixture.Clock.Advance(TimeSpan.FromHours(1)); await worker.RunOnceAsync(default);
@@ -155,7 +155,7 @@ internal static class SafetyRegression
             Require(blocked.CredentialsBlocked && blocked.Detail.Contains("绑定被拒绝") && blocked.AuthenticationFailure == "BindingRejected");
             Require(fixture.Http.Requests.Count(u => u.Query.Contains("user_password")) == 1);
             fixture.Http.PortalResult = "-1";
-            await FirstDisconnect(restarted, fixture, expected: 0);
+            await FirstDisconnectAsync(restarted, fixture, expected: 0);
             fixture.Link = new(false, null, null, 7, []);
             await restarted.RunOnceAsync(default);
             Require(fixture.Connects == 1 && fixture.Disconnects == 0);
@@ -221,7 +221,7 @@ internal static class SafetyRegression
         return fixture;
     }
 
-    private static async Task FirstDisconnect(MonitorWorker worker, MonitorFixture fixture, int? expected = null)
+    private static async Task FirstDisconnectAsync(MonitorWorker worker, MonitorFixture fixture, int? expected = null)
     {
         var count = expected ?? fixture.Disconnects + 1;
         await worker.RunOnceAsync(default);

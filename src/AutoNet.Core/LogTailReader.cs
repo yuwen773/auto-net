@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
 
@@ -90,13 +91,52 @@ public static class LogTailReader
         foreach (var line in lines)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            byte[]? buffer = null;
             try
             {
-                var entry = JsonSerializer.Deserialize<ActivityLog>(line, ActivityLog.Json);
-                if (entry is not null) records.Add(entry);
+                buffer = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(line.Length));
+                var count = Encoding.UTF8.GetBytes(line, buffer);
+                var bytes = buffer.AsSpan(0, count);
+                var reader = new Utf8JsonReader(bytes);
+                if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) continue;
+                // Defaults are for producers; missing external fields are not evidence of a complete record.
+                var timeCount = 0;
+                var actionCount = 0;
+                var detailCount = 0;
+                while (reader.Read())
+                {
+                    if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1) continue;
+                    // Compare ordinary names without allocations; escaped names retain JSON's normal semantics.
+                    var name = reader.ValueIsEscaped ? reader.GetString() : null;
+                    if (name is null ? Ascii.EqualsIgnoreCase(reader.ValueSpan, "time"u8) : name.Equals("time", StringComparison.OrdinalIgnoreCase)) timeCount++;
+                    else if (name is null ? Ascii.EqualsIgnoreCase(reader.ValueSpan, "action"u8) : name.Equals("action", StringComparison.OrdinalIgnoreCase)) actionCount++;
+                    else if (name is null ? Ascii.EqualsIgnoreCase(reader.ValueSpan, "detail"u8) : name.Equals("detail", StringComparison.OrdinalIgnoreCase)) detailCount++;
+                    reader.Read();
+                    reader.Skip();
+                }
+                if (timeCount != 1 || actionCount != 1 || detailCount != 1) continue;
+                var entry = JsonSerializer.Deserialize<ActivityLog>(bytes, ActivityLog.Json);
+                if (IsRenderable(entry)) records.Add(entry!);
             }
             catch (JsonException) { }
+            finally
+            {
+                if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
         return records;
     }
+
+    private static bool IsRenderable(ActivityLog? entry)
+    {
+        if (entry is null || entry.Time == default || string.IsNullOrWhiteSpace(entry.Action) || entry.Detail is null) return false;
+        if (entry.Diagnostics is not { } data) return true;
+        return ValidError(data.Error) && ValidError(data.Authentication?.Error)
+            && (data.Probes is null || data.Probes.All(probe => probe is not null
+                && !string.IsNullOrWhiteSpace(probe.Target) && !string.IsNullOrWhiteSpace(probe.Failure) && ValidError(probe.Error)));
+    }
+
+    private static bool ValidError(DiagnosticError? error) => error is null
+        || !string.IsNullOrWhiteSpace(error.Type) && error.CallSites is not null
+            && error.CallSites.All(site => !string.IsNullOrWhiteSpace(site));
 }
