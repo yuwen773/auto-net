@@ -21,6 +21,18 @@ public sealed record Observation(WifiState Wifi, bool DirectOnline, PortalState 
 
 public sealed class RecoveryPolicy
 {
+    // Single source of truth for the stall-link fallback. The tray renders these values instead of
+    // repeating them, so a policy change cannot silently drift from what the window claims.
+    public const int DisconnectAttemptCap = 3;
+    public const int StalledRoundThreshold = 3;
+    public const int AuthenticationAttemptCap = 3;
+    public const int DisconnectCooldownSeconds = 120;
+    public const int OnlineResetSeconds = 60;
+    public const int StalledObservationSeconds = 30;
+    public const int FastRetrySeconds = 2;
+    public const int FastRetryWindowSeconds = 15;
+    public const int BackoffCeilingSeconds = 60;
+
     private ActionKind lastAction;
     private DateTimeOffset? stalledSince;
     private DateTimeOffset? onlineSince;
@@ -39,6 +51,11 @@ public sealed class RecoveryPolicy
     public DateTimeOffset NextAttempt { get; private set; } = DateTimeOffset.MinValue;
     public int Attempts { get; private set; }
     public bool CredentialsBlocked { get; set; }
+    public string DecisionReason { get; private set; } = "NotEvaluated";
+    public int FailedRounds => stalledRounds;
+    public double ObservationSeconds(DateTimeOffset now) => stalledSince is { } since ? Math.Max(0, (now - since).TotalSeconds) : 0;
+
+    private ActionKind NoAction(string reason) { DecisionReason = reason; return ActionKind.None; }
 
     public ActionKind Decide(Observation observation, DateTimeOffset now, bool enabled, bool hasCredentials, bool allowActiveDisconnect = true)
     {
@@ -47,16 +64,16 @@ public sealed class RecoveryPolicy
             var since = onlineSince ?? now;
             Reset();
             onlineSince = since;
-            if (!disconnectPending && now - since >= TimeSpan.FromSeconds(60))
+            if (!disconnectPending && now - since >= TimeSpan.FromSeconds(OnlineResetSeconds))
             {
                 DisconnectAttempts = 0;
                 NextDisconnectAttempt = DateTimeOffset.MinValue;
                 disconnectCompletedAt = default;
             }
-            return ActionKind.None;
+            return NoAction("Online");
         }
         onlineSince = null;
-        if (!enabled) { Reset(); return ActionKind.None; }
+        if (!enabled) { Reset(); return NoAction("RecoveryDisabled"); }
         OutageSince ??= now;
         var stalled = observation.Condition is NetworkCondition.PortalUnknown or NetworkCondition.AuthenticatedOffline
             && hasCredentials && !CredentialsBlocked && allowActiveDisconnect;
@@ -66,17 +83,22 @@ public sealed class RecoveryPolicy
             observation.Condition == NetworkCondition.NeedsAuthentication && hasCredentials && !CredentialsBlocked
                 ? ActionKind.Authenticate : stalled ? ActionKind.DisconnectWifi : ActionKind.None;
         NextAttempt = DateTimeOffset.MinValue;
-        if (action == ActionKind.None) return ActionKind.None;
-        if (action == ActionKind.DisconnectWifi && (DisconnectAttempts >= 3 || disconnectPending)) return ActionKind.None;
+        if (action == ActionKind.None) return NoAction(observation.Wifi != WifiState.Ready ? observation.Condition.ToString() :
+            !hasCredentials ? "CredentialsMissing" : CredentialsBlocked ? "AuthenticationPaused" :
+            !allowActiveDisconnect ? "ActiveDisconnectDisabled" : "NoApplicableAction");
+        if (action == ActionKind.DisconnectWifi && (DisconnectAttempts >= DisconnectAttemptCap || disconnectPending))
+            return NoAction(disconnectPending ? "DisconnectCompletionUnconfirmed" : "DisconnectBudgetExhausted");
         NextAttempt = retries.TryGetValue(action, out var retry) ? retry.NextAttempt : DateTimeOffset.MinValue;
         if (action == ActionKind.DisconnectWifi)
         {
-            NextAttempt = NextDisconnectAttempt > stalledSince!.Value.AddSeconds(30)
-                ? NextDisconnectAttempt : stalledSince.Value.AddSeconds(30);
-            if (stalledRounds < 3) return ActionKind.None;
+            NextAttempt = NextDisconnectAttempt > stalledSince!.Value.AddSeconds(StalledObservationSeconds)
+                ? NextDisconnectAttempt : stalledSince.Value.AddSeconds(StalledObservationSeconds);
+            if (stalledRounds < StalledRoundThreshold) return NoAction("InsufficientFailureSamples");
         }
-        if (now < NextAttempt) return ActionKind.None;
+        if (now < NextAttempt) return NoAction(action == ActionKind.DisconnectWifi && now < stalledSince!.Value.AddSeconds(StalledObservationSeconds)
+            ? "ObservationWindow" : action + "Cooldown");
         lastAction = action;
+        DecisionReason = action + "Required";
         return action;
     }
 
@@ -84,11 +106,11 @@ public sealed class RecoveryPolicy
     {
         Attempts++;
         var actionAttempts = retries.TryGetValue(lastAction, out var retry) ? retry.Attempts + 1 : 1;
-        var fast = OutageSince is { } start && finishedAt - start < TimeSpan.FromSeconds(15);
+        var fast = OutageSince is { } start && finishedAt - start < TimeSpan.FromSeconds(FastRetryWindowSeconds);
         // Reserve destructive actions before invoking Windows, including failed requests.
         var delay = lastAction == ActionKind.DisconnectWifi
-            ? 120
-            : fast ? 2 : Math.Min(60, 10 * (1 << Math.Min(Math.Max(actionAttempts - 3, 0), 3)));
+            ? DisconnectCooldownSeconds
+            : fast ? FastRetrySeconds : Math.Min(BackoffCeilingSeconds, 10 * (1 << Math.Min(Math.Max(actionAttempts - 3, 0), 3)));
         NextAttempt = finishedAt.AddSeconds(delay);
         retries[lastAction] = (actionAttempts, NextAttempt);
         if (lastAction == ActionKind.DisconnectWifi)
@@ -106,14 +128,14 @@ public sealed class RecoveryPolicy
         disconnectCompletedAt = budget.CompletedAt;
         // A monotonic clock cannot survive reboot. Re-arm the full cooldown on load
         // so restarting or advancing the wall clock cannot shorten it.
-        NextDisconnectAttempt = budget.Attempts == 0 ? DateTimeOffset.MinValue : now.AddSeconds(120);
+        NextDisconnectAttempt = budget.Attempts == 0 ? DateTimeOffset.MinValue : now.AddSeconds(DisconnectCooldownSeconds);
     }
 
     public void DisconnectCompleted(DisconnectBudget budget, DateTimeOffset now)
     {
         disconnectPending = false;
         disconnectCompletedAt = budget.CompletedAt;
-        NextAttempt = NextDisconnectAttempt = now.AddSeconds(120);
+        NextAttempt = NextDisconnectAttempt = now.AddSeconds(DisconnectCooldownSeconds);
     }
 
     public void CancelUnissuedDisconnectReservation() => disconnectPending = false;
@@ -157,6 +179,14 @@ public sealed record StatusSnapshot
     public string Uu { get; init; } = "未核验";
     public int Attempts { get; init; }
     public int DisconnectAttempts { get; init; }
+    /// <summary>Projected from <see cref="RecoveryPolicy.DisconnectAttemptCap"/> so the tray never restates the cap.</summary>
+    public int DisconnectBudgetMax { get; init; } = RecoveryPolicy.DisconnectAttemptCap;
+    /// <summary>Projected from <see cref="RecoveryPolicy.DisconnectCooldownSeconds"/>; drives the "next allowed retry" hint.</summary>
+    public int DisconnectCooldownSeconds { get; init; } = RecoveryPolicy.DisconnectCooldownSeconds;
+    /// <summary>Projected from <see cref="RecoveryPolicy.OnlineResetSeconds"/>; explains when the quota returns.</summary>
+    public int DisconnectResetAfterSeconds { get; init; } = RecoveryPolicy.OnlineResetSeconds;
+    /// <summary>True while a disconnect request is reserved but its completion was never durably confirmed.</summary>
+    public bool DisconnectRequestUnconfirmed { get; init; }
     public DateTimeOffset? OutageSince { get; init; }
     public DateTimeOffset? NextAttempt { get; init; }
     public double? LastRecoverySeconds { get; init; }

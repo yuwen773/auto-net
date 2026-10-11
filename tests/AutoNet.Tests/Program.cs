@@ -125,10 +125,13 @@ tests = tests.Concat(MonitorRegression.Cases).ToArray();
 tests = tests.Concat(PortalRegression.Cases).ToArray();
 tests = tests.Concat(NetworkRegression.Cases).ToArray();
 tests = tests.Concat(LogRegression.Cases).ToArray();
+tests = tests.Concat(DiagnosticRegression.Cases).ToArray();
 tests = tests.Concat(SafetyRegression.Cases).ToArray();
 tests = tests.Concat(AcceptanceRegression.Cases).ToArray();
 tests = tests.Concat(AuthenticationPersistenceRegression.Cases).ToArray();
 tests = tests.Concat(RecoveryPersistenceRegression.Cases).ToArray();
+tests = tests.Concat(DisplayRegression.Cases).ToArray();
+tests = tests.Concat(LogCentreRegression.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

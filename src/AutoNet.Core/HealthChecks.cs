@@ -13,26 +13,37 @@ public static class HealthChecks
     public static readonly Uri[] InternetTargets = [new("https://www.baidu.com/robots.txt"), new("https://www.microsoft.com/robots.txt")];
 
     public static async Task<bool> InternetAsync(HttpClient http, CancellationToken ct)
+        => (await InternetDetailedAsync(http, ct)).Online;
+
+    public static async Task<InternetEvidence> InternetDetailedAsync(HttpClient http, CancellationToken ct)
     {
         // HTTPS + known content prevents treating a captive redirect or arbitrary HTTP 200 as Internet.
-        var results = await Task.WhenAll(InternetTargets.Select(uri => ProbeAsync(http, uri, true, ct)));
-        return results.Any(ok => ok);
+        var results = await Task.WhenAll(InternetTargets.Select((uri, index) => ProbeDetailedAsync(http, uri, true, ct, index == 0 ? "BaiduRobots" : "MicrosoftRobots")));
+        return new(results);
     }
 
     public static async Task<bool> ProbeAsync(HttpClient http, Uri uri, bool robots, CancellationToken ct)
+        => (await ProbeDetailedAsync(http, uri, robots, ct, "ConfiguredEndpoint")).Passed;
+
+    private static async Task<ProbeEvidence> ProbeDetailedAsync(HttpClient http, Uri uri, bool robots, CancellationToken ct, string target)
     {
+        var started = Stopwatch.GetTimestamp();
+        int? status = null;
+        ProbeEvidence Result(string failure, DiagnosticError? error = null) => new(target, failure == "None", failure,
+            Math.Round(Stopwatch.GetElapsedTime(started).TotalMilliseconds, 2), status, error);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(2000);
             using var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            if (!response.IsSuccessStatusCode) return false;
-            if (!robots) return true;
-            return (await DrcomPortal.ReadLimitedAsync(response, timeout.Token)).Contains("User-agent:", StringComparison.OrdinalIgnoreCase);
+            status = (int)response.StatusCode;
+            if (!response.IsSuccessStatusCode) return Result("HttpStatus");
+            if (!robots) return Result("None");
+            return Result((await DrcomPortal.ReadLimitedAsync(response, timeout.Token)).Contains("User-agent:", StringComparison.OrdinalIgnoreCase) ? "None" : "ContentMismatch");
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
-        catch (HttpRequestException) { return false; }
-        catch (IOException) { return false; }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested) { return Result("Timeout", DiagnosticError.From(e)); }
+        catch (HttpRequestException e) { return Result(e.HttpRequestError.ToString(), DiagnosticError.From(e)); }
+        catch (IOException e) { return Result("ResponseRead", DiagnosticError.From(e)); }
     }
 
     public static HttpClient SystemClient(string proxy = "") => new(new SocketsHttpHandler

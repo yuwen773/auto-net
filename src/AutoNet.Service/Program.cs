@@ -23,7 +23,7 @@ if (args.Contains("--diagnose") || args.Contains("--diagnose-portal"))
             var attempt = await new DrcomPortal(http, new Uri(settings.PortalOrigin)).DiagnoseAsync(timeout.Token);
             Console.WriteLine(JsonSerializer.Serialize(new {
                 readOnly = true, observedPortalState = attempt.ObservedState.ToString(), stage = attempt.Stage.ToString(),
-                failure = attempt.Failure.ToString(), attempt.HttpStatus, attempt.Field, attempt.Flags,
+                failure = attempt.Failure.ToString(), attempt.HttpStatus, attempt.Field, attempt.Flags, attempt.Evidence, attempt.Error,
                 credentialRequestStarted = attempt.CredentialRequestStarted, summary = attempt.SafeSummary,
                 note = "仅反映本次前置检查；已认证时的页面可能不同，不能回推历史故障。未加载凭据、未清除认证阻断。"
             }, Storage.Json));

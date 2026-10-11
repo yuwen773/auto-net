@@ -203,6 +203,7 @@ internal static class AcceptanceRegression
         public Settings? LoadSettings() => fixture.LoadSettings();
         public Credentials? LoadCredentials() => fixture.LoadCredentials();
         public AuthenticationBlock? LoadAuthenticationBlock() => FailAuthenticationRead ? throw new UnauthorizedAccessException("synthetic denial") : store.LoadAuthenticationBlock();
+        public AuthenticationRecordKind AuthenticationRecordSource => store.LastAuthenticationRecordKind;
         public void BlockAuthentication(AuthenticationBlock block) => store.BlockAuthentication(block);
         public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) =>
             FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.TryTransitionAuthentication(expected, next);
@@ -227,5 +228,8 @@ internal static class AcceptanceRegression
         public void UpdatePower(bool enabled) => fixture.UpdatePower(enabled);
         public void WriteStatus(StatusSnapshot status) => fixture.WriteStatus(status);
         public void WriteLog(string action, string detail, double? seconds, StatusSnapshot? snapshot) => fixture.WriteLog(action, detail, seconds, snapshot);
+        public void WriteDiagnostic(ActivityLog entry) => fixture.WriteDiagnostic(entry);
+        public ActivityLog? ReadLastDiagnostic() => fixture.ReadLastDiagnostic();
+        public void WriteDiagnosticFallback(string summary) => fixture.WriteDiagnosticFallback(summary);
     }
 }

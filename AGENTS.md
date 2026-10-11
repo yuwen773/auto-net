@@ -9,7 +9,7 @@
 - `scripts/`: build, packaging, installation, and uninstallation.
 - `docs/VALIDATION.md`: verified behavior and remaining manual acceptance checks.
 
-Keep generated binaries in ignored `artifacts/` and local SDK tooling in ignored `.tools/`. The tray icon is generated in code; there is no separate asset pipeline.
+Keep generated binaries in ignored `artifacts/` and local SDK tooling in ignored `.tools/`. Application branding lives in `assets/AutoNet.png` and `assets/AutoNet.ico`; network-state glyphs are generated in code.
 
 ## Build, Test, and Development Commands
 

@@ -1,4 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType><UseWindowsForms>true</UseWindowsForms></PropertyGroup>
+  <PropertyGroup><OutputType>WinExe</OutputType><UseWindowsForms>true</UseWindowsForms><ApplicationIcon>../../assets/AutoNet.ico</ApplicationIcon></PropertyGroup>
   <ItemGroup><ProjectReference Include="../AutoNet.Core/AutoNet.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../assets/AutoNet.png" LogicalName="AutoNet.Assets.Logo.png" />
+    <EmbeddedResource Include="../../assets/AutoNet.ico" LogicalName="AutoNet.Assets.Icon.ico" />
+  </ItemGroup>
 </Project>

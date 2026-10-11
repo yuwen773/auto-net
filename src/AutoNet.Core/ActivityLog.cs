@@ -8,6 +8,16 @@ namespace AutoNet.Core;
 
 public sealed record ActivityLog
 {
+    public int SchemaVersion { get; init; } = 1;
+    public string? EventCode { get; init; }
+    public string? RunId { get; init; }
+    public string? IncidentId { get; init; }
+    public string? NetworkId { get; init; }
+    public string? BuildId { get; init; }
+    public long? Sequence { get; init; }
+    public long? Cycle { get; init; }
+    public double? MonotonicMilliseconds { get; init; }
+    public DiagnosticData? Diagnostics { get; init; }
     public DateTimeOffset Time { get; init; }
     public string Action { get; init; } = "";
     public string Detail { get; init; } = "";
@@ -55,6 +65,44 @@ public sealed record ActivityLog
         var text = new StringBuilder();
         text.AppendLine($"{Time.ToLocalTime():yyyy-MM-dd HH:mm:ss zzz}  【{Action}】");
         text.AppendLine(Detail);
+        if (EventCode is not null)
+        {
+            text.AppendLine($"事件：{EventCode}；运行 {RunId}；序号 {Sequence}；检测轮次 {Cycle}");
+            if (IncidentId is not null) text.AppendLine($"故障编号：{IncidentId}；网络编号：{NetworkId}");
+            if (BuildId is not null) text.AppendLine("程序标识：" + BuildId);
+            if (Diagnostics is { } data)
+            {
+                if (data.Reason is not null) text.AppendLine("决策原因：" + data.Reason);
+                if (data.Stage is not null) text.AppendLine($"执行阶段：{data.Stage}；结果：{data.Outcome ?? "尚未完成"}");
+                if (data.HttpStatus is { } http) text.AppendLine("HTTP 状态：" + http);
+                if (data.NativeError is { } native) text.AppendLine("Windows 原生错误：" + native);
+                if (data.ActionId is not null) text.AppendLine("动作编号：" + data.ActionId);
+                if (data.ElapsedMilliseconds is { } elapsed) text.AppendLine($"本段单调计时：{elapsed:0.##} ms");
+                if (data.Error is { } error) text.AppendLine($"错误：{error.Type}；HRESULT {error.HResult}；HTTP 分类 {error.HttpError}；Socket {error.SocketError}；原生错误 {error.NativeError}\n调用位置：{string.Join(" → ", error.CallSites)}");
+                if (data.Probes is { } probes)
+                    foreach (var probe in probes)
+                    {
+                        text.AppendLine($"探测 {probe.Target}：{probe.Failure}；HTTP {probe.HttpStatus}；{probe.ElapsedMilliseconds:0.##} ms；{probe.Error?.HttpError} {probe.Error?.SocketError}");
+                        if (probe.Error is { } probeError) text.AppendLine($"探测错误：{probeError.Type}；HRESULT {probeError.HResult}；原生错误 {probeError.NativeError}；调用位置 {string.Join(" → ", probeError.CallSites)}");
+                    }
+                if (data.Authentication is { } auth)
+                {
+                    text.AppendLine("认证步骤：" + auth.SafeSummary);
+                    if (auth.Evidence is not null) text.AppendLine("参数证据：" + JsonSerializer.Serialize(auth.Evidence, Json));
+                }
+                if (data.LostEvents is { } lost) text.AppendLine($"日志缺口：有 {lost} 条事件未能写入；不可假设期间没有故障或动作。");
+                if (data.Parameters is { } parameters) text.AppendLine("响应及参数证据：" + JsonSerializer.Serialize(parameters, Json));
+                if (data.WifiState is not null) text.AppendLine($"链路观测：{data.WifiState}；本机 IPv4 就绪 {data.HasIpv4}；DNS 服务器数 {data.DnsServerCount}");
+                if (data.Condition is not null) text.AppendLine("观测条件：" + data.Condition);
+                if (data.Enabled is not null) text.AppendLine($"恢复已启用 {data.Enabled}；凭据已保存 {data.HasCredentials}；允许主动断线 {data.AllowActiveDisconnect}");
+                if (data.AuthenticationState is not null) text.AppendLine($"认证授权：{data.AuthenticationState} / {data.AuthenticationFailure}；累计尝试 {data.AuthenticationAttempts}/{data.AuthenticationAttemptMax}（含前置检查）");
+                if (data.AuthenticationRecordSource is not null) text.AppendLine("暂停记录读取分类：" + data.AuthenticationRecordSource + "（记录格式不代表已知原始故障原因）");
+                if (data.DisconnectState is not null) text.AppendLine($"断线授权：{data.DisconnectState}；累计尝试 {data.DisconnectAttempts}/{data.DisconnectAttemptMax}");
+                if (data.FailedRounds is not null) text.AppendLine($"连续失败采样：{data.FailedRounds}/{data.RequiredFailureRounds} 轮；观察窗口：{data.ObservationSeconds:0.##}/{data.RequiredObservationSeconds} 秒");
+                if (data.NextAttempt is { } retry) text.AppendLine($"下一次允许尝试：{retry.ToLocalTime():HH:mm:ss}");
+                if (data.PreviousRunId is not null) text.AppendLine($"前一运行：{data.PreviousRunId}；最后事件序号 {data.PreviousSequence}；故障 {data.PreviousIncidentId}");
+            }
+        }
         if (Detail.Contains("请重新保存凭据", StringComparison.Ordinal)) text.AppendLine("说明：这是旧版处理提示。请先检查认证诊断，不要仅为解除暂停而重新保存密码。");
         if (Action == "恢复联网") text.AppendLine("说明：旧版仅记录外网重新可达，未记录恢复来源，不能据此认定是程序自动修复。");
         if (Wifi is not null) text.AppendLine($"网络：Wi-Fi {Wifi}；{Direct ?? "外网状态未记录"}；认证 {Portal ?? "未记录"}");

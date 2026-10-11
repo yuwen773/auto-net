@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -9,8 +10,58 @@ namespace AutoNet.Core;
 public enum PortalState { Unknown, LoggedIn, NeedsLogin }
 public enum LoginResult { Accepted, RejectedCredentials, NeedsInteraction, Rejected, Unsupported, RejectedBinding }
 
-public sealed class DrcomPortal(HttpClient http, Uri origin)
+public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>? trace = null)
 {
+    private PortalEvidence evidence = new();
+    private PortalStage responseStage;
+    private int? responseStatus;
+    private long requestStarted;
+
+    private async Task<string> ReadResponseAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var type = response.Content.Headers.ContentType?.MediaType;
+        evidence = evidence with { ResponseContentType = type switch
+        {
+            "text/html" => "Html", "application/json" => "Json", "application/javascript" or "text/javascript" => "Javascript",
+            "text/plain" => "Text", null => "Missing", _ => "Other"
+        } };
+        try
+        {
+            var text = await ReadLimitedAsync(response, ct);
+            evidence = evidence with { ResponseCharacters = text.Length };
+            trace?.Invoke(new(responseStage, "BodyRead", Stopwatch.GetElapsedTime(requestStarted).TotalMilliseconds, responseStatus, Evidence: evidence));
+            return text;
+        }
+        catch (Exception e)
+        {
+            trace?.Invoke(new(responseStage, "BodyReadFailed", Stopwatch.GetElapsedTime(requestStarted).TotalMilliseconds, responseStatus, DiagnosticError.From(e), evidence));
+            throw;
+        }
+    }
+
+    private static string AddressEvidence(string? address) => string.IsNullOrEmpty(address) ? "Missing" : IsUsableClientIpv4(address) ? "Valid" : "Invalid";
+
+    private async Task<HttpResponseMessage> GetAsync(Uri uri, PortalStage stage, CancellationToken ct)
+    {
+        var started = Stopwatch.GetTimestamp();
+        requestStarted = started;
+        responseStage = stage;
+        responseStatus = null;
+        evidence = evidence with { ResponseContentType = null, ResponseCharacters = null, ResponseShape = null };
+        trace?.Invoke(new(stage, "Started"));
+        try
+        {
+            var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
+            responseStatus = (int)response.StatusCode;
+            trace?.Invoke(new(stage, "HeadersReceived", Stopwatch.GetElapsedTime(started).TotalMilliseconds, (int)response.StatusCode));
+            return response;
+        }
+        catch (Exception e)
+        {
+            trace?.Invoke(new(stage, "Failed", Stopwatch.GetElapsedTime(started).TotalMilliseconds, Error: DiagnosticError.From(e)));
+            throw;
+        }
+    }
     // Plain HTTP so the campus gateway intercepts it and answers with its redirect.
     private static readonly Uri GatewayProbe = new("http://www.msftconnecttest.com/connecttest.txt");
 
@@ -22,7 +73,9 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
 
     public async Task<PortalAttempt> InspectDetailedAsync(CancellationToken ct)
     {
-        PortalAttempt Unknown(PortalFailure failure) => new(LoginResult.Rejected, PortalStage.Status, failure);
+        evidence = new(); responseStatus = null;
+        PortalAttempt Unknown(PortalFailure failure, Exception? error = null) => new(LoginResult.Rejected, PortalStage.Status, failure, responseStatus)
+            { Evidence = evidence, Error = error is null ? null : DiagnosticError.From(error) };
         if (!Settings.IsSupportedPortal(origin)) return Unknown(PortalFailure.InvalidTarget);
         try
         {
@@ -30,12 +83,12 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
             var failure = status is not null && status != 200 ? PortalFailure.HttpStatus :
                 state == PortalState.Unknown ? PortalFailure.StatusUnknown : PortalFailure.None;
             return new PortalAttempt(failure == PortalFailure.None ? LoginResult.Accepted : LoginResult.Rejected,
-                PortalStage.Status, failure, status) { ObservedState = state };
+                PortalStage.Status, failure, status) { ObservedState = state, Evidence = evidence };
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Unknown(PortalFailure.Timeout); }
-        catch (HttpRequestException e) { return Unknown(e.HttpRequestError == HttpRequestError.SecureConnectionError ? PortalFailure.Tls : PortalFailure.Transport); }
-        catch (Exception e) when (e is JsonException or InvalidDataException) { return Unknown(PortalFailure.InvalidResponse); }
-        catch (IOException) { return Unknown(PortalFailure.Transport); }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested) { return Unknown(PortalFailure.Timeout, e); }
+        catch (HttpRequestException e) { return Unknown(e.HttpRequestError == HttpRequestError.SecureConnectionError ? PortalFailure.Tls : PortalFailure.Transport, e); }
+        catch (Exception e) when (e is JsonException or InvalidDataException) { return Unknown(PortalFailure.InvalidResponse, e); }
+        catch (IOException e) { return Unknown(PortalFailure.Transport, e); }
     }
 
     private sealed record PortalStatus(PortalState State, int? HttpStatus, string? ClientIpv4);
@@ -48,13 +101,15 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
         if (!Settings.IsSupportedPortal(origin)) return new(PortalState.Unknown, null, null);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(2000);
-        using var response = await http.GetAsync(new Uri(origin, "/drcom/chkstatus?callback=dr1001&v=" + Random.Shared.Next(100000, 999999)), HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        using var response = await GetAsync(new Uri(origin, "/drcom/chkstatus?callback=dr1001&v=" + Random.Shared.Next(100000, 999999)), PortalStage.Status, timeout.Token);
         if (response.StatusCode != HttpStatusCode.OK) return new(PortalState.Unknown, (int)response.StatusCode, null);
-        using var json = ParseJsonp(await ReadLimitedAsync(response, timeout.Token));
+        using var json = ParseJsonp(await ReadResponseAsync(response, timeout.Token));
+        evidence = evidence with { ResponseShape = json.RootElement.ValueKind.ToString() };
         if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("result", out var result))
             return new(PortalState.Unknown, (int)response.StatusCode, null);
         var state = result.ToString() switch { "1" => PortalState.LoggedIn, "0" => PortalState.NeedsLogin, _ => PortalState.Unknown };
         var clientIp = json.RootElement.TryGetProperty("v4ip", out var ip) && ip.ValueKind == JsonValueKind.String ? ip.GetString() : null;
+        evidence = evidence with { StatusAddress = AddressEvidence(clientIp) };
         return new(state, (int)response.StatusCode, clientIp);
     }
 
@@ -87,10 +142,11 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
         // must not spend the whole deadline and starve the configuration and login requests.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(2000);
-        using var response = await http.GetAsync(GatewayProbe, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        using var response = await GetAsync(GatewayProbe, PortalStage.GatewayRedirect, timeout.Token);
         var empty = new GatewayContext(null, null, null, null);
         var status = (int)response.StatusCode;
         var location = response.Headers.Location;
+        evidence = evidence with { RedirectPresent = location is not null, GatewayAddress = "Missing", AcAddress = "Missing", MacToken = "Missing" };
         // A plain probe response carries no context; retain the status/home-page IPv4 fallback.
         if (response.StatusCode == HttpStatusCode.OK && location is null) return (empty, PortalFailure.None, status);
         if (response.StatusCode != HttpStatusCode.Found) return (empty, PortalFailure.HttpStatus, status);
@@ -99,11 +155,21 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
         if (!location.IsAbsoluteUri || location.Scheme != "https" ||
             !location.Host.Equals("login.csust.edu.cn", StringComparison.OrdinalIgnoreCase) ||
             location.Port != 443 || location.UserInfo != "" || location.Fragment != "" || location.AbsolutePath != "/")
+        {
+            evidence = evidence with { RedirectTrusted = false };
             return (empty, PortalFailure.InvalidTarget, status);
+        }
+        evidence = evidence with { RedirectTrusted = true };
         var query = location.Query;
         if (string.IsNullOrEmpty(query)) return (empty, PortalFailure.None, status);
         var values = QueryValues(query);
         if (values is null) return (empty, PortalFailure.InvalidResponse, status);
+        var mac = values.GetValueOrDefault("wlanusermac");
+        evidence = evidence with
+        {
+            GatewayAddress = AddressEvidence(values.GetValueOrDefault("wlanuserip")), AcAddress = AddressEvidence(values.GetValueOrDefault("wlanacip")),
+            MacToken = string.IsNullOrEmpty(mac) ? "Missing" : mac.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) ? "Invalid" : "Present"
+        };
         return (new(values.GetValueOrDefault("wlanuserip"), values.GetValueOrDefault("wlanacip"),
             values.GetValueOrDefault("wlanacname"), values.GetValueOrDefault("wlanusermac")), PortalFailure.None, status);
     }
@@ -133,12 +199,14 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
 
     private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct, Func<bool>? authorizeSubmission = null)
     {
+        evidence = new(); responseStatus = null;
         var stage = PortalStage.Unknown;
         var state = PortalState.Unknown;
         var submitted = false;
         Dictionary<string, string>? flags = null;
+        DiagnosticError? error = null;
         PortalAttempt Outcome(LoginResult result, PortalFailure failure, int? status = null, string? field = null) =>
-            new(result, stage, failure, status, field, submitted) { ObservedState = state, Flags = flags };
+            new(result, stage, failure, status ?? (responseStage == stage ? responseStatus : null), field, submitted) { ObservedState = state, Flags = flags, Evidence = evidence, Error = error };
         if (!Settings.IsSupportedPortal(origin)) return Outcome(LoginResult.Unsupported, PortalFailure.InvalidTarget);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(6));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
@@ -160,15 +228,21 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
             var gateway = gatewayRead.Context;
 
             string? clientIp = gateway.ClientIpv4;
-            if (!IsUsableClientIpv4(clientIp)) clientIp = inspection.ClientIpv4;
+            if (IsUsableClientIpv4(clientIp)) evidence = evidence with { AddressSource = "GatewayRedirect" };
+            if (!IsUsableClientIpv4(clientIp))
+            {
+                clientIp = inspection.ClientIpv4;
+                if (IsUsableClientIpv4(clientIp)) evidence = evidence with { AddressSource = "StatusResponse" };
+            }
             if (!IsUsableClientIpv4(clientIp))
             {
                 // Only a fallback: the home page omits v4ip until a session exists.
                 stage = PortalStage.HomePage;
-                using var pageResponse = await http.GetAsync(new Uri(origin, "/"), HttpCompletionOption.ResponseHeadersRead, requestToken);
+                using var pageResponse = await GetAsync(new Uri(origin, "/"), PortalStage.HomePage, requestToken);
                 if (pageResponse.StatusCode != HttpStatusCode.OK)
                     return Outcome(HttpFailureResult(pageResponse.StatusCode), PortalFailure.HttpStatus, (int)pageResponse.StatusCode);
-                clientIp = ExtractClientIpv4(await ReadLimitedAsync(pageResponse, requestToken));
+                clientIp = ExtractClientIpv4(await ReadResponseAsync(pageResponse, requestToken));
+                evidence = evidence with { HomeAddress = AddressEvidence(clientIp), AddressSource = IsUsableClientIpv4(clientIp) ? "HomePage" : "None" };
             }
             stage = PortalStage.ClientIpv4;
             if (!IsUsableClientIpv4(clientIp))
@@ -183,10 +257,11 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
             var configUri = new UriBuilder(origin) { Port = 802, Path = "/eportal/portal/page/loadConfig",
                 Query = EncodeQuery(configQuery) };
             stage = PortalStage.Configuration;
-            using var configResponse = await http.GetAsync(configUri.Uri, HttpCompletionOption.ResponseHeadersRead, requestToken);
+            using var configResponse = await GetAsync(configUri.Uri, PortalStage.Configuration, requestToken);
             if (configResponse.StatusCode != HttpStatusCode.OK)
                 return Outcome(HttpFailureResult(configResponse.StatusCode), PortalFailure.HttpStatus, (int)configResponse.StatusCode);
-            using var config = ParseJsonp(await ReadLimitedAsync(configResponse, requestToken));
+            using var config = ParseJsonp(await ReadResponseAsync(configResponse, requestToken));
+            evidence = evidence with { ResponseShape = config.RootElement.ValueKind.ToString() };
             if (config.RootElement.ValueKind != JsonValueKind.Object || config.RootElement.EnumerateObject().Count(p => p.Name == "data") != 1 ||
                 !config.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
                 return Outcome(LoginResult.Unsupported, PortalFailure.MalformedConfiguration);
@@ -223,10 +298,11 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
                 Query = BuildLoginQuery(credentials, clientIp, gateway)
             };
             submitted = true;
-            using var response = await http.GetAsync(loginUri.Uri, HttpCompletionOption.ResponseHeadersRead, requestToken);
+            using var response = await GetAsync(loginUri.Uri, PortalStage.Submission, requestToken);
             if (response.StatusCode != HttpStatusCode.OK)
                 return Outcome(HttpFailureResult(response.StatusCode), PortalFailure.HttpStatus, (int)response.StatusCode);
-            using var json = ParseJsonp(await ReadLimitedAsync(response, requestToken));
+            using var json = ParseJsonp(await ReadResponseAsync(response, requestToken));
+            evidence = evidence with { ResponseShape = json.RootElement.ValueKind.ToString() };
             var result = Classify(json.RootElement);
             var outcome = Outcome(result, result switch
             {
@@ -244,15 +320,16 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
                         .Any(text => message.GetString()!.Equals(text, StringComparison.OrdinalIgnoreCase)));
             return outcome with { RetryPermitted = temporary };
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Outcome(LoginResult.Rejected, PortalFailure.Timeout); }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested) { error = DiagnosticError.From(e); return Outcome(LoginResult.Rejected, PortalFailure.Timeout); }
         catch (HttpRequestException e)
         {
             var tls = e.HttpRequestError == HttpRequestError.SecureConnectionError;
+            error = DiagnosticError.From(e);
             return Outcome(tls ? LoginResult.Unsupported : LoginResult.Rejected, tls ? PortalFailure.Tls : PortalFailure.Transport);
         }
-        catch (Exception e) when (e is JsonException or InvalidDataException) { return Outcome(LoginResult.Unsupported, PortalFailure.InvalidResponse); }
-        catch (Exception e) when (e is ArgumentException or NotSupportedException) { return Outcome(LoginResult.Unsupported, PortalFailure.InvalidResponse); }
-        catch (IOException) { return Outcome(LoginResult.Rejected, PortalFailure.Transport); }
+        catch (Exception e) when (e is JsonException or InvalidDataException) { error = DiagnosticError.From(e); return Outcome(LoginResult.Unsupported, PortalFailure.InvalidResponse); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException) { error = DiagnosticError.From(e); return Outcome(LoginResult.Unsupported, PortalFailure.InvalidResponse); }
+        catch (IOException e) { error = DiagnosticError.From(e); return Outcome(LoginResult.Rejected, PortalFailure.Transport); }
     }
 
     private static LoginResult HttpFailureResult(HttpStatusCode status) =>

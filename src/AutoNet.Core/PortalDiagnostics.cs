@@ -8,6 +8,8 @@ public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, Portal
     public PortalState ObservedState { get; init; } = PortalState.Unknown;
     public IReadOnlyDictionary<string, string>? Flags { get; init; }
     public bool RetryPermitted { get; init; }
+    public PortalEvidence? Evidence { get; init; }
+    public DiagnosticError? Error { get; init; }
     public string SafeSummary => $"{StageText}：{FailureText} [{Stage}/{Failure}]" +
         (HttpStatus is { } status ? $" HTTP {status}" : "") +
         (Field is "en_md5" or "password_cut" or "enable_r3" ? " 字段 " + Field : "") +

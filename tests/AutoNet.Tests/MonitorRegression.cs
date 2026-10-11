@@ -296,6 +296,15 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public bool FailBudget { get; set; }
     public Dictionary<string, DisconnectBudget> Budgets { get; } = [];
     public List<ActivityLog> Logs { get; } = [];
+    public List<string> FallbackLogs { get; } = [];
+    public ActivityLog? PreviousDiagnostic { get; set; }
+    public ActivityLog? ReadLastDiagnostic() => PreviousDiagnostic;
+    public void WriteDiagnosticFallback(string summary) => FallbackLogs.Add(summary);
+    public void WriteDiagnostic(ActivityLog entry)
+    {
+        if (FailLog) throw new IOException("fixture-secret-url");
+        Logs.Add(entry);
+    }
     public Settings? LoadSettings() => Settings;
     public Credentials? LoadCredentials() => HasCredentials ? Credentials : null;
     public AuthenticationBlock? LoadAuthenticationBlock() => Authentication ?? (legacyBlocked ? new(BlockFailure) : null);

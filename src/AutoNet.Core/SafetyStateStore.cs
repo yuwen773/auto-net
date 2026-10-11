@@ -13,6 +13,7 @@ public sealed record DisconnectBudget(int Attempts = 0, DateTimeOffset NextAttem
     public Guid Revision { get; init; }
 }
 public enum AuthenticationState { Ready, SubmissionPending, RetryCoolingDown, BindingRejected, CredentialsRejected, InteractionRequired, SafetyBlocked }
+public enum AuthenticationRecordKind { NotRead, ReadError, Missing, LegacyFingerprintShape, NonObject, LegacyRecord, MissingFields, InvalidState, UnsupportedVersion, InconsistentState, InvalidJson, CurrentRecord }
 public sealed record AuthenticationBlock(PortalFailure Failure = PortalFailure.None)
 {
     public int Version { get; init; } = 1;
@@ -34,6 +35,7 @@ public sealed record AuthenticationBlock(PortalFailure Failure = PortalFailure.N
 public sealed class SafetyStateStore(string directory)
 {
     private string AuthBlockPath => Path.Combine(directory, "auth-block.txt");
+    public AuthenticationRecordKind LastAuthenticationRecordKind { get; private set; } = AuthenticationRecordKind.NotRead;
 
     public AuthenticationBlock? LoadAuthenticationBlock()
     {
@@ -43,25 +45,38 @@ public sealed class SafetyStateStore(string directory)
 
     private AuthenticationBlock? ReadAuthenticationBlock()
     {
-        if (!Exists(AuthBlockPath)) return null;
+        LastAuthenticationRecordKind = AuthenticationRecordKind.ReadError;
+        if (!Exists(AuthBlockPath)) { LastAuthenticationRecordKind = AuthenticationRecordKind.Missing; return null; }
         try
         {
-            using var json = JsonDocument.Parse(Storage.ReadShared(AuthBlockPath));
+            var content = Storage.ReadShared(AuthBlockPath);
+            if (content.Length == 64 && content.All(Uri.IsHexDigit))
+            {
+                LastAuthenticationRecordKind = AuthenticationRecordKind.LegacyFingerprintShape;
+                return new();
+            }
+            using var json = JsonDocument.Parse(content);
             var root = json.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return new();
+            if (root.ValueKind != JsonValueKind.Object) { LastAuthenticationRecordKind = AuthenticationRecordKind.NonObject; return new(); }
             // Old fingerprints and failure-only records always remain a manual pause.
             if (!root.TryGetProperty("Version", out _))
             {
+                LastAuthenticationRecordKind = AuthenticationRecordKind.LegacyRecord;
                 var legacy = JsonSerializer.Deserialize<AuthenticationBlock>(root, Storage.Json);
                 return legacy is not null && Enum.IsDefined(legacy.Failure) ? new(legacy.Failure) : new();
             }
-            if (!HasFields(root, "Version", "State", "Failure", "Attempts", "RetryDelaySeconds", "RetryNotBefore", "Revision")) return new();
+            if (!HasFields(root, "Version", "State", "Failure", "Attempts", "RetryDelaySeconds", "RetryNotBefore", "Revision"))
+                { LastAuthenticationRecordKind = AuthenticationRecordKind.MissingFields; return new(); }
             var block = JsonSerializer.Deserialize<AuthenticationBlock>(root, Storage.Json);
             if (block is null || block.Version != 1 || !Enum.IsDefined(block.State) || !Enum.IsDefined(block.Failure) ||
                 block.Attempts is < 0 or > 3 || block.State == AuthenticationState.SubmissionPending && block.Attempts == 0 ||
                 block.State == AuthenticationState.RetryCoolingDown &&
                     (block.RetryDelaySeconds is < 2 or > 60 || block.RetryNotBefore == default) ||
-                block.State != AuthenticationState.RetryCoolingDown && (block.RetryDelaySeconds != 0 || block.RetryNotBefore != default)) return new();
+                block.State != AuthenticationState.RetryCoolingDown && (block.RetryDelaySeconds != 0 || block.RetryNotBefore != default))
+            {
+                LastAuthenticationRecordKind = block?.Version != 1 ? AuthenticationRecordKind.UnsupportedVersion : AuthenticationRecordKind.InvalidState;
+                return new();
+            }
             var consistent = block.State switch
             {
                 AuthenticationState.Ready or AuthenticationState.SubmissionPending => block.Failure == PortalFailure.None,
@@ -73,11 +88,12 @@ public sealed class SafetyStateStore(string directory)
                 AuthenticationState.InteractionRequired => block.Failure == PortalFailure.InteractionRequired,
                 _ => true
             };
-            if (!consistent) return new();
+            if (!consistent) { LastAuthenticationRecordKind = AuthenticationRecordKind.InconsistentState; return new(); }
+            LastAuthenticationRecordKind = AuthenticationRecordKind.CurrentRecord;
             return block;
         }
         // Legacy fingerprints and damaged pause records remain blocked until manual release.
-        catch (JsonException) { return new(); }
+        catch (JsonException) { LastAuthenticationRecordKind = AuthenticationRecordKind.InvalidJson; return new(); }
     }
 
     public void BlockAuthentication(AuthenticationBlock block)
