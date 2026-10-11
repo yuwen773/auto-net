@@ -9,13 +9,16 @@ internal sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 2000 };
     private bool notified;
 
-    public TrayContext(bool startHidden)
+    public TrayContext(bool startHidden) : this(startHidden, new MainForm()) { }
+
+    internal TrayContext(bool startHidden, MainForm window)
     {
-        window = new MainForm();
+        this.window = window;
         var menu = new ContextMenuStrip();
         menu.Items.Add("打开 AutoNet", null, (_, _) => Show());
         menu.Items.Add("设置认证信息…", null, (_, _) => window.EditSettings());
-        menu.Items.Add("暂停 / 恢复自动连接", null, (_, _) => window.Toggle());
+        menu.Items.Add(window.CreateRecoveryMenuItem());
+        menu.Opening += (_, _) => window.RefreshStatus();
         menu.Items.Add("解除认证暂停…", null, (_, _) => window.UnblockAuthentication());
         menu.Items.Add("查看日志", null, (_, _) => window.OpenLogs());
         menu.Items.Add(new ToolStripSeparator());
@@ -38,5 +41,5 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     private void Show() { window.Show(); if (window.WindowState == FormWindowState.Minimized) window.WindowState = FormWindowState.Normal; window.Activate(); }
-    protected override void ExitThreadCore() { timer.Dispose(); tray.Visible = false; tray.Icon?.Dispose(); tray.Dispose(); window.AllowExit = true; window.Close(); window.Dispose(); base.ExitThreadCore(); }
+    protected override void ExitThreadCore() { timer.Dispose(); tray.Visible = false; tray.Icon?.Dispose(); tray.ContextMenuStrip?.Dispose(); tray.Dispose(); window.AllowExit = true; window.Close(); window.Dispose(); base.ExitThreadCore(); }
 }

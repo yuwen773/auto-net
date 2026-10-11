@@ -185,13 +185,17 @@ public static class NetworkDisplayMap
     private static string Technical(StatusSnapshot s)
     {
         var parts = new List<string>();
-        if (s.AuthenticationStage != "Unknown") parts.Add($"认证阶段 {s.AuthenticationStage}");
-        if (s.AuthenticationFailure != "None") parts.Add($"失败分类 {s.AuthenticationFailure}");
+        if (s.AuthenticationStage != "Unknown") parts.Add($"认证阶段 {ControlledName<PortalStage>(s.AuthenticationStage)}");
+        if (s.AuthenticationFailure != "None") parts.Add($"失败分类 {ControlledName<PortalFailure>(s.AuthenticationFailure)}");
         if (s.AuthenticationHttpStatus is { } status) parts.Add($"HTTP {status}");
-        if (s.AuthenticationPersistentState != "Unknown") parts.Add($"认证持久状态 {s.AuthenticationPersistentState}");
+        if (s.AuthenticationPersistentState != "Unknown") parts.Add($"认证持久状态 {ControlledName<AuthenticationState>(s.AuthenticationPersistentState)}");
         if (parts.Count == 0) return "";
         return string.Join("；", parts) + (s.CredentialRequestStarted ? "；已发起凭据请求" : "；未发送凭据");
     }
+
+    private static string ControlledName<T>(string value) where T : struct, Enum =>
+        Enum.TryParse<T>(value, out var parsed) && Enum.IsDefined(parsed) && parsed.ToString() == value
+            ? parsed.ToString() : "未知";
 
     private static string DescribeAge(TimeSpan? age)
     {

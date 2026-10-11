@@ -8,6 +8,26 @@ internal static class DisplayRegression
 
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("技术诊断：枚举分类拒绝自由文本、数值和未知枚举名称", () =>
+        {
+            foreach (var unknown in new[] { "fixture-secret", "1", "Status,Submission", "submission", "FutureValue" })
+            {
+                var display = NetworkDisplayMap.Map(Snapshot("校园网在线") with
+                {
+                    AuthenticationStage = unknown, AuthenticationFailure = unknown, AuthenticationPersistentState = unknown
+                }, Fresh);
+                Require(!display.TechnicalDetail.Contains(unknown), "技术详情显示了未受控的分类：" + unknown);
+                Require(display.TechnicalDetail.Contains("未知"));
+                Require(display.IsHealthy, "未知诊断分类不应改写独立的联网事实");
+            }
+            foreach (var stage in Enum.GetNames<PortalStage>().Where(n => n != "Unknown"))
+                Require(NetworkDisplayMap.Map(Snapshot("校园网在线") with { AuthenticationStage = stage }, Fresh).TechnicalDetail.Contains("认证阶段 " + stage));
+            foreach (var failure in Enum.GetNames<PortalFailure>().Where(n => n != "None"))
+                Require(NetworkDisplayMap.Map(Snapshot("校园网在线") with { AuthenticationFailure = failure }, Fresh).TechnicalDetail.Contains("失败分类 " + failure));
+            foreach (var state in Enum.GetNames<AuthenticationState>())
+                Require(NetworkDisplayMap.Map(Snapshot("校园网在线") with { AuthenticationPersistentState = state }, Fresh).TechnicalDetail.Contains("认证持久状态 " + state));
+            return Task.CompletedTask;
+        }),
         ("展示映射：服务状态字符串全部有映射且未知状态不会显示为在线", () =>
         {
             foreach (var state in NetworkDisplayMap.KnownStates)

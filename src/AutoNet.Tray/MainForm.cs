@@ -23,12 +23,17 @@ internal sealed class MainForm : Form
     private readonly Button unblock = Ui.Button("解除认证暂停…");
     private string? currentIconKey;
     private NetworkAdditional? currentAdditional;
+    private bool? recoveryTarget;
+    private readonly Action<string> requestRecoveryChange;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal bool AllowExit { get; set; }
 
-    public MainForm()
+    public MainForm() : this(Program.Elevate) { }
+
+    internal MainForm(Action<string> requestRecoveryChange)
     {
+        this.requestRecoveryChange = requestRecoveryChange;
         Text = "AutoNet · 校园网连接守护";
         Font = Theme.Font(10);
         Icon = NetworkIcon.Create();
@@ -216,7 +221,9 @@ internal sealed class MainForm : Form
         RenderQuota(status, fresh);
         RenderRecovery(status, fresh);
 
-        toggle.Text = fresh && status!.Enabled == false ? "恢复自动恢复" : "暂停自动恢复";
+        recoveryTarget = fresh ? !status!.Enabled : null;
+        toggle.Enabled = fresh;
+        toggle.Text = !fresh ? "自动恢复状态待确认" : status!.Enabled ? "暂停自动恢复" : "恢复自动恢复";
         unblock.Enabled = fresh && status!.CredentialsBlocked;
         unblock.Text = fresh && status!.AuthenticationFailure == nameof(PortalFailure.BindingRejected)
             ? "查看认证诊断并解除…" : "解除认证暂停…";
@@ -318,7 +325,25 @@ internal sealed class MainForm : Form
 
     public void EditSettings() => RunAction(() => Program.Elevate("--settings"));
     public void OpenLogs() => RunAction(() => { using var logs = new LogForm(); logs.ShowDialog(this); });
-    public void Toggle() => RunAction(() => Program.Elevate("--toggle"));
+    public void Toggle() => RunAction(() =>
+    {
+        // Preserve the intent of the label the user clicked, even if the status changes before UAC.
+        var target = recoveryTarget;
+        if (target is null || RefreshStatus() is null) return;
+        requestRecoveryChange(target.Value ? "--enable-recovery" : "--disable-recovery");
+    });
+
+    internal ToolStripMenuItem CreateRecoveryMenuItem()
+    {
+        var item = new ToolStripMenuItem();
+        void Sync(object? sender, EventArgs e) { item.Text = toggle.Text; item.Enabled = toggle.Enabled; }
+        Sync(null, EventArgs.Empty);
+        toggle.TextChanged += Sync;
+        toggle.EnabledChanged += Sync;
+        item.Click += (_, _) => Toggle();
+        item.Disposed += (_, _) => { toggle.TextChanged -= Sync; toggle.EnabledChanged -= Sync; };
+        return item;
+    }
     public void UnblockAuthentication() => RunAction(() => Program.Elevate("--unblock-auth"));
     private void InstallService() => RunAction(() =>
     {

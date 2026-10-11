@@ -20,11 +20,10 @@ internal static class Program
                 if (!Directory.Exists(Storage.Private)) { MessageBox.Show("请先安装后台服务，然后设置认证信息。", "AutoNet"); return; }
                 Application.Run(new SettingsForm()); return;
             }
-            if (args.Contains("--toggle"))
+            if (RecoveryTarget(args) is { } enabled)
             {
-                if (!IsAdministrator) { Elevate("--toggle"); return; }
-                var settings = Storage.LoadSettings() ?? throw new InvalidOperationException("请先保存校园网设置。");
-                Storage.SaveSettings(settings with { Enabled = !settings.Enabled }); return;
+                if (!IsAdministrator) { Elevate(enabled ? "--enable-recovery" : "--disable-recovery"); return; }
+                SetRecoveryEnabled(enabled, Storage.LoadSettings, Storage.SaveSettings); return;
             }
             if (args.Contains("--unblock-auth"))
             {
@@ -71,6 +70,22 @@ internal static class Program
     }
 
     public static bool IsAdministrator => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
+
+    internal static bool? RecoveryTarget(string[] args)
+    {
+        var enable = args.Contains("--enable-recovery");
+        var disable = args.Contains("--disable-recovery");
+        if (args.Contains("--toggle") || (enable && disable))
+            throw new ArgumentException("请使用明确的开启或关闭自动恢复命令。");
+        return enable ? true : disable ? false : null;
+    }
+
+    internal static void SetRecoveryEnabled(bool enabled, Func<Settings?> readSettings, Action<Settings> saveSettings)
+    {
+        var settings = readSettings() ?? throw new InvalidOperationException("请先保存校园网设置。");
+        saveSettings(settings with { Enabled = enabled });
+    }
+
     public static void Elevate(string action) => Process.Start(new ProcessStartInfo(Environment.ProcessPath!, action) { UseShellExecute = true, Verb = "runas" });
     public static void OpenFolder(string path) { if (Directory.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
 }

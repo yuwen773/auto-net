@@ -9,6 +9,128 @@ internal static class TrayRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("NEW-01：主窗口已暂停、过期和缺失状态的恢复操作语义一致", () => RunSta(() =>
+        {
+            using var fixture = new Fixture();
+            fixture.WriteStatus(Online() with { Enabled = false });
+            var commands = new List<string>();
+            using var form = new MainForm(commands.Add) { AllowExit = true };
+            var action = Field<Button>(form, "toggle");
+            Require(action.Enabled && action.Text == "恢复自动恢复");
+            fixture.WriteStatus(Online() with { Enabled = false, UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1) });
+            form.RefreshStatus();
+            Require(!action.Enabled && action.Text == "自动恢复状态待确认", "过期状态仍显示可点击的暂停按钮");
+            action.PerformClick();
+            form.Toggle();
+            File.Delete(fixture.StatusPath);
+            form.RefreshStatus();
+            Require(!action.Enabled && action.Text == "自动恢复状态待确认", "缺失状态仍允许改变自动恢复");
+            action.PerformClick();
+            form.Toggle();
+            foreach (var snapshot in new[] { Online() with { UpdatedAt = DateTimeOffset.UtcNow.AddSeconds(30) }, Online() with { Tunnel = null! } })
+            {
+                fixture.WriteStatus(snapshot);
+                form.RefreshStatus();
+                action.PerformClick();
+                form.Toggle();
+                Require(!action.Enabled && action.Text == "自动恢复状态待确认");
+            }
+            var missingEnabled = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Online()))!.AsObject();
+            missingEnabled.Remove("Enabled");
+            File.WriteAllText(fixture.StatusPath, missingEnabled.ToJsonString());
+            form.RefreshStatus();
+            Require(!action.Enabled, "没有明确 Enabled 字段时不得猜测当前恢复设置");
+            Require(commands.Count == 0, "不可信状态不应产生任何设置命令");
+            Capture(form, "recovery-action-unconfirmed.png");
+        })),
+        ("NEW-01：托盘入口同步已暂停、过期和缺失状态且禁止绕过", () => RunSta(() =>
+        {
+            using var fixture = new Fixture();
+            fixture.WriteStatus(Online() with { Enabled = false });
+            var commands = new List<string>();
+            using var form = new MainForm(commands.Add);
+            using var context = new TrayContext(true, form);
+            try
+            {
+                var menu = Field<NotifyIcon>(context, "tray").ContextMenuStrip!;
+                var action = (ToolStripMenuItem)menu.Items[2];
+                Require(action.Enabled && action.Text == "恢复自动恢复");
+                fixture.WriteStatus(Online() with { Enabled = false, UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1) });
+                // Opening the actual tray menu refreshes trust before an operation becomes selectable.
+                Method(menu, "OnOpening").Invoke(menu, [new System.ComponentModel.CancelEventArgs()]);
+                Require(!action.Enabled && action.Text == "自动恢复状态待确认", "过期状态的托盘入口未禁用");
+                action.PerformClick();
+                File.Delete(fixture.StatusPath);
+                Method(menu, "OnOpening").Invoke(menu, [new System.ComponentModel.CancelEventArgs()]);
+                Require(!action.Enabled && action.Text == "自动恢复状态待确认", "托盘入口仍可绕过主窗口的不可信状态保护");
+                action.PerformClick();
+                Require(commands.Count == 0);
+            }
+            finally { context.ExitThread(); }
+        })),
+        ("NEW-01：主窗口与托盘发送明确意图且点击时重新验证快照", () => RunSta(() =>
+        {
+            using var fixture = new Fixture();
+            fixture.WriteStatus(Online());
+            var commands = new List<string>();
+            var settings = new Settings { Enabled = false, WifiProfile = "虚构配置" };
+            using var form = new MainForm(command =>
+            {
+                commands.Add(command);
+                AutoNet.Tray.Program.SetRecoveryEnabled(AutoNet.Tray.Program.RecoveryTarget([command])!.Value,
+                    () => settings, value => settings = value);
+            });
+            ShowForQa(form);
+            using var context = new TrayContext(true, form);
+            try
+            {
+                var button = Field<Button>(form, "toggle");
+                var menu = (ToolStripMenuItem)Field<NotifyIcon>(context, "tray").ContextMenuStrip!.Items[2];
+                Require(button.Text == "暂停自动恢复" && menu.Text == button.Text);
+                // The user saw "pause", but the latest snapshot and configuration have already paused.
+                fixture.WriteStatus(Online() with { Enabled = false });
+                button.PerformClick();
+                Require(commands.SequenceEqual(["--disable-recovery"]) && !settings.Enabled, "暂停操作反向开启了恢复");
+                Require(menu.Enabled && menu.Text == "恢复自动恢复");
+                // A deliberate resume remains explicit and idempotent even if another actor enabled it first.
+                settings = settings with { Enabled = true };
+                menu.PerformClick();
+                Require(commands[^1] == "--enable-recovery" && settings.Enabled);
+                fixture.WriteStatus(Online());
+                form.RefreshStatus();
+                fixture.WriteStatus(Online() with { UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1) });
+                button.PerformClick();
+                Require(commands.Count == 2 && !button.Enabled && !menu.Enabled, "点击时快照过期仍执行了命令");
+                fixture.WriteStatus(Online());
+                form.RefreshStatus();
+                File.Delete(fixture.StatusPath);
+                menu.PerformClick();
+                Require(commands.Count == 2 && !button.Enabled && !menu.Enabled, "托盘点击时快照缺失仍执行了命令");
+            }
+            finally { context.ExitThread(); }
+        })),
+        ("NEW-01：管理员执行明确状态命令不会反转配置且保留最新其他设置", () => RunSta(() =>
+        {
+            Require(AutoNet.Tray.Program.RecoveryTarget(["--enable-recovery"]) == true);
+            Require(AutoNet.Tray.Program.RecoveryTarget(["--disable-recovery"]) == false);
+            Require(AutoNet.Tray.Program.RecoveryTarget(["--tray"]) is null);
+            foreach (var args in new[] { new[] { "--toggle" }, new[] { "--enable-recovery", "--disable-recovery" } })
+            {
+                try { AutoNet.Tray.Program.RecoveryTarget(args); throw new Exception("危险或矛盾命令未被拒绝"); }
+                catch (ArgumentException) { }
+            }
+            foreach (var initial in new[] { false, true })
+                foreach (var target in new[] { false, true })
+                {
+                    var current = new Settings { Enabled = initial, WifiProfile = "授权期间更新的配置", AllowActiveDisconnect = true };
+                    var saved = current;
+                    for (var repeat = 0; repeat < 2; repeat++)
+                    {
+                        AutoNet.Tray.Program.SetRecoveryEnabled(target, () => saved, value => saved = value);
+                        Require(saved.Enabled == target && saved == current with { Enabled = target });
+                    }
+                }
+        })),
         ("托盘加固：五万次固定标志刷新复用控件且资源稳定", () => RunSta(() =>
         {
             using var fixture = new Fixture();

@@ -10,9 +10,11 @@ public static class StatusSnapshotReader
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind == JsonValueKind.Null) return null;
         var status = document.RootElement.Deserialize<StatusSnapshot>(Storage.Json);
-        // The model's producer-side default is "now"; an absent external timestamp is not evidence.
-        if (status is not null && !document.RootElement.EnumerateObject()
-            .Any(p => p.Name.Equals(nameof(StatusSnapshot.UpdatedAt), StringComparison.OrdinalIgnoreCase)))
+        // Producer-side defaults are not evidence: external timestamps and recovery settings must be explicit.
+        if (status is not null && (!document.RootElement.EnumerateObject()
+            .Any(p => p.Name.Equals(nameof(StatusSnapshot.UpdatedAt), StringComparison.OrdinalIgnoreCase))
+            || !document.RootElement.EnumerateObject()
+            .Any(p => p.Name.Equals(nameof(StatusSnapshot.Enabled), StringComparison.OrdinalIgnoreCase))))
             status = status with { UpdatedAt = default };
         return IsValid(status) ? status : new StatusSnapshot { UpdatedAt = default, State = "状态不可确认" };
     }
