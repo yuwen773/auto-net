@@ -16,8 +16,15 @@ public static class LogSummary
     private static readonly HashSet<string> AllowedActions = new(StringComparer.Ordinal)
     {
         "重连校园 Wi-Fi", "连接校园 Wi-Fi", "恢复联网", "观测到联网恢复", "认证结果", "认证已接受",
-        "检测异常", "状态写入异常", "日志写入异常", "设置已更改", "服务启动", "服务停止", "安全状态已恢复"
+        "检测异常", "状态写入异常", "日志写入异常", "设置已更改", "服务启动", "服务停止", "安全状态已恢复",
+        "服务观测开始", "服务观测停止", "发现网络异常", "外网恢复验证通过", "继续追踪历史故障", "故障观测暂停",
+        "恢复决策", "恢复动作开始", "恢复动作结束", "认证步骤", "Wi-Fi 请求结果", "安全状态写入开始",
+        "安全状态写入完成", "操作异常", "操作恢复正常", "检测轮次中断", "日志证据缺口",
+        "认证提交获准", "认证提交被阻止", "断线前重新核验", "诊断事件", "开始恢复动作", "辅助检测失败",
+        "取消主动断线", "主动断线请求失败", "重新认证"
     };
+
+    static LogSummary() => AllowedActions.UnionWith(NetworkDisplayMap.KnownStates);
 
     private static readonly HashSet<string> AllowedWifi = new(StringComparer.Ordinal)
     { "已连接", "已关联，等待 IPv4", "正在连接", "网卡未就绪", "未连接", "其他配置", "待检测" };

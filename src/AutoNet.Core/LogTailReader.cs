@@ -18,25 +18,28 @@ public static class LogTailReader
     private const int MaxWindow = 4 * 1024 * 1024;
 
     /// <summary>Newest first.</summary>
-    public static IReadOnlyList<ActivityLog> Read(string path, int maxRecords = DefaultMaxRecords)
+    public static IReadOnlyList<ActivityLog> Read(string path, int maxRecords = DefaultMaxRecords, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var length = file.Length;
         var window = Math.Min(InitialWindow, length);
         IReadOnlyList<ActivityLog> records = [];
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var start = length - window;
             file.Seek(start, SeekOrigin.Begin);
             var buffer = new byte[length - start];
             var read = 0;
             while (read < buffer.Length)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var chunk = file.Read(buffer, read, buffer.Length - read);
                 if (chunk == 0) break;
                 read += chunk;
             }
-            records = Parse(Split(buffer.AsSpan(0, read), start == 0, endsWithNewline: read > 0 && buffer[read - 1] == (byte)'\n'));
+            records = Parse(Split(buffer.AsSpan(0, read), start == 0, endsWithNewline: read > 0 && buffer[read - 1] == (byte)'\n'), cancellationToken);
             if (records.Count >= maxRecords || window >= Math.Min(MaxWindow, length)) break;
             window = Math.Min(MaxWindow, window * 2);
         }
@@ -81,11 +84,12 @@ public static class LogTailReader
     }
 
     /// <summary>Deserialises whole lines, skipping any record that cannot be read rather than failing the batch.</summary>
-    public static IReadOnlyList<ActivityLog> Parse(IEnumerable<string> lines)
+    public static IReadOnlyList<ActivityLog> Parse(IEnumerable<string> lines, CancellationToken cancellationToken = default)
     {
         var records = new List<ActivityLog>();
         foreach (var line in lines)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 var entry = JsonSerializer.Deserialize<ActivityLog>(line, ActivityLog.Json);

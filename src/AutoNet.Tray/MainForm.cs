@@ -22,6 +22,7 @@ internal sealed class MainForm : Form
     private readonly Button toggle = Ui.Button("暂停自动恢复");
     private readonly Button unblock = Ui.Button("解除认证暂停…");
     private string? currentIconKey;
+    private NetworkAdditional? currentAdditional;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal bool AllowExit { get; set; }
@@ -184,11 +185,11 @@ internal sealed class MainForm : Form
     {
         StatusSnapshot? status = null;
         var statusPath = Environment.GetEnvironmentVariable("AUTONET_QA_STATUS_PATH") ?? Storage.StatusPath;
-        try { if (File.Exists(statusPath)) status = JsonSerializer.Deserialize<StatusSnapshot>(Storage.ReadShared(statusPath), Storage.Json); }
+        try { if (File.Exists(statusPath)) status = StatusSnapshotReader.Parse(Storage.ReadShared(statusPath)); }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
 
         var age = status is null ? (TimeSpan?)null : DateTimeOffset.UtcNow - status.UpdatedAt;
-        var fresh = age is { } span && span >= TimeSpan.FromSeconds(-5) && span < NetworkDisplayMap.FreshnessWindow;
+        var fresh = StatusSnapshotReader.IsValid(status) && NetworkDisplayMap.IsFresh(age);
         var display = NetworkDisplayMap.Map(status, age);
 
         stateTitle.Text = display.Title;
@@ -209,12 +210,13 @@ internal sealed class MainForm : Form
         foreach (var (name, value) in values) value.AccessibleName = name + "：" + value.Text;
 
         serviceStatus.Text = status is null ? "后台服务未就绪"
+            : !StatusSnapshotReader.IsValid(status) ? "后台状态不可确认"
             : fresh ? $"后台服务运行中 · 最近检测 {status.UpdatedAt.ToLocalTime():HH:mm:ss}"
             : $"后台状态已过期 · 最后更新 {status.UpdatedAt.ToLocalTime():HH:mm:ss}";
         RenderQuota(status, fresh);
         RenderRecovery(status, fresh);
 
-        toggle.Text = status?.Enabled == false ? "恢复自动恢复" : "暂停自动恢复";
+        toggle.Text = fresh && status!.Enabled == false ? "恢复自动恢复" : "暂停自动恢复";
         unblock.Enabled = fresh && status!.CredentialsBlocked;
         unblock.Text = fresh && status!.AuthenticationFailure == nameof(PortalFailure.BindingRejected)
             ? "查看认证诊断并解除…" : "解除认证暂停…";
@@ -265,8 +267,13 @@ internal sealed class MainForm : Form
 
     private void RenderAdditional(NetworkDisplay display)
     {
+        var flags = display.Primary == NetworkPrimaryState.RecoveryPaused
+            ? display.Additional & ~NetworkAdditional.RecoveryPaused : display.Additional;
+        if (currentAdditional == flags) return;
+        currentAdditional = flags;
         additionalStrip.SuspendLayout();
-        additionalStrip.Controls.Clear();
+        // Clear only detaches controls. Dispose also releases the removed control tree's resources.
+        while (additionalStrip.Controls.Count > 0) additionalStrip.Controls[0].Dispose();
         var chips = new List<(string Text, Color Fore, Color Surface)>();
         if (display.Additional.HasFlag(NetworkAdditional.RecoveryPaused) && display.Primary != NetworkPrimaryState.RecoveryPaused)
             chips.Add(("自动恢复已暂停", Theme.Warning, Theme.WarningSurface));

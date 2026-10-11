@@ -67,6 +67,7 @@ internal static class Program
         }
         catch (System.ComponentModel.Win32Exception e) when (e.NativeErrorCode == 1223) { }
         catch (Exception e) { MessageBox.Show("操作未完成：" + e.GetType().Name + "\n请检查后台服务是否已安装。", "AutoNet", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        finally { Theme.ReleaseFonts(); }
     }
 
     public static bool IsAdministrator => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);

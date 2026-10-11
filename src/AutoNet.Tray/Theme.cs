@@ -50,8 +50,22 @@ internal static class Theme
     public const int SmallIconSize = 16;
     public const int CornerRadius = 8;
 
+    private static readonly Dictionary<(float Size, FontStyle Style), Font> fonts = [];
+
+    // All callers are on the UI thread. Controls borrow fonts until the application exits.
     public static Font Font(float size, FontStyle style = FontStyle.Regular)
-        => new(FontFamily, size, style, GraphicsUnit.Point);
+    {
+        var key = (size, style);
+        if (!fonts.TryGetValue(key, out var font))
+            fonts[key] = font = new Font(FontFamily, size, style, GraphicsUnit.Point);
+        return font;
+    }
+
+    public static void ReleaseFonts()
+    {
+        foreach (var font in fonts.Values) font.Dispose();
+        fonts.Clear();
+    }
 
     /// <summary>Semantic colour for a display state. Unknown and stale deliberately stay neutral.</summary>
     public static (Color Fore, Color Surface) Palette(Core.NetworkPrimaryState state) => state switch

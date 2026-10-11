@@ -30,21 +30,26 @@ internal sealed class LogForm : Form
     private int generation;
     private bool loading;
     private bool disposed;
+    private bool reloadRequested;
+    private bool reading;
+    private CancellationTokenSource? readCancellation;
+    private readonly Func<string, CancellationToken, IReadOnlyList<ActivityLog>> readEntries;
     /// <summary>The in-flight tail read, so the QA capture can wait for it instead of shooting an empty list.</summary>
     private Task pending = Task.CompletedTask;
 
     private static readonly (string Label, Func<ActivityLog, bool> Match)[] Filters =
     [
         ("全部事件", _ => true),
-        ("状态变化", e => e.Action.Contains("恢复") || e.Action.Contains("异常") || e.Action.Contains("启动") || e.Action.Contains("停止")),
-        ("恢复动作", e => e.Action.Contains("Wi-Fi")),
-        ("认证相关", e => e.Action.Contains("认证")
-            || (e.AuthenticationStage ?? nameof(PortalStage.Unknown)) != nameof(PortalStage.Unknown)
-            || (e.AuthenticationFailure ?? nameof(PortalFailure.None)) != nameof(PortalFailure.None))
+        ("状态变化", e => LogEventClassifier.Classify(e) == LogEventCategory.State),
+        ("恢复动作", e => LogEventClassifier.Classify(e) == LogEventCategory.Recovery),
+        ("认证相关", e => LogEventClassifier.Classify(e) == LogEventCategory.Authentication)
     ];
 
-    public LogForm()
+    public LogForm() : this((path, token) => LogTailReader.Read(path, cancellationToken: token)) { }
+
+    internal LogForm(Func<string, CancellationToken, IReadOnlyList<ActivityLog>> readEntries)
     {
+        this.readEntries = readEntries;
         Text = "AutoNet · 日志中心";
         Font = Theme.Font(10);
         Icon = NetworkIcon.Create();
@@ -129,14 +134,38 @@ internal sealed class LogForm : Form
     }
 
     /// <summary>
-    /// Last-write-wins. Each load takes a new generation; a read that loses the race returns without
-    /// touching any control, so switching dates quickly cannot leave a stale result on screen or stack up
-    /// unbounded background work. The read itself is a bounded tail read, never a whole-file load.
+    /// One active reader and one coalesced latest request. A new request cancels the current read,
+    /// but its replacement starts only after that read exits. Old generations never update controls.
     /// </summary>
-    private async void LoadEntries()
+    private void LoadEntries()
     {
         if (disposed) return;
-        var mine = ++generation;
+        generation++;
+        reloadRequested = true;
+        readCancellation?.Cancel();
+        if (!reading) pending = LoadLatestAsync();
+    }
+
+    private async Task LoadLatestAsync()
+    {
+        reading = true;
+        try
+        {
+            while (reloadRequested && !disposed)
+            {
+                reloadRequested = false;
+                var mine = generation;
+                using var cancellation = new CancellationTokenSource();
+                readCancellation = cancellation;
+                await LoadOnceAsync(mine, cancellation.Token);
+                readCancellation = null;
+            }
+        }
+        finally { reading = false; }
+    }
+
+    private async Task LoadOnceAsync(int mine, CancellationToken token)
+    {
         try
         {
             var directory = LogDirectory;
@@ -164,20 +193,20 @@ internal sealed class LogForm : Form
             loading = false;
             var path = Path.Combine(directory, files[date.SelectedIndex]);
 
-            list.Items.Clear();
+            loaded.Clear();
+            ApplyFilter();
             detail.Text = "正在读取…";
-            var read = Task.Run(() => LogTailReader.Read(path));
-            pending = read;
+            var read = Task.Run(() => readEntries(path, token), token);
             var records = await read;
             if (disposed || mine != generation) return;
             loaded.Clear();
             loaded.AddRange(records);
             ApplyFilter();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception e)
         {
-            // Deliberately broad. This is an async void handler, so anything not caught here reaches the
-            // WinForms message loop and takes the whole tray process down — and the likely triggers are
+            // Deliberately broad: an I/O or parsing failure must not escape to the message loop. Triggers are
             // not only I/O: a log path that vanished, a malformed date in the file name, or a decoding
             // edge case all surface here. Only the type name is shown; the message could carry a path.
             if (disposed || mine != generation) return;
@@ -280,6 +309,12 @@ internal sealed class LogForm : Form
     protected override void Dispose(bool disposing)
     {
         disposed = true;
+        if (disposing)
+        {
+            generation++;
+            reloadRequested = false;
+            readCancellation?.Cancel();
+        }
         base.Dispose(disposing);
     }
 

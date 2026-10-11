@@ -6,6 +6,66 @@ internal static class LogCentreRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("日志分类：全部结构化事件按代码筛选而不受动作与认证字段干扰", () =>
+        {
+            foreach (var (code, category) in Events())
+            {
+                var entry = new ActivityLog
+                {
+                    SchemaVersion = 2, EventCode = code, Action = "重连校园 Wi-Fi 认证恢复",
+                    AuthenticationStage = "Submission", AuthenticationFailure = "BindingRejected"
+                };
+                Require(LogEventClassifier.Classify(entry) == category, $"事件 {code} 分类错误");
+            }
+            Require(LogEventClassifier.Classify(new() { SchemaVersion = 2, EventCode = "FutureEvent", Action = "恢复联网" }) == LogEventCategory.Other);
+            Require(LogEventClassifier.Classify(new() { SchemaVersion = 2, Action = "恢复联网" }) == LogEventCategory.Other);
+            Require(LogEventClassifier.Classify(new() { EventCode = "DisconnectRecheck" }) == LogEventCategory.Recovery);
+            return Task.CompletedTask;
+        }),
+        ("日志分类：旧日志仅兼容受控动作且允许空值", () =>
+        {
+            foreach (var action in new[] { "重连校园 Wi-Fi", "连接校园 Wi-Fi" })
+                Require(LogEventClassifier.Classify(new() { Action = action }) == LogEventCategory.Recovery);
+            Require(LogEventClassifier.Classify(new() { Action = "认证结果" }) == LogEventCategory.Authentication);
+            Require(LogEventClassifier.Classify(new() { Action = "恢复联网" }) == LogEventCategory.State);
+            Require(LogEventClassifier.Classify(new() { Action = "认证状态未知" }) == LogEventCategory.State);
+            Require(LogEventClassifier.Classify(new() { Action = "未知恢复 Wi-Fi 认证" }) == LogEventCategory.Other);
+            Require(LogEventClassifier.Classify(new() { Action = null! }) == LogEventCategory.Other);
+            return Task.CompletedTask;
+        }),
+        ("脱敏摘要：全部新版受控动作及状态变化保留语义", () =>
+        {
+            // Derive the emitted labels from the journal too, so future display-action changes cannot drift silently.
+            var method = typeof(AutoNet.Service.MonitorWorker).Assembly.GetType("AutoNet.Service.RecoveryJournal")!
+                .GetMethod("DisplayAction", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            foreach (var (code, _) in Events())
+            {
+                var action = (string)method.Invoke(null, [code])!;
+                var summary = LogSummary.Format([new() { SchemaVersion = 2, EventCode = code, Action = action, Detail = "fixture-secret" }]);
+                Require(summary.Contains(action) && summary.Contains("事件 " + code), $"摘要折叠了 {code}/{action}");
+                Require(!summary.Contains("其他事件") && !summary.Contains("fixture-secret"));
+            }
+            foreach (var action in NetworkDisplayMap.KnownStates.Concat(["开始恢复动作", "辅助检测失败"]))
+                Require(LogSummary.Format([new() { Action = action }]).Contains(action), $"遗漏受控动作 {action}");
+            return Task.CompletedTask;
+        }),
+        ("日志尾部读取：取消可在打开文件前及解析途中停止", () =>
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            try { LogTailReader.Read("不存在的文件", cancellationToken: cancellation.Token); throw new Exception("未取消读取"); }
+            catch (OperationCanceledException) { }
+            using var duringParse = new CancellationTokenSource();
+            IEnumerable<string> Lines()
+            {
+                yield return "{\"action\":\"恢复联网\"}";
+                duringParse.Cancel();
+                yield return "{\"action\":\"恢复联网\"}";
+            }
+            try { LogTailReader.Parse(Lines(), duringParse.Token); throw new Exception("未取消解析"); }
+            catch (OperationCanceledException) { }
+            return Task.CompletedTask;
+        }),
         ("日志尾部读取：按记录而非按行截断且最新在前", () =>
         {
             var entries = Enumerable.Range(0, 500)
@@ -134,6 +194,21 @@ internal static class LogCentreRegression
             Require(summary.Contains("恢复联网"), "受控动作仍应输出");
             return Task.CompletedTask;
         })
+    ];
+
+    internal static (string Code, LogEventCategory Category)[] Events() =>
+    [
+        ("SessionStarted", LogEventCategory.State), ("SessionStopped", LogEventCategory.State),
+        ("IncidentStarted", LogEventCategory.State), ("IncidentRecovered", LogEventCategory.State),
+        ("IncidentResumed", LogEventCategory.State), ("IncidentSuspended", LogEventCategory.State),
+        ("RecoveryDecision", LogEventCategory.Recovery), ("RecoveryActionStarted", LogEventCategory.Recovery),
+        ("RecoveryActionCompleted", LogEventCategory.Recovery), ("PortalStep", LogEventCategory.Authentication),
+        ("WifiRequestResult", LogEventCategory.Recovery), ("SafetyStateWriteStarted", LogEventCategory.Recovery),
+        ("SafetyStateWritten", LogEventCategory.Recovery), ("OperationFailed", LogEventCategory.State),
+        ("OperationRecovered", LogEventCategory.State), ("CycleInterrupted", LogEventCategory.State),
+        ("LoggingGap", LogEventCategory.State), ("StatusChanged", LogEventCategory.State),
+        ("SubmissionAuthorized", LogEventCategory.Authentication), ("SubmissionNotAuthorized", LogEventCategory.Authentication),
+        ("DisconnectRecheck", LogEventCategory.Recovery)
     ];
 
     private static string WriteTemp(ActivityLog[] entries)

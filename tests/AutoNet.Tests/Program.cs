@@ -132,6 +132,7 @@ tests = tests.Concat(AuthenticationPersistenceRegression.Cases).ToArray();
 tests = tests.Concat(RecoveryPersistenceRegression.Cases).ToArray();
 tests = tests.Concat(DisplayRegression.Cases).ToArray();
 tests = tests.Concat(LogCentreRegression.Cases).ToArray();
+tests = tests.Concat(TrayRegression.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

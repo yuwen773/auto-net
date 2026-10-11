@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <PropertyGroup><OutputType>Exe</OutputType><UseWindowsForms>true</UseWindowsForms></PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Core/AutoNet.Core.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Service/AutoNet.Service.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/AutoNet.Tray/AutoNet.Tray.csproj" /></ItemGroup>
 </Project>

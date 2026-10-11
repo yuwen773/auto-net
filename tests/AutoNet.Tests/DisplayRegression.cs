@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using AutoNet.Core;
 
 internal static class DisplayRegression
@@ -53,7 +55,10 @@ internal static class DisplayRegression
         ("展示映射：在线与认证暂停各自独立呈现", () =>
         {
             // Online but with authentication suspended must stay Online; suspension is a separate flag.
-            var display = NetworkDisplayMap.Map(Snapshot("校园网在线") with { Direct = "外网可达", CredentialsBlocked = true }, Fresh);
+            var display = NetworkDisplayMap.Map(Snapshot("校园网在线") with
+            {
+                Direct = "外网可达", CredentialsBlocked = true, AuthenticationFailure = "BindingRejected"
+            }, Fresh);
             Require(display.Primary == NetworkPrimaryState.Online, "网络在线时主状态必须是在线");
             Require(display.Additional.HasFlag(NetworkAdditional.AuthenticationSuspended), "认证暂停必须独立呈现");
             Require(display.IsHealthy, "网络在线就是在线，不能因为认证暂停而改写主状态");
@@ -63,6 +68,62 @@ internal static class DisplayRegression
             // Paused recovery while offline is the primary state, not merely a flag.
             var paused = NetworkDisplayMap.Map(Snapshot("认证状态未知") with { Enabled = false }, Fresh);
             Require(paused.Primary == NetworkPrimaryState.RecoveryPaused, "离线且暂停时主状态应为已暂停恢复");
+            return Task.CompletedTask;
+        }),
+        ("展示映射：在线状态必须有直连可达事实且离线绑定拒绝仍为故障", () =>
+        {
+            Require(!NetworkDisplayMap.Map(Snapshot("校园网在线") with { Direct = "待检测" }, Fresh).IsHealthy);
+            var offline = NetworkDisplayMap.Map(Snapshot("需要处理认证") with
+            {
+                CredentialsBlocked = true, AuthenticationFailure = "BindingRejected"
+            }, Fresh);
+            Require(offline.Primary == NetworkPrimaryState.BindingRejected);
+            Require(offline.Additional.HasFlag(NetworkAdditional.AuthenticationSuspended));
+            return Task.CompletedTask;
+        }),
+        ("展示映射：新鲜度统一覆盖未来偏差、边界、过期与缺失", () =>
+        {
+            foreach (var (age, expected) in new (TimeSpan?, bool)[]
+            {
+                (null, false), (TimeSpan.FromSeconds(-30), false), (TimeSpan.FromMilliseconds(-5001), false),
+                (TimeSpan.FromSeconds(-5), true), (TimeSpan.Zero, true), (TimeSpan.FromMilliseconds(14999), true),
+                (TimeSpan.FromSeconds(15), false), (TimeSpan.FromMinutes(1), false)
+            })
+            {
+                Require(NetworkDisplayMap.IsFresh(age) == expected);
+                Require(NetworkDisplayMap.Map(Snapshot("校园网在线"), age).IsHealthy == expected);
+            }
+            return Task.CompletedTask;
+        }),
+        ("展示映射：合法 JSON 的空字段与缺失时间戳一律安全降级", () =>
+        {
+            var json = JsonSerializer.Serialize(Snapshot("校园网在线"));
+            foreach (var field in new[] { "State", "Wifi", "Direct", "Portal", "Tunnel", "Uu",
+                "AuthenticationStage", "AuthenticationFailure", "AuthenticationPersistentState" })
+                foreach (var value in new string?[] { null, "", "  " })
+                {
+                    var node = JsonNode.Parse(json)!;
+                    node[field] = value;
+                    var status = StatusSnapshotReader.Parse(node.ToJsonString());
+                    Require(!StatusSnapshotReader.IsValid(status), $"不应信任空字段 {field}");
+                    var display = NetworkDisplayMap.Map(status, Fresh);
+                    Require(!display.IsHealthy && display.Title == "状态不可确认");
+                }
+            var missingTime = JsonNode.Parse(json)!.AsObject();
+            missingTime.Remove("UpdatedAt");
+            Require(!NetworkDisplayMap.Map(StatusSnapshotReader.Parse(missingTime.ToJsonString()), Fresh).IsHealthy);
+            Require(!NetworkDisplayMap.Map(Snapshot("校园网在线") with { UpdatedAt = default }, Fresh).IsHealthy);
+            Require(!NetworkDisplayMap.Map(Snapshot("校园网在线") with { Tunnel = null! }, Fresh).IsHealthy);
+            Require(StatusSnapshotReader.Parse("null") is null);
+            return Task.CompletedTask;
+        }),
+        ("展示映射：未知 JSON 字段兼容但未知主状态不显示健康", () =>
+        {
+            var node = JsonNode.Parse(JsonSerializer.Serialize(Snapshot("校园网在线")))!;
+            node["futureField"] = "未来字段";
+            Require(NetworkDisplayMap.Map(StatusSnapshotReader.Parse(node.ToJsonString()), Fresh).IsHealthy);
+            node["State"] = "未来状态";
+            Require(!NetworkDisplayMap.Map(StatusSnapshotReader.Parse(node.ToJsonString()), Fresh).IsHealthy);
             return Task.CompletedTask;
         }),
         ("展示映射：需要认证时文案跟随凭据阻断标记而非状态字符串", () =>
@@ -166,7 +227,7 @@ internal static class DisplayRegression
     private static StatusSnapshot Snapshot(string state) => new()
     {
         UpdatedAt = DateTimeOffset.UtcNow, Enabled = true, State = state,
-        Wifi = "已连接", Direct = "外网不可达或未知", Portal = "未知，不自动认证",
+        Wifi = "已连接", Direct = state == "校园网在线" ? "外网可达" : "外网不可达或未知", Portal = "未知，不自动认证",
         Tunnel = "系统路径可达（路由样本推断为 Wi-Fi，出口未核验）", Uu = "UU 服务运行；在线状态待核验"
     };
 

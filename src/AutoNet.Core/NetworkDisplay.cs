@@ -66,6 +66,9 @@ public static class NetworkDisplayMap
     /// <summary>Matches the tray's existing freshness window; a status older than this is reported as stale.</summary>
     public static readonly TimeSpan FreshnessWindow = TimeSpan.FromSeconds(15);
 
+    public static bool IsFresh(TimeSpan? age) => age is { } span
+        && span >= TimeSpan.FromSeconds(-5) && span < FreshnessWindow;
+
     /// <summary>Service status strings this mapper understands. A new one must be added deliberately.</summary>
     public static IReadOnlyCollection<string> KnownStates { get; } =
     [
@@ -78,7 +81,10 @@ public static class NetworkDisplayMap
     {
         if (status is null) return new(NetworkPrimaryState.Unrecognized, NetworkAdditional.None,
             "后台服务未就绪", "还没有收到后台服务的状态，暂时无法判断网络情况。", "请确认 AutoNet 服务已安装并正在运行。", "未读取到 status.json。");
-        if (age is null || age >= FreshnessWindow)
+        if (!StatusSnapshotReader.IsValid(status))
+            return new(NetworkPrimaryState.Unrecognized, NetworkAdditional.None,
+                "状态不可确认", "后台状态缺少有效字段，暂时无法判断网络情况。", "请等待下一次检测，若持续出现请查看日志。", "状态字段或更新时间无效。");
+        if (!IsFresh(age))
             return Build(NetworkPrimaryState.Unrecognized, status,
                 "后台状态已过期", "后台服务已有一段时间没有更新，这里的信息可能已经过时。", "请确认 AutoNet 服务正在运行，并查看日志了解原因。",
                 $"状态已 {DescribeAge(age)} 未更新。");
@@ -91,12 +97,13 @@ public static class NetworkDisplayMap
 
     private static NetworkPrimaryState Primary(StatusSnapshot s, NetworkAdditional additional)
     {
-        // Binding rejection is checked before the generic blocked state: it needs different user action.
+        // A retained authentication block must not overwrite current connectivity evidence.
+        if (s.State == "校园网在线" && s.Direct == "外网可达") return NetworkPrimaryState.Online;
         if (s.AuthenticationFailure == nameof(PortalFailure.BindingRejected)) return NetworkPrimaryState.BindingRejected;
         if (!s.Enabled && s.Direct != "外网可达") return NetworkPrimaryState.RecoveryPaused;
         return s.State switch
         {
-            "校园网在线" => NetworkPrimaryState.Online,
+            "校园网在线" => NetworkPrimaryState.Unrecognized,
             "正在重连校园 Wi-Fi" => NetworkPrimaryState.Reconnecting,
             "需要处理认证" => NetworkPrimaryState.NeedsAuthentication,
             "已认证但外网不可达" => additional.HasFlag(NetworkAdditional.DisconnectQuotaExhausted)
