@@ -8,12 +8,15 @@ public interface IMonitorEnvironment
 {
     Settings? LoadSettings();
     Credentials? LoadCredentials();
-    string CredentialFingerprint();
-    bool AuthenticationBlocked(string fingerprint);
-    void BlockAuthentication(string fingerprint);
+    AuthenticationBlock? LoadAuthenticationBlock();
+    void BlockAuthentication(AuthenticationBlock block);
+    bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next);
+    DisconnectBudget LoadDisconnectBudget(Settings settings);
+    void SaveDisconnectBudget(Settings settings, DisconnectBudget budget);
+    bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next);
     WifiLink ReadWifi(Settings settings);
-    void ConnectWifi(Settings settings);
-    void DisconnectWifi(Settings settings);
+    WifiRequestResult ConnectWifi(Settings settings);
+    WifiRequestResult DisconnectWifi(Settings settings);
     HttpClient CreateDirectClient(WifiLink link);
     Task<(string SystemPath, string Uu)> CheckAuxiliaryAsync(Settings settings, WifiLink link, CancellationToken ct);
     void UpdatePower(bool enabled);
@@ -24,14 +27,18 @@ public interface IMonitorEnvironment
 internal sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
 {
     private readonly PowerGuard power = new();
+    private readonly SafetyStateStore safety = new(Storage.Private);
     public Settings? LoadSettings() => Storage.LoadSettings();
     public Credentials? LoadCredentials() => Storage.LoadCredentials();
-    public string CredentialFingerprint() => Storage.CredentialFingerprint();
-    public bool AuthenticationBlocked(string fingerprint) => File.Exists(Storage.AuthBlockPath) && Storage.ReadShared(Storage.AuthBlockPath).Trim() == fingerprint;
-    public void BlockAuthentication(string fingerprint) => Storage.AtomicWrite(Storage.AuthBlockPath, fingerprint);
+    public AuthenticationBlock? LoadAuthenticationBlock() => safety.LoadAuthenticationBlock();
+    public void BlockAuthentication(AuthenticationBlock block) => safety.BlockAuthentication(block);
+    public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) => safety.TryTransitionAuthentication(expected, next);
+    public DisconnectBudget LoadDisconnectBudget(Settings settings) => safety.LoadDisconnectBudget(settings);
+    public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget) => safety.SaveDisconnectBudget(settings, budget);
+    public bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next) => safety.TryTransitionDisconnectBudget(settings, expected, next);
     public WifiLink ReadWifi(Settings settings) => Wifi.Read(settings);
-    public void ConnectWifi(Settings settings) => Wifi.Connect(settings);
-    public void DisconnectWifi(Settings settings) => Wifi.Disconnect(settings);
+    public WifiRequestResult ConnectWifi(Settings settings) => Wifi.Connect(settings);
+    public WifiRequestResult DisconnectWifi(Settings settings) => Wifi.Disconnect(settings);
     public HttpClient CreateDirectClient(WifiLink link) => DirectNetwork.CreateClient(link);
     public void UpdatePower(bool enabled) => power.Update(enabled);
     public void WriteStatus(StatusSnapshot status) => Storage.AtomicWrite(Storage.StatusPath, JsonSerializer.Serialize(status, Storage.Json));

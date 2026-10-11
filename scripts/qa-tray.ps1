@@ -10,9 +10,11 @@ $tray = Join-Path $repo 'src/AutoNet.Tray/bin/Release/net10.0-windows/AutoNet.Tr
 if (-not (Test-Path -LiteralPath $tray)) { throw 'Build the tray project first.' }
 $cases = @{
     online = @{ State = '校园网在线'; Direct = '外网可达'; Portal = '未查询（外网检查已通过）'; Detail = '指定 Wi-Fi 绑定的 HTTPS 内容检查通过；物理出口需抓包核验。' }
-    unknown = @{ State = '认证状态未知'; Portal = '未知，不自动认证'; NextAttempt = [DateTimeOffset]::UtcNow.AddSeconds(10).ToString('o'); Detail = '两个外网检查均未通过，认证状态未知；持续离线 10 秒后重连校园 Wi-Fi，确认需认证后再登录。认证状态查询：网络请求失败 [Status/Transport]；未发送凭据' }
-    upstream = @{ State = '已认证但外网不可达'; Portal = '已认证'; Detail = '校园网显示已认证，但两个外网检查均未通过；持续离线 10 秒后重连校园 Wi-Fi，再检查认证。' }
-    reconnect = @{ State = '正在重连校园 Wi-Fi'; Portal = '未知，不自动认证'; NextAttempt = [DateTimeOffset]::UtcNow.AddSeconds(60).ToString('o'); Detail = '持续离线，已请求断开选定校园 Wi-Fi；等待断开后连接原配置，再检查是否需要认证。' }
+    unknown = @{ State = '认证状态未知'; Portal = '未知，不自动认证'; NextAttempt = [DateTimeOffset]::UtcNow.AddSeconds(30).ToString('o'); Detail = '两个外网检查均未通过，认证状态未知；连续异常至少 30 秒且至少 3 轮失败后允许重连，确认需认证后再登录。认证状态查询：网络请求失败 [Status/Transport]；未发送凭据' }
+    upstream = @{ State = '已认证但外网不可达'; Portal = '已认证'; Detail = '校园网显示已认证，但两个外网检查均未通过；连续异常至少 30 秒且至少 3 轮失败后允许重连校园 Wi-Fi。' }
+    reconnect = @{ State = '正在重连校园 Wi-Fi'; Portal = '未知，不自动认证'; DisconnectAttempts = 1; NextAttempt = [DateTimeOffset]::UtcNow.AddSeconds(120).ToString('o'); Detail = '持续离线，已请求断开选定校园 Wi-Fi；等待断开后连接原配置，再检查是否需要认证。' }
+    exhausted = @{ State = '认证状态未知'; Portal = '未知，不自动认证'; DisconnectAttempts = 3; Detail = '本次故障的 3 次主动断线额度已用尽，停止主动断线；继续探测与允许的认证，连续在线 60 秒后恢复额度。' }
+    binding = @{ State = '需要处理认证'; CredentialsBlocked = $true; Portal = '需认证'; Detail = '网关或设备绑定被拒绝，认证及主动断线已暂停；请核实 VLAN、MAC/AC 参数后使用“解除认证暂停”，不要仅修改密码。' }
     proxy = @{ State = '校园网在线'; Direct = '外网可达'; Tunnel = '本机代理不可达'; Detail = '校园网检测通过；代理异常不会触发校园 Wi-Fi 重连。' }
     blocked = @{ State = '需要处理认证'; CredentialsBlocked = $true; Portal = '需认证'; Detail = '自动认证已暂停；认证模式校验：缺少必需字段 [AuthenticationMode/MissingFlag] 字段 password_cut；未发送凭据'; LastError = '认证模式校验：缺少必需字段 [AuthenticationMode/MissingFlag] 字段 password_cut；未发送凭据' }
     stale = @{ State = '校园网在线'; UpdatedAt = [DateTimeOffset]::UtcNow.AddMinutes(-1).ToString('o') }

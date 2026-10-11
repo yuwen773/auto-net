@@ -11,6 +11,7 @@ internal sealed class MainForm : Form
     private readonly Dictionary<string, Label> values = new();
     private readonly Label timing = new() { AutoSize = true };
     private readonly Button toggle = Button("暂停自动恢复");
+    private readonly Button unblock = Button("解除认证暂停…");
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal bool AllowExit { get; set; }
 
@@ -57,10 +58,11 @@ internal sealed class MainForm : Form
         toggle.Click += (_, _) => Toggle();
         var logs = Button("查看日志"); logs.Click += (_, _) => OpenLogs();
         var install = Button("安装服务…"); install.Click += (_, _) => InstallService();
-        actions.Controls.AddRange([settings, toggle, logs, install]);
+        unblock.Click += (_, _) => UnblockAuthentication();
+        actions.Controls.AddRange([settings, toggle, logs, install, unblock]);
         layout.Controls.Add(actions, 0, 5);
         layout.Controls.Add(new Label { Text = "关闭窗口后继续守护；退出托盘不影响后台服务。", AutoSize = true, ForeColor = Color.FromArgb(65, 75, 88), Padding = new Padding(0, 5, 0, 0) }, 0, 6);
-        layout.Controls.Add(new Label { Text = "目标 15 秒恢复 · 仅恢复校园网 · 连续失败退避重试", AutoSize = true, ForeColor = Color.FromArgb(65, 75, 88), Font = new Font(Font.FontFamily, 9) }, 0, 7);
+        layout.Controls.Add(new Label { Text = "仅恢复校园网 · 主动断线有上限 · 真实认证待验收", AutoSize = true, ForeColor = Color.FromArgb(65, 75, 88), Font = new Font(Font.FontFamily, 9) }, 0, 7);
         Controls.Add(layout);
         FormClosing += (_, e) => { if (!AllowExit && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
         RefreshStatus();
@@ -86,7 +88,9 @@ internal sealed class MainForm : Form
         values["代理 / 系统路径"].Text = fresh ? status!.Tunnel : "待检测";
         values["UU 远程"].Text = fresh ? status!.Uu : "待检测";
         toggle.Text = status?.Enabled == false ? "恢复自动连接" : "暂停自动恢复";
+        unblock.Enabled = fresh && status!.CredentialsBlocked;
         timing.Text = fresh ? $"最近检测：{status!.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}  ·  本轮尝试 {status.Attempts} 次\n" +
+            $"本次故障主动断线：{status.DisconnectAttempts}/3 次（连续在线 60 秒重置）\n" +
             (status.NextAttempt is { } next ? $"下次自动尝试：{next.ToLocalTime():HH:mm:ss}（期间继续检测）\n" : "") +
             $"上次恢复：{(status.LastRecoveryAt is { } recovered ? recovered.ToLocalTime().ToString("MM-dd HH:mm:ss") : "尚无记录")}  ·  观测耗时：{(status.LastRecoverySeconds is { } seconds ? seconds + " 秒" : "尚无记录")}\n" +
             (status.LastError == "" ? "观测耗时从首次发现故障算起；真实端到端耗时需现场测量。" : "最近异常：" + status.LastError)
@@ -97,6 +101,7 @@ internal sealed class MainForm : Form
     public void EditSettings() => RunAction(() => Program.Elevate("--settings"));
     public void OpenLogs() => RunAction(() => { using var logs = new LogForm(); logs.ShowDialog(this); });
     public void Toggle() => RunAction(() => Program.Elevate("--toggle"));
+    public void UnblockAuthentication() => RunAction(() => Program.Elevate("--unblock-auth"));
     private void InstallService() => RunAction(() =>
     {
         var script = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "install.ps1"));

@@ -1,12 +1,13 @@
 namespace AutoNet.Core;
 
 public enum PortalStage { Unknown, Status, GatewayRedirect, HomePage, ClientIpv4, Configuration, AuthenticationMode, Submission, Complete }
-public enum PortalFailure { None, InvalidTarget, AlreadyAuthenticated, StatusUnknown, HttpStatus, MissingClientIpv4, MalformedConfiguration, MissingFlag, InvalidFlagType, UnsupportedFlag, DuplicateFlag, InvalidResponse, Timeout, Transport, Tls, CredentialsRejected, InteractionRequired, LoginRejected, MissingGatewayParameters }
+public enum PortalFailure { None, InvalidTarget, AlreadyAuthenticated, StatusUnknown, HttpStatus, MissingClientIpv4, MalformedConfiguration, MissingFlag, InvalidFlagType, UnsupportedFlag, DuplicateFlag, InvalidResponse, Timeout, Transport, Tls, CredentialsRejected, InteractionRequired, LoginRejected, MissingGatewayParameters, BindingRejected, SafetyPersistence }
 
 public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, PortalFailure Failure, int? HttpStatus = null, string? Field = null, bool CredentialRequestStarted = false)
 {
     public PortalState ObservedState { get; init; } = PortalState.Unknown;
     public IReadOnlyDictionary<string, string>? Flags { get; init; }
+    public bool RetryPermitted { get; init; }
     public string SafeSummary => $"{StageText}：{FailureText} [{Stage}/{Failure}]" +
         (HttpStatus is { } status ? $" HTTP {status}" : "") +
         (Field is "en_md5" or "password_cut" or "enable_r3" ? " 字段 " + Field : "") +
@@ -30,6 +31,8 @@ public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, Portal
         PortalFailure.InvalidResponse => "响应无法解析", PortalFailure.Timeout => "请求超时", PortalFailure.Transport => "网络请求失败",
         PortalFailure.Tls => "TLS 校验或握手失败", PortalFailure.CredentialsRejected => "服务器明确拒绝凭据",
         PortalFailure.InteractionRequired => "需要人工验证",
+        PortalFailure.BindingRejected => "网关或设备绑定被拒绝；请核实 VLAN、MAC/AC 参数，不能据此判断密码错误",
+        PortalFailure.SafetyPersistence => "认证提交授权未能持久保存，停止提交并保留安全暂停",
         PortalFailure.MissingGatewayParameters => "网关未返回登录所需参数", _ => "接口未接受认证"
     };
 }

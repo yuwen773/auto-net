@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace AutoNet.Core;
 
 public enum PortalState { Unknown, LoggedIn, NeedsLogin }
-public enum LoginResult { Accepted, RejectedCredentials, NeedsInteraction, Rejected, Unsupported }
+public enum LoginResult { Accepted, RejectedCredentials, NeedsInteraction, Rejected, Unsupported, RejectedBinding }
 
 public sealed class DrcomPortal(HttpClient http, Uri origin)
 {
@@ -70,8 +70,7 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
 
     public sealed record GatewayContext(string? ClientIpv4, string? AcIp, string? AcName, string? UserMac)
     {
-        // The MAC token and AC address are what make a submission succeed; without them the portal
-        // answers "只能绑定指定的VLAN设备". The invariant belongs to the type so no caller can skip it.
+        // Required gateway context; whether it resolves the observed VLAN rejection needs live validation.
         public bool CanSubmit => IsUsableClientIpv4(AcIp) && !string.IsNullOrWhiteSpace(UserMac) &&
             !UserMac.Any(c => char.IsWhiteSpace(c) || char.IsControl(c));
     }
@@ -127,12 +126,12 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
     public async Task<LoginResult> LoginAsync(Credentials credentials, CancellationToken ct) =>
         (await LoginDetailedAsync(credentials, ct)).Result;
 
-    public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct) => ExecuteAsync(credentials, ct);
+    public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct, Func<bool>? authorizeSubmission = null) => ExecuteAsync(credentials, ct, authorizeSubmission);
 
     // Reads the same prerequisites as login; this path has no credentials and cannot submit them.
     public Task<PortalAttempt> DiagnoseAsync(CancellationToken ct) => ExecuteAsync(null, ct);
 
-    private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct)
+    private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct, Func<bool>? authorizeSubmission = null)
     {
         var stage = PortalStage.Unknown;
         var state = PortalState.Unknown;
@@ -211,6 +210,10 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
             if (!gateway.CanSubmit)
                 return Outcome(LoginResult.Rejected, PortalFailure.MissingGatewayParameters);
             if (credentials is null) { stage = PortalStage.Complete; return Outcome(LoginResult.Accepted, PortalFailure.None); }
+            requestToken.ThrowIfCancellationRequested();
+            if (authorizeSubmission is not null && !authorizeSubmission())
+                return Outcome(LoginResult.Unsupported, PortalFailure.SafetyPersistence);
+            requestToken.ThrowIfCancellationRequested();
 
             // Production transport disables redirects, so this credential-bearing request is
             // the only one that leaves the machine and it is never followed anywhere else.
@@ -225,13 +228,21 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
                 return Outcome(HttpFailureResult(response.StatusCode), PortalFailure.HttpStatus, (int)response.StatusCode);
             using var json = ParseJsonp(await ReadLimitedAsync(response, requestToken));
             var result = Classify(json.RootElement);
-            return Outcome(result, result switch
+            var outcome = Outcome(result, result switch
             {
                 LoginResult.Accepted => PortalFailure.None,
                 LoginResult.RejectedCredentials => PortalFailure.CredentialsRejected,
                 LoginResult.NeedsInteraction => PortalFailure.InteractionRequired,
+                LoginResult.RejectedBinding => PortalFailure.BindingRejected,
                 _ => PortalFailure.LoginRejected
             });
+            // Only an explicit temporary refusal grants a new submission. A lost/invalid
+            // response after sending credentials leaves SubmissionPending for manual review.
+            var temporary = result == LoginResult.Rejected && json.RootElement.TryGetProperty("result", out var rejected) && rejected.ToString() == "0" &&
+                new[] { "msg", "Msg", "message" }.Any(key => json.RootElement.TryGetProperty(key, out var message) &&
+                    message.ValueKind == JsonValueKind.String && new[] { "ldap timeout", "server busy", "temporarily unavailable" }
+                        .Any(text => message.GetString()!.Equals(text, StringComparison.OrdinalIgnoreCase)));
+            return outcome with { RetryPermitted = temporary };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Outcome(LoginResult.Rejected, PortalFailure.Timeout); }
         catch (HttpRequestException e)
@@ -285,6 +296,9 @@ public sealed class DrcomPortal(HttpClient http, Uri origin)
         if (json.TryGetProperty("result", out var result) && result.ToString() is "1" or "ok") return LoginResult.Accepted;
         var message = string.Join(' ', new[] { "msg", "Msg", "message" }.Select(key =>
             json.TryGetProperty(key, out var value) ? value.ToString() : "")).ToLowerInvariant();
+        var compact = Regex.Replace(message, @"\s+", "");
+        if (new[] { "只能绑定指定的vlan设备", "只能绑定指定的mac设备", "只能绑定指定的ac设备" }.Any(compact.Contains))
+            return LoginResult.RejectedBinding;
         // Error strings verified against the campus portal's public a78.js. Do not classify generic result=0 as bad credentials.
         if (new[] { "userid error1", "userid error2", "userid error3", "auth error99", "auth error198", "auth error199",
             "密码错误", "账号不存在", "帐号不存在", "用户名或密码错误", "invalid password", "password error" }.Any(message.Contains))

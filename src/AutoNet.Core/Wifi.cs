@@ -17,6 +17,9 @@ public sealed record WifiLink(bool Connected, NetworkInterface? Adapter, IPAddre
         !Connected ? WifiState.Disconnected : Address is null ? WifiState.WaitingForAddress : WifiState.Ready;
 }
 
+public enum WifiRequestStatus { Issued, Skipped, Failed }
+public sealed record WifiRequestResult(WifiRequestStatus Status, int? NativeError = null);
+
 public static class Wifi
 {
     public static List<WifiProfile> Profiles()
@@ -86,23 +89,35 @@ public static class Wifi
         return link with { Connected = profile == targetProfile, OtherProfile = profile != "" && profile != targetProfile, Unavailable = profile == "" };
     }
 
-    public static void Connect(Settings settings)
+    public static WifiRequestResult Connect(Settings settings) => Request(false, () => Read(settings), () =>
     {
         using var client = new WlanClient();
         var id = Guid.Parse(settings.InterfaceId);
         var parameters = new ConnectionParameters { Mode = 0, Profile = settings.WifiProfile, BssType = 3 };
         // Connect only the explicitly configured saved profile; never reset the adapter.
-        Check(WlanConnect(client.Handle, ref id, ref parameters, IntPtr.Zero));
-    }
+        return WlanConnect(client.Handle, ref id, ref parameters, IntPtr.Zero);
+    });
 
-    public static void Disconnect(Settings settings)
+    public static WifiRequestResult Disconnect(Settings settings) => Request(true, () => Read(settings), () =>
     {
-        // Recheck the selected profile immediately before the disruptive request.
-        if (Read(settings).State != WifiState.Ready) return;
         using var client = new WlanClient();
         var id = Guid.Parse(settings.InterfaceId);
-        Check(WlanDisconnect(client.Handle, ref id, IntPtr.Zero));
+        return WlanDisconnect(client.Handle, ref id, IntPtr.Zero);
         // The monitoring loop waits for disconnection before requesting the saved profile.
+    });
+
+    internal static WifiRequestResult Request(bool disconnect, Func<WifiLink> read, Func<uint> issue)
+    {
+        try
+        {
+            // Native WLAN has no profile-bound atomic disconnect. A user switch after this
+            // final read can still race the interface-GUID request; never claim zero risk.
+            var state = read().State;
+            if (state != (disconnect ? WifiState.Ready : WifiState.Disconnected)) return new(WifiRequestStatus.Skipped);
+            var error = issue();
+            return error == 0 ? new(WifiRequestStatus.Issued) : new(WifiRequestStatus.Failed, (int)error);
+        }
+        catch (Win32Exception e) { return new(WifiRequestStatus.Failed, e.NativeErrorCode); }
     }
 
     private static string Current(IntPtr handle, Guid id)

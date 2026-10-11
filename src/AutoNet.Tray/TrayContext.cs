@@ -16,6 +16,7 @@ internal sealed class TrayContext : ApplicationContext
         menu.Items.Add("打开 AutoNet", null, (_, _) => Show());
         menu.Items.Add("设置认证信息…", null, (_, _) => window.EditSettings());
         menu.Items.Add("暂停 / 恢复自动连接", null, (_, _) => window.Toggle());
+        menu.Items.Add("解除认证暂停…", null, (_, _) => window.UnblockAuthentication());
         menu.Items.Add("查看日志", null, (_, _) => window.OpenLogs());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出托盘（后台继续运行）", null, (_, _) => ExitThread());

@@ -7,6 +7,7 @@ namespace AutoNet.Core;
 public sealed record Settings
 {
     public bool Enabled { get; init; } = true;
+    public bool AllowActiveDisconnect { get; init; } = true;
     public string InterfaceId { get; init; } = "";
     public string WifiProfile { get; init; } = "";
     public string PortalOrigin { get; init; } = "https://login.csust.edu.cn";
@@ -43,7 +44,6 @@ public static class Storage
     public static string Private => Path.Combine(Root, "private");
     public static string SettingsPath => Path.Combine(Private, "settings.json");
     public static string CredentialPath => Path.Combine(Private, "credentials.dpapi");
-    public static string AuthBlockPath => Path.Combine(Private, "auth-block.txt");
     public static string StatusPath => Path.Combine(Root, "status.json");
     public static string Logs => Path.Combine(Root, "logs");
     public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
@@ -66,7 +66,6 @@ public static class Storage
         {
             var encrypted = ProtectedData.Protect(bytes, null, DataProtectionScope.LocalMachine);
             AtomicWrite(CredentialPath, encrypted);
-            if (File.Exists(AuthBlockPath)) File.Delete(AuthBlockPath);
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
@@ -78,9 +77,6 @@ public static class Storage
         try { return JsonSerializer.Deserialize<Credentials>(bytes); }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
-
-    public static string CredentialFingerprint() => File.Exists(CredentialPath)
-        ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(CredentialPath))) : "";
 
     public static string ReadShared(string path)
     {
@@ -94,7 +90,14 @@ public static class Storage
     {
         // Directory ACLs must be provisioned by the elevated installer first.
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try { File.WriteAllBytes(temp, bytes); File.Move(temp, path, true); }
+        try
+        {
+            using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                file.Write(bytes); file.Flush(true);
+            }
+            File.Move(temp, path, true);
+        }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 }

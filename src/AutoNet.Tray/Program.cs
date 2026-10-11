@@ -26,9 +26,38 @@ internal static class Program
                 var settings = Storage.LoadSettings() ?? throw new InvalidOperationException("请先保存校园网设置。");
                 Storage.SaveSettings(settings with { Enabled = !settings.Enabled }); return;
             }
+            if (args.Contains("--unblock-auth"))
+            {
+                if (!IsAdministrator) { Elevate("--unblock-auth"); return; }
+                var safety = new SafetyStateStore(Storage.Private);
+                var block = safety.LoadAuthenticationBlock();
+                if (block?.BlocksSubmissions != true) { MessageBox.Show("当前没有需要人工解除的认证暂停标记。", "AutoNet"); return; }
+                if (MessageBox.Show("请先核实诊断、网关及设备绑定配置。解除后，后台将允许再次提交当前账号密码；若再次被明确拒绝，会重新暂停。\n\n确认已核实并解除认证暂停？",
+                    "解除认证暂停", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                {
+                    var settings = Storage.LoadSettings() ?? throw new InvalidOperationException("请先保存校园网设置。");
+                    settings.Validate();
+                    var link = Wifi.Read(settings);
+                    if (link.State != WifiState.Ready) throw new InvalidOperationException("请先连接指定校园 Wi-Fi 并取得 IPv4。");
+                    using var http = DirectNetwork.CreateClient(link);
+                    var diagnosis = new DrcomPortal(http, new Uri(settings.PortalOrigin)).DiagnoseAsync(default).GetAwaiter().GetResult();
+                    if (diagnosis.Failure != PortalFailure.None)
+                    {
+                        MessageBox.Show("前置复核未通过，保留认证暂停：" + diagnosis.SafeSummary, "AutoNet");
+                        return;
+                    }
+                    // Compare the same revision and durably audit before releasing. No credentials are loaded here.
+                    var finalLink = Wifi.Read(settings);
+                    if (Storage.LoadSettings() != settings || finalLink.State != WifiState.Ready ||
+                        finalLink.Index != link.Index || !Equals(finalLink.Address, link.Address))
+                        throw new InvalidOperationException("诊断期间设置或校园 Wi-Fi 已变化，请重新诊断。");
+                    safety.ClearAuthenticationBlock(block);
+                }
+                return;
+            }
             if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AUTONET_CAPTURE_PATH")))
             {
-                using Form preview = args.Contains("--logs") ? new LogForm() : new MainForm { AllowExit = true };
+                using Form preview = args.Contains("--logs") ? new LogForm() : args.Contains("--settings-preview") ? new SettingsForm(true) : new MainForm { AllowExit = true };
                 Application.Run(preview);
                 return;
             }

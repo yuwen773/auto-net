@@ -13,7 +13,8 @@ internal static class MonitorRegression
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             var first = await worker.RunOnceAsync(default);
             Require(first.Attempts == 0);
-            fixture.Clock.Advance(TimeSpan.FromSeconds(10));
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15));
             var stalled = await worker.RunOnceAsync(default);
             Require(stalled.Attempts == 1 && stalled.ActionStartedAt is not null);
             Require(fixture.Disconnects == 1 && fixture.Connects == 0);
@@ -24,7 +25,8 @@ internal static class MonitorRegression
             var fixture = new MonitorFixture(); fixture.Http.PortalResult = "-1";
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             await worker.RunOnceAsync(default);
-            fixture.Clock.Advance(TimeSpan.FromSeconds(10)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 1 && fixture.Connects == 0);
             fixture.Link = new(false, null, null, 7, []);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
@@ -38,7 +40,7 @@ internal static class MonitorRegression
             Require(accepted.CredentialRequestStarted && accepted.AuthenticationAcceptedAt is not null && accepted.Direct != "外网可达");
             fixture.Http.Online = true;
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var recovered = await worker.RunOnceAsync(default);
-            Require(recovered.State == "校园网在线" && recovered.LastRecoverySeconds == 18 && recovered.Attempts == 0);
+            Require(recovered.State == "校园网在线" && recovered.LastRecoverySeconds == 38 && recovered.Attempts == 0 && recovered.DisconnectAttempts == 1);
             Require(fixture.Logs.Any(e => e.Action == "重连校园 Wi-Fi" && e.NextAttempt is not null && e.Attempts == 1));
             Require(fixture.Logs.Any(e => e.Action == "观测到联网恢复" && e.Attempts == 3 && e.Detail.Contains("来源无法确认")));
         }),
@@ -52,7 +54,7 @@ internal static class MonitorRegression
             fixture.Clock.Advance(TimeSpan.FromSeconds(20)); await worker.RunOnceAsync(default);
             fixture.Clock.Advance(TimeSpan.FromSeconds(8)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 0);
-            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(22)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 1);
         }),
         ("监测：未知与已认证状态切换不绕过卡死重连退避", async () =>
@@ -60,14 +62,17 @@ internal static class MonitorRegression
             var fixture = new MonitorFixture(); fixture.Http.PortalResult = "-1";
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             await worker.RunOnceAsync(default);
-            fixture.Clock.Advance(TimeSpan.FromSeconds(10)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
             for (var i = 0; i < 29; i++)
             {
                 fixture.Http.PortalResult = i % 2 == 0 ? "1" : "-1";
                 fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
             }
             Require(fixture.Disconnects == 1);
-            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var retry = await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
+            Require(fixture.Disconnects == 1);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(60)); var retry = await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 2 && retry.NextAttempt == fixture.Clock.GetUtcNow().AddSeconds(120));
             Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
         }),
@@ -80,7 +85,8 @@ internal static class MonitorRegression
                 fixture.Http.PortalResult = "1";
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
                 await worker.RunOnceAsync(default);
-                fixture.Clock.Advance(TimeSpan.FromSeconds(20)); await worker.RunOnceAsync(default);
+                fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
+                fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
                 Require(fixture.Disconnects == (mode == "authenticated" ? 1 : 0));
                 Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
             }
@@ -103,12 +109,13 @@ internal static class MonitorRegression
             var fixture = new MonitorFixture { FailDisconnect = true }; fixture.Http.PortalResult = "-1";
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             await worker.RunOnceAsync(default);
-            fixture.Clock.Advance(TimeSpan.FromSeconds(10)); var failed = await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(15)); var failed = await worker.RunOnceAsync(default);
             Require(failed.Detail.Contains("Windows 错误 5") && !failed.Detail.Contains("secret") && failed.NextAttempt is not null);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 1);
             fixture.FailDisconnect = false;
-            fixture.Clock.Advance(TimeSpan.FromSeconds(58)); await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(118)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 2);
         }),
         ("监测：认证状态异常记录受控原因，不泄露异常原文", async () =>
@@ -271,26 +278,60 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public bool FailLog { get; set; }
     public bool FailPower { get; set; }
     public bool FailDisconnect { get; set; }
-    public bool Blocked { get; set; }
+    private bool legacyBlocked;
+    public AuthenticationBlock? Authentication { get; private set; }
+    public bool Blocked
+    {
+        get => Authentication?.BlocksSubmissions ?? legacyBlocked;
+        set { legacyBlocked = value; Authentication = null; }
+    }
     public bool FailBlock { get; set; }
+    public bool FailSubmission { get; set; }
+    public bool FailCooling { get; set; }
     public bool HasCredentials { get; set; } = true;
+    public Credentials Credentials { get; set; } = new("test", "never-real");
+    public Action? BeforeDisconnect { get; set; }
+    public Action? BeforeWifiRead { get; set; }
+    public PortalFailure BlockFailure { get; set; }
+    public bool FailBudget { get; set; }
+    public Dictionary<string, DisconnectBudget> Budgets { get; } = [];
     public List<ActivityLog> Logs { get; } = [];
     public Settings? LoadSettings() => Settings;
-    public Credentials? LoadCredentials() => HasCredentials ? new("test", "never-real") : null;
-    public string CredentialFingerprint() => "fixture-fingerprint";
-    public bool AuthenticationBlocked(string fingerprint) => Blocked;
-    public void BlockAuthentication(string fingerprint)
+    public Credentials? LoadCredentials() => HasCredentials ? Credentials : null;
+    public AuthenticationBlock? LoadAuthenticationBlock() => Authentication ?? (legacyBlocked ? new(BlockFailure) : null);
+    public void BlockAuthentication(AuthenticationBlock block)
     {
-        if (FailBlock) throw new UnauthorizedAccessException("fixture-secret-url");
-        Blocked = true;
+        if (block.State == AuthenticationState.SubmissionPending ? FailSubmission :
+            block.State == AuthenticationState.RetryCoolingDown ? FailCooling : FailBlock) throw new UnauthorizedAccessException("fixture-secret-url");
+        Authentication = block;
+        BlockFailure = block.Failure;
     }
-    public WifiLink ReadWifi(Settings settings) => Link;
-    public void ConnectWifi(Settings settings) => Connects++;
-    public void DisconnectWifi(Settings settings)
+    public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next)
+    {
+        if (LoadAuthenticationBlock() != expected) return false;
+        BlockAuthentication(next);
+        return true;
+    }
+    public DisconnectBudget LoadDisconnectBudget(Settings settings) => Budgets.GetValueOrDefault(settings.InterfaceId + "/" + settings.WifiProfile) ?? new();
+    public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget)
+    {
+        if (FailBudget) throw new IOException("fixture-secret-url");
+        Budgets[settings.InterfaceId + "/" + settings.WifiProfile] = budget;
+    }
+    public bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next)
+    {
+        if (LoadDisconnectBudget(settings) != expected) return false;
+        SaveDisconnectBudget(settings, next);
+        return true;
+    }
+    public WifiLink ReadWifi(Settings settings) { BeforeWifiRead?.Invoke(); return Link; }
+    public WifiRequestResult ConnectWifi(Settings settings) => Wifi.Request(false, () => ReadWifi(settings), () => { Connects++; return 0; });
+    public WifiRequestResult DisconnectWifi(Settings settings) => Wifi.Request(true, () => ReadWifi(settings), () =>
     {
         Disconnects++;
-        if (FailDisconnect) throw new System.ComponentModel.Win32Exception(5, "fixture-secret-url");
-    }
+        BeforeDisconnect?.Invoke();
+        return FailDisconnect ? 5u : 0u;
+    });
     public HttpClient CreateDirectClient(WifiLink link) => new(Http, disposeHandler: false);
     public Task<(string SystemPath, string Uu)> CheckAuxiliaryAsync(Settings settings, WifiLink link, CancellationToken ct) => Auxiliary(++AuxiliaryCalls, ct);
     public void UpdatePower(bool enabled) { if (FailPower) throw new System.ComponentModel.Win32Exception(5); }
@@ -336,10 +377,12 @@ internal sealed class MonitorHttp : HttpMessageHandler
     public HttpStatusCode FailureStatus { get; set; }
     public Exception? FailureException { get; set; }
     public List<Uri> Requests { get; } = [];
+    public Action? BeforeLogin { get; set; }
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri!;
         Requests.Add(uri);
+        if (uri.AbsolutePath == "/eportal/portal/login") BeforeLogin?.Invoke();
         if (uri.AbsolutePath == FailurePath)
         {
             if (FailureException is not null) return Task.FromException<HttpResponseMessage>(FailureException);
