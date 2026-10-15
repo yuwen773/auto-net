@@ -126,6 +126,7 @@ tests = tests.Concat(PortalRegression.Cases).ToArray();
 tests = tests.Concat(NetworkRegression.Cases).ToArray();
 tests = tests.Concat(LogRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticRegression.Cases).ToArray();
+tests = tests.Concat(DiagnosticsPackageRegression.Cases).ToArray();
 tests = tests.Concat(SafetyRegression.Cases).ToArray();
 tests = tests.Concat(AcceptanceRegression.Cases).ToArray();
 tests = tests.Concat(AuthenticationPersistenceRegression.Cases).ToArray();

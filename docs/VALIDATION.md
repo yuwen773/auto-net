@@ -10,6 +10,15 @@
 - Release 构建零警告、零错误，完整回归 **162/162** 通过（新增 2 项：联网恢复不重复广播；安全暂停广播一次且重启后重新可见）。证据：`artifacts/validation/build.json`、`tests.txt`。
 - 未验证：托盘气泡渲染、点击行为、用户不在场时的可见性（均属 UI PR 范围）；真实故障下的通知时序未做实机验收。
 
+## 诊断包导出（2026-10-15，仅离线验证 + 一次真实只读导出，未部署）
+
+- 按“UI 单独开 PR、当前先不管 UI”的边界，本轮只做 Core/Service 管路：导出库 `DiagnosticsPackage` 在 Core，服务 `--export-diagnostics [path]` CLI 调用同一实现；托盘 SaveFileDialog 菜单留给 UI PR。契约见 [ADR-0003](adr/0003-diagnostics-package-contract.md)，术语见根目录 [CONTEXT.md](../CONTEXT.md)。
+- 包内六项内容：近 3 天日志 JSONL（按文件名日期取窗口，非法文件名跳过）、`net_state.json`（NetworkDiagnostics.RunAsync 现成报告）、`status.json`（快照原文）、`settings-snapshot.json`（白名单脱敏：不含凭据，不含代理与 UU 检测地址，保留 InterfaceId 与 Wi-Fi 配置名）、`portal_diagnostic.json`（InspectDetailedAsync 只读结果）、`README.txt`（内容清单、导出时间、构建号、阅读指引、缺失项、隐私说明）。
+- 降级设计：无可用设置时回退当前连接的所有用户 Wi-Fi 配置并在 README 标注；设置损坏/被拒、采集超时、状态或日志缺失均只记录缺口、不中断导出；外部取消不产出半包。内容先全部读入内存再开包，避免半包。采集链全 .NET 原生 API，未实采 ipconfig/netsh，零进程依赖。
+- Release 构建零警告、零错误，完整回归 **169/169** 通过（新增 9 项：快照字段红线、日志窗口筛选、输出路径解析、完整合同与内容保真、全缺失降级、无效/损坏设置回退、采集超时降级、取消不产半包；完整用例对包内逐条目扫描代理/UU 地址、MAC 与凭据赋值形态）。证据：`artifacts/validation/build.json`、`tests.txt`。
+- 另在真机以未提权方式执行一次 `--export-diagnostics`：退出码 0，产出 8 条目（含 10-13/14/15 三天真实日志、实时 net_state 与门户诊断），因读不到受限私有目录而按设计回退当前连接配置并标注；对解包内容扫描凭据关键词与 MAC 形态均无命中（日志仅含 `credentialRequestStarted`/`hasCredentials` 布尔字段名，属 schemaVersion 2 既有契约）。
+- 未验证：提权管理员身份下的完整采集（含已保存设置路径）、托盘菜单触发、用户不在场时的可见性（均属 UI PR 或需授权现场）；15 秒恢复目标不在本包证明范围内（ADR-0003：导出物只证明采集时所见）。
+
 ## 覆盖安装验证（2026-10-11 14:15–14:16，已完成）
 
 - 经用户明确授权，将源码提交 `517b2fe55f4b1547748de8cda707975f16c35c1c` 的自包含 Service/Tray 发布包覆盖安装到现有 AutoNet。按该提交重建，Release 零警告、零错误，135/135 回归通过，构建元数据 `trackedChanges=false`。

@@ -7,8 +7,8 @@
 1. 近 3 天日志 JSONL（schemaVersion 2 记录自带脱敏约束）
 2. net_state.json：NetworkDiagnostics.RunAsync 现成报告（Wi-Fi/IPv4/DNS/外网探测/门户只读检查/路由证据）
 3. status.json 当前快照
-4. 设置脱敏快照（无凭据字段；InterfaceId 与 Wi-Fi 配置名保留）
-5. 门户只读诊断（InspectAsync 结果，无凭据）
+4. 设置脱敏快照（白名单：Enabled / AllowActiveDisconnect / KeepAwakeOnAc / InterfaceId / Wi-Fi 配置名 / PortalOrigin；无凭据字段；InterfaceId 与 Wi-Fi 配置名保留。代理与 UU 检测地址不在白名单：与校园网诊断无关，且属用户自身环境信息）
+5. 门户只读诊断（InspectDetailedAsync 只读结果：阶段、失败分类、HTTP 状态、参数存在性；较 InspectAsync 的 PortalState 三元组更能定位问题，同样无凭据）
 6. README.txt：内容清单、导出时间、构建号、阅读指引
 
 ## 触发与落点

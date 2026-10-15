@@ -42,6 +42,28 @@ if (args.Contains("--diagnose") || args.Contains("--diagnose-portal"))
     }
 }
 
+if (args.Contains("--export-diagnostics"))
+{
+    try
+    {
+        var index = Array.IndexOf(args, "--export-diagnostics");
+        var requested = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal) ? args[index + 1] : null;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        var result = await DiagnosticsPackage.ExportAsync(new DiagnosticsPackageOptions { OutputPath = requested }, timeout.Token);
+        Console.WriteLine("诊断包已导出：" + result.Path);
+        Console.WriteLine("包含 " + result.Entries.Count + " 项：");
+        foreach (var entry in result.Entries) Console.WriteLine("  - " + entry);
+        foreach (var note in result.Notes) Console.WriteLine("说明：" + note);
+        Console.WriteLine("只读导出：未修改网络、未加载凭据、未清除认证阻断；打包内容为采集时所见。");
+        return 0;
+    }
+    catch (Exception e)
+    {
+        Console.WriteLine("诊断包导出失败：" + e.GetType().Name + "；未修改网络。若无法读取程序数据目录，请以管理员身份运行。");
+        return 3;
+    }
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.ClearProviders(); // HTTP failures must never log credential-bearing URLs.
 builder.Services.AddWindowsService(options => options.ServiceName = "AutoNet");
