@@ -140,3 +140,17 @@ Match surrounding code: four-space indent, PascalCase types and members, `Async`
 Add cases to the named tuple array in `tests/AutoNet.Tests/Program.cs` (or the `Cases` array in `MonitorRegression.cs` / `PortalRegression.cs` / `NetworkRegression.cs` / `LogRegression.cs`, which `Program.cs` concatenates). Names are descriptive Chinese sentences describing behavior. Use `MonitorFixture` with `ManualClock.Advance` to exercise backoff windows, and `MonitorHttp` flags (`Online`, `PortalResult`, `LoginResult`, `HomePage`, `ConfigJson`, `FailurePath`, `FailureException`) to drive portal states. There is no coverage threshold.
 
 Green tests do not demonstrate the ~15-second recovery target — that requires the live acceptance in `docs/VALIDATION.md`.
+
+## Agent skills
+
+### Issue tracker
+
+规格和实施事项使用 yuwen773/auto-net 的 GitHub Issues。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用 needs-triage、needs-info、ready-for-agent、ready-for-human、wontfix。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单一领域上下文：根目录 `CONTEXT.md` 与 `docs/adr/`。见 `docs/agents/domain.md`。

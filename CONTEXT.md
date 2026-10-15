@@ -75,7 +75,7 @@ _Avoid_: 消息、推送
 服务侧只置标志（status.json 的 `BrowserFallbackRequested` + `BrowserFallbackNotBefore` 冷却时间戳）并广播一次通知；服务运行在会话 0，不能自行弹浏览器，托盘见标志后打开门户页。
 
 **门户改版信号（PortalLayoutChanged）**:
-预检失败落在结构类集合时的聚合信号，表示门户结构疑似变化、自动认证已安全暂停。
+预检失败落在结构类集合时的聚合信号，表示门户结构疑似变化；是否暂停或退避重试仍由具体认证状态决定。
 结构类集合见 `PortalLayoutSignal.IsStructural`：loadConfig 标志契约变化（缺失/类型/值/重复）、配置结构变化、响应无法解析（含 chkstatus 缺 result 字段）、网关 302 缺少登录参数；result 取值无法识别（StatusUnknown）不算。
 落点：journal 事件 + status.json 的 `PortalLayoutSuspected` 标志 + 一次性通知。
 _Avoid_: 解析失败
@@ -83,3 +83,11 @@ _Avoid_: 解析失败
 **诊断包**:
 一键导出的脱敏证据压缩包，供自助排查或交给网管；不含账号、密码、Cookie、Token，MAC 掩码。
 _Avoid_: 日志导出
+
+**关键通知**:
+需要用户人工处理的状态提示，或一次故障后观测到联网恢复的提示；复检过程不属于需要主动弹出的关键通知。
+_Avoid_: 全流程提醒
+
+**浏览器兜底授予**:
+服务在达到既定失败阈值后发出的开页请求；它不是浏览器已打开的确认，也不代表认证成功或认证暂停已解除。
+_Avoid_: 浏览器已处理、认证成功
