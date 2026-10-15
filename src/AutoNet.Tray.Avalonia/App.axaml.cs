@@ -5,10 +5,10 @@ using Avalonia.Markup.Xaml;
 
 namespace AutoNet.Tray.Avalonia;
 
-/// <summary>应用启动模式：普通托盘、管理员占位操作、提示窗口。</summary>
+/// <summary>应用启动模式：普通壳（托盘）、管理员操作、提示窗口。</summary>
 internal abstract record AppMode;
 
-internal sealed record TrayMode(PrototypeCommandLine Request, QaEnvironment Qa) : AppMode;
+internal sealed record TrayMode(StartupRequest Request, QaEnvironment Qa) : AppMode;
 
 internal sealed record ElevatedMode(ElevatedOperationKind Operation, QaEnvironment Qa) : AppMode;
 
@@ -38,9 +38,9 @@ public sealed class App : Application
                     StartTrayMode(desktop, tray);
                     break;
                 case ElevatedMode elevated:
-                    StartNotice(desktop,
-                        elevated.Operation.DisplayName() + "（原型占位）",
-                        "此窗口由管理员权限进程打开，用于验证独立提权入口。\n原型不执行真实设置变更；完整实现见后续迁移工单。");
+                    // 受控占位：管理员入口已成立（不被普通互斥锁拦截），具体页面随后续工单提供。
+                    StartNotice(desktop, elevated.Operation.DisplayName() + "（迁移中）",
+                        "该操作将在界面迁移完成后通过新的页面提供。\n当前版本不会修改任何设置、凭据或服务。");
                     break;
                 case NoticeMode notice:
                     StartNotice(desktop, notice.Heading, notice.Body);
@@ -54,9 +54,16 @@ public sealed class App : Application
     private void StartTrayMode(IClassicDesktopStyleApplicationLifetime desktop, TrayMode tray)
     {
         var session = new TraySession();
-        var window = new MainWindow(session);
+        var pipe = new StatusPipe(StatusPipe.ResolveStatusPath());
+        var shell = new ShellController(pipe);
+        var window = new MainWindow(session, shell);
         trayHost = new TrayHost(session, window, () => desktop.Shutdown());
-        desktop.Exit += (_, _) => trayHost.Dispose();
+        desktop.Exit += (_, _) =>
+        {
+            trayHost.Dispose();
+            shell.Dispose();
+        };
+        shell.Start();
 
         if (!tray.Request.StartHidden) TrayHost.ShowWindow(window);
         switch (tray.Qa.Mode)
@@ -67,6 +74,9 @@ public sealed class App : Application
                 break;
             case QaMode.ThemeRender:
                 QaThemeRender.Run(window, tray.Qa, desktop);
+                break;
+            case QaMode.Shell:
+                QaShell.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
         }
     }

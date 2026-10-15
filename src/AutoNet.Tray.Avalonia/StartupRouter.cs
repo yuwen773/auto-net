@@ -16,7 +16,7 @@ internal sealed record StartupDecision(StartupActionKind Kind, ElevatedOperation
 /// </summary>
 internal static class StartupRouter
 {
-    public static StartupDecision Decide(PrototypeCommandLine request, bool isAdministrator, bool anotherInstanceRunning)
+    public static StartupDecision Decide(StartupRequest request, bool isAdministrator, bool anotherInstanceRunning)
     {
         if (request.ElevatedOperation is { } operation)
         {

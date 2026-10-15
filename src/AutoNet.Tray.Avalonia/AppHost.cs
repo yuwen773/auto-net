@@ -7,7 +7,7 @@ namespace AutoNet.Tray.Avalonia;
 /// <summary>按模式启动 Avalonia 桌面生命周期，并把退出代码带回进程。</summary>
 internal static class AppHost
 {
-    public static int RunTray(PrototypeCommandLine request, QaEnvironment qa) => Run(new TrayMode(request, qa));
+    public static int RunTray(StartupRequest request, QaEnvironment qa) => Run(new TrayMode(request, qa));
 
     public static int RunElevated(ElevatedOperationKind operation, QaEnvironment qa) => Run(new ElevatedMode(operation, qa));
 

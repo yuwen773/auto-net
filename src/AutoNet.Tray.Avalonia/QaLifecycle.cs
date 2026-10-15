@@ -10,7 +10,7 @@ namespace AutoNet.Tray.Avalonia;
 /// </summary>
 internal static class QaLifecycle
 {
-    public static void Run(PrototypeCommandLine request, TrayHost tray, MainWindow window, QaEnvironment qa)
+    public static void Run(StartupRequest request, TrayHost tray, MainWindow window, QaEnvironment qa)
     {
         Dispatcher.UIThread.Post(async () =>
         {

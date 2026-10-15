@@ -8,12 +8,14 @@ internal enum QaMode
     None,
     Lifecycle,
     Hold,
-    ThemeRender
+    ThemeRender,
+    /// <summary>壳级 QA：导航截图与状态栏降级证据（scripts/qa-avalonia-shell.ps1 使用）。</summary>
+    Shell
 }
 
 /// <summary>
-/// 离线 QA 开关（scripts/qa-avalonia-prototype.ps1 使用）。只有显式设置 AUTONET_QA_DIR 时才激活，
-/// 普通用户机器上永远不生效，与既有 AUTONET_CAPTURE_PATH 的约定一致。
+/// 离线 QA 开关（scripts/qa-avalonia-prototype.ps1 与 scripts/qa-avalonia-shell.ps1 使用）。
+/// 只有显式设置 AUTONET_QA_DIR 时才激活，普通用户机器上永远不生效，与既有 AUTONET_CAPTURE_PATH 的约定一致。
 /// </summary>
 internal sealed record QaEnvironment(QaMode Mode, string Directory)
 {
@@ -26,6 +28,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "lifecycle" => QaMode.Lifecycle,
             "hold" => QaMode.Hold,
             "theme" => QaMode.ThemeRender,
+            "shell" => QaMode.Shell,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -39,6 +42,9 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string AlreadyRunningReportPath => Path.Combine(Directory, "already-running.json");
     public string ThemeLightPath => Path.Combine(Directory, "theme-light.png");
     public string ThemeDarkPath => Path.Combine(Directory, "theme-dark.png");
+    public string ShellReportPath => Path.Combine(Directory, "shell.json");
+
+    public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -68,4 +74,17 @@ internal sealed record LifecycleReport(
     string MutexName,
     string ThemeVariant,
     List<LifecycleStep> Steps,
+    string? Error = null);
+
+internal sealed record ShellStep(string Step, string Page, string Name, string Strip, string? File, string At);
+
+internal sealed record ShellReport(
+    string Mode,
+    bool Fixture,
+    string ProcessPath,
+    int ProcessId,
+    bool Administrator,
+    string MutexName,
+    string ThemeVariant,
+    List<ShellStep> Steps,
     string? Error = null);

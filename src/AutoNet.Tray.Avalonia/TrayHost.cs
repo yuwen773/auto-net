@@ -4,7 +4,7 @@ using Avalonia.Controls;
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
-/// 托盘图标与菜单。菜单动作与既有 WinForms 托盘同名同序：
+/// 托盘图标与菜单。菜单条目取自 <see cref="TrayMenuModel"/>（既有入口语义）：
 /// 打开、设置认证信息…（独立提权入口）、退出托盘（后台继续运行）。
 /// </summary>
 internal sealed class TrayHost : IDisposable
@@ -19,22 +19,46 @@ internal sealed class TrayHost : IDisposable
         this.session = session;
         this.window = window;
         this.shutdown = shutdown;
-        var open = new NativeMenuItem("打开 AutoNet");
-        open.Click += (_, _) => ShowMainWindow();
-        var settings = new NativeMenuItem("设置认证信息…");
-        settings.Click += (_, _) => Elevation.Launch(ElevatedOperationKind.Settings);
-        var exit = new NativeMenuItem("退出托盘（后台继续运行）");
-        exit.Click += (_, _) => RequestExit();
+        var menu = new NativeMenu();
+        foreach (var entry in TrayMenuModel.Entries)
+        {
+            if (entry.Action is not { } action)
+            {
+                menu.Add(new NativeMenuItemSeparator());
+                continue;
+            }
+
+            var item = new NativeMenuItem(entry.Label);
+            item.Click += (_, _) => Handle(action);
+            menu.Add(item);
+        }
+
         var tray = new TrayIcon
         {
             Icon = AppIcons.Load(),
-            ToolTipText = "AutoNet · 校园网连接守护（兼容原型）",
+            ToolTipText = "AutoNet · 校园网连接守护",
             IsVisible = true,
-            Menu = new NativeMenu { open, settings, new NativeMenuItemSeparator(), exit }
+            Menu = menu
         };
         tray.Clicked += (_, _) => ShowMainWindow();
         icons = new TrayIcons { tray };
         TrayIcon.SetIcons(Application.Current!, icons);
+    }
+
+    private void Handle(TrayMenuAction action)
+    {
+        switch (action)
+        {
+            case TrayMenuAction.Open:
+                ShowMainWindow();
+                break;
+            case TrayMenuAction.Settings:
+                Elevation.Launch(ElevatedOperationKind.Settings);
+                break;
+            case TrayMenuAction.Exit:
+                RequestExit();
+                break;
+        }
     }
 
     /// <summary>与托盘菜单“打开 AutoNet”相同的动作。</summary>

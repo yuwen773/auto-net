@@ -1,46 +1,29 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="AutoNet.Tray.Avalonia.MainView">
-  <ScrollViewer>
-    <StackPanel Margin="28" Spacing="16">
-      <StackPanel Spacing="6">
-        <TextBlock Text="AutoNet · Avalonia 兼容原型" FontSize="26" FontWeight="SemiBold" />
-        <TextBlock TextWrapping="Wrap" Opacity="0.75"
-                   Text="此原型只验证框架兼容性：托盘、隐藏启动、关闭隐藏、单实例、独立提权入口、明暗主题与自包含单文件发布。它不读取或修改任何配置，也不控制后台服务。" />
-      </StackPanel>
-
-      <Border CornerRadius="8" Padding="16" BorderThickness="1"
-              Background="{DynamicResource PrototypeCardBackground}"
-              BorderBrush="{DynamicResource PrototypeCardBorder}">
-        <StackPanel Spacing="10">
-          <TextBlock Text="外观主题" FontWeight="SemiBold" />
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button x:Name="themeSystem" Content="跟随系统" />
-            <Button x:Name="themeLight" Content="浅色" />
-            <Button x:Name="themeDark" Content="深色" />
-          </StackPanel>
-          <TextBlock x:Name="themeCurrent" Opacity="0.75" />
+  <Grid ColumnDefinitions="236,*" RowDefinitions="*,Auto">
+    <Border Grid.Row="0" Grid.Column="0"
+            Background="{DynamicResource ShellNavBackground}"
+            BorderBrush="{DynamicResource ShellBorder}"
+            BorderThickness="0,0,1,0">
+      <DockPanel Margin="0,0,0,8">
+        <StackPanel DockPanel.Dock="Top" Margin="20,22,20,16" Spacing="3">
+          <TextBlock Text="AutoNet" FontSize="21" FontWeight="SemiBold" />
+          <TextBlock Text="校园网连接守护" FontSize="12" Opacity="0.6" />
         </StackPanel>
-      </Border>
-
-      <Border CornerRadius="8" Padding="16" BorderThickness="1"
-              Background="{DynamicResource PrototypeCardBackground}"
-              BorderBrush="{DynamicResource PrototypeCardBorder}">
-        <StackPanel Spacing="6">
-          <TextBlock Text="生命周期（与既有语义一致）" FontWeight="SemiBold" />
-          <TextBlock TextWrapping="Wrap" Text="关闭本窗口只是隐藏到托盘，后台继续运行。" />
-          <TextBlock TextWrapping="Wrap" Text="结束界面请使用托盘菜单“退出托盘（后台继续运行）”，它不会停止已安装的后台服务。" />
-        </StackPanel>
-      </Border>
-
-      <Border CornerRadius="8" Padding="16" BorderThickness="1"
-              Background="{DynamicResource PrototypeCardBackground}"
-              BorderBrush="{DynamicResource PrototypeCardBorder}">
-        <StackPanel Spacing="6">
-          <TextBlock Text="运行信息" FontWeight="SemiBold" />
-          <TextBlock x:Name="runInfo" TextWrapping="Wrap" Opacity="0.75" />
-        </StackPanel>
-      </Border>
-    </StackPanel>
-  </ScrollViewer>
+        <ListBox x:Name="nav" Background="Transparent" BorderThickness="0"
+                 SelectionMode="Single" Margin="8,0"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+      </DockPanel>
+    </Border>
+    <ScrollViewer Grid.Row="0" Grid.Column="1">
+      <ContentControl x:Name="pageHost" Margin="30,28" VerticalAlignment="Top" HorizontalAlignment="Stretch" />
+    </ScrollViewer>
+    <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="14,7"
+            Background="{DynamicResource ShellStripBackground}"
+            BorderBrush="{DynamicResource ShellBorder}"
+            BorderThickness="0,1,0,0">
+      <TextBlock x:Name="statusText" FontSize="12" Opacity="0.85" TextTrimming="CharacterEllipsis" />
+    </Border>
+  </Grid>
 </UserControl>

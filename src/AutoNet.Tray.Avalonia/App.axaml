@@ -6,12 +6,14 @@
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="PrototypeCardBackground">#F5F5F5</SolidColorBrush>
-          <SolidColorBrush x:Key="PrototypeCardBorder">#E2E2E2</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellNavBackground">#F7F7F7</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellStripBackground">#FBFBFB</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellBorder">#E5E5E5</SolidColorBrush>
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="PrototypeCardBackground">#2E2E2E</SolidColorBrush>
-          <SolidColorBrush x:Key="PrototypeCardBorder">#404040</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellNavBackground">#2B2B2B</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellStripBackground">#292929</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellBorder">#3D3D3D</SolidColorBrush>
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>

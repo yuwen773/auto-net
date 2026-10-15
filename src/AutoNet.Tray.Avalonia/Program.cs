@@ -1,21 +1,25 @@
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
-/// Avalonia 兼容原型入口。验证托盘、隐藏启动、关闭隐藏、单实例、独立提权入口与单文件发布契约；
-/// 不读取或修改任何配置，也不控制后台服务。候选版将在本工程上继续完成全部界面迁移。
+/// AutoNet 应用入口（Avalonia 壳）。承载托盘、隐藏启动、关闭隐藏、普通单实例、
+/// 独立提权入口与状态管道；服务生命周期完全独立于本进程。候选包替换既有 WinForms 托盘前，
+/// 启动参数、EXE 身份与安装契约保持不变。
 /// </summary>
 internal static class Program
 {
-    /// <summary>普通托盘单实例互斥名。原型独立命名以免与本机已安装的 WinForms 托盘互斥冲突。</summary>
+    /// <summary>
+    /// 普通托盘单实例互斥名。迁移期间独立命名，避免与本机已安装的 WinForms 托盘
+    /// （Local\AutoNet.Tray）相互阻塞；候选包替换旧实现时（工单 #15）必须改回原名。
+    /// </summary>
     internal const string MutexName = @"Local\AutoNet.Tray.Avalonia";
 
     [STAThread]
     private static int Main(string[] args)
     {
-        PrototypeCommandLine request;
+        StartupRequest request;
         try
         {
-            request = PrototypeCommandLine.Parse(args);
+            request = StartupRequest.Parse(args);
         }
         catch (ArgumentException e)
         {

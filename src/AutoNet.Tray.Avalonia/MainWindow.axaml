@@ -2,8 +2,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:AutoNet.Tray.Avalonia"
         x:Class="AutoNet.Tray.Avalonia.MainWindow"
-        Title="AutoNet（兼容原型）"
-        Width="820" Height="560" MinWidth="560" MinHeight="400"
+        Title="AutoNet · 校园网连接守护"
+        Width="980" Height="640" MinWidth="720" MinHeight="460"
         WindowStartupLocation="CenterScreen">
-  <local:MainView />
+  <local:MainView x:Name="view" />
 </Window>

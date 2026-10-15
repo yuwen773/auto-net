@@ -1,6 +1,6 @@
 namespace AutoNet.Tray.Avalonia;
 
-/// <summary>原型支持的管理员操作。参数名与既有 WinForms 托盘逐字一致，候选版替换时启动契约不变。</summary>
+/// <summary>应用支持的管理员操作。参数名与既有 WinForms 托盘逐字一致，候选包替换时启动契约不变。</summary>
 internal enum ElevatedOperationKind
 {
     Settings,
@@ -10,9 +10,9 @@ internal enum ElevatedOperationKind
 }
 
 /// <summary>解析后的启动请求。只解释参数语义，不接触 UI、互斥或进程。</summary>
-internal sealed record PrototypeCommandLine(bool StartHidden, ElevatedOperationKind? ElevatedOperation)
+internal sealed record StartupRequest(bool StartHidden, ElevatedOperationKind? ElevatedOperation)
 {
-    public static PrototypeCommandLine Parse(string[] args)
+    public static StartupRequest Parse(string[] args)
     {
         if (args.Contains("--toggle")) throw new ArgumentException("请使用明确的开启或关闭自动恢复命令。");
         var enable = args.Contains("--enable-recovery");
@@ -24,7 +24,7 @@ internal sealed record PrototypeCommandLine(bool StartHidden, ElevatedOperationK
         if (disable) operations.Add(ElevatedOperationKind.DisableRecovery);
         if (args.Contains("--unblock-auth")) operations.Add(ElevatedOperationKind.UnblockAuthentication);
         if (operations.Count > 1) throw new ArgumentException("同一次启动只允许一个管理员操作。");
-        return new PrototypeCommandLine(args.Contains("--tray"), operations.Count == 1 ? operations[0] : null);
+        return new StartupRequest(args.Contains("--tray"), operations.Count == 1 ? operations[0] : null);
     }
 }
 

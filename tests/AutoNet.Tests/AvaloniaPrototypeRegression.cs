@@ -11,18 +11,18 @@ internal static class AvaloniaPrototypeRegression
     [
         ("原型验证：命令行路由保持既有启动契约", () => Sync(() =>
         {
-            var hidden = PrototypeCommandLine.Parse(["--tray"]);
+            var hidden = StartupRequest.Parse(["--tray"]);
             Require(hidden.StartHidden && hidden.ElevatedOperation is null, "--tray 应隐藏启动且不是管理员操作");
-            var shown = PrototypeCommandLine.Parse([]);
+            var shown = StartupRequest.Parse([]);
             Require(!shown.StartHidden && shown.ElevatedOperation is null, "无参数应显示窗口");
-            Require(PrototypeCommandLine.Parse(["--tray", "--settings"]).ElevatedOperation == ElevatedOperationKind.Settings,
+            Require(StartupRequest.Parse(["--tray", "--settings"]).ElevatedOperation == ElevatedOperationKind.Settings,
                 "--tray 与提权操作并存时按既有优先级进入提权路径");
 
             // 提权重启必须原样传回同一参数：枚举与命令行逐项往返一致。
             foreach (var operation in Enum.GetValues<ElevatedOperationKind>())
             {
                 var argument = operation.CommandLineArgument();
-                Require(PrototypeCommandLine.Parse([argument]).ElevatedOperation == operation,
+                Require(StartupRequest.Parse([argument]).ElevatedOperation == operation,
                     "参数往返失败：" + argument);
             }
 
@@ -38,13 +38,13 @@ internal static class AvaloniaPrototypeRegression
                 new[] { "--settings", "--unblock-auth" }
             })
             {
-                try { PrototypeCommandLine.Parse(args); throw new Exception("危险或矛盾命令未被拒绝"); }
+                try { StartupRequest.Parse(args); throw new Exception("危险或矛盾命令未被拒绝"); }
                 catch (ArgumentException) { }
             }
         })),
         ("原型验证：提权操作先于单实例互斥且不被拦截", () => Sync(() =>
         {
-            var elevated = PrototypeCommandLine.Parse(["--settings"]);
+            var elevated = StartupRequest.Parse(["--settings"]);
             // 故事 8 的核心：已有普通实例运行时，提权请求也不得被互斥锁拦截。
             var decision = StartupRouter.Decide(elevated, isAdministrator: false, anotherInstanceRunning: true);
             Require(decision.Kind == StartupActionKind.RequestElevation && decision.Operation == ElevatedOperationKind.Settings,
@@ -52,7 +52,7 @@ internal static class AvaloniaPrototypeRegression
             Require(StartupRouter.Decide(elevated, isAdministrator: true, anotherInstanceRunning: true).Kind == StartupActionKind.RunElevatedOperation,
                 "管理员进程应直接执行操作");
 
-            var tray = PrototypeCommandLine.Parse(["--tray"]);
+            var tray = StartupRequest.Parse(["--tray"]);
             Require(StartupRouter.Decide(tray, isAdministrator: false, anotherInstanceRunning: false).Kind == StartupActionKind.RunTray);
             Require(StartupRouter.Decide(tray, isAdministrator: false, anotherInstanceRunning: true).Kind == StartupActionKind.ReportAlreadyRunning,
                 "第二个普通实例应报告已在运行");
@@ -98,6 +98,12 @@ internal static class AvaloniaPrototypeRegression
                 Require(active.Directory == Path.GetFullPath(directory));
                 Require(active.LifecycleReportPath.StartsWith(active.Directory, StringComparison.OrdinalIgnoreCase));
                 Require(active.ThemeLightPath != active.ThemeDarkPath, "明暗主题证据不得写入同一文件");
+
+                Environment.SetEnvironmentVariable("AUTONET_QA_MODE", "shell");
+                var shell = QaEnvironment.FromProcess();
+                Require(shell.Active && shell.Mode == QaMode.Shell);
+                Require(shell.ShellReportPath.StartsWith(shell.Directory, StringComparison.OrdinalIgnoreCase));
+                Require(shell.ShellShotPath("x").StartsWith(shell.Directory, StringComparison.OrdinalIgnoreCase));
             }
             finally
             {
