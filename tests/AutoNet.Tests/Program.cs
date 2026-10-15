@@ -136,6 +136,7 @@ tests = tests.Concat(LogCentreRegression.Cases).ToArray();
 tests = tests.Concat(TrayRegression.Cases).ToArray();
 tests = tests.Concat(UiFreezeRegression.Cases).ToArray();
 tests = tests.Concat(AvaloniaPrototypeRegression.Cases).ToArray();
+tests = tests.Concat(AvaloniaShellRegression.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

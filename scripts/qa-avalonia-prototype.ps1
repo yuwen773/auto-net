@@ -79,7 +79,7 @@ try {
     else {
         try {
             if (Test-Path -LiteralPath $publishDir) { Remove-Item -LiteralPath $publishDir -Recurse -Force }
-            & $sdk publish (Join-Path $repo 'src/AutoNet.Tray.Avalonia/AutoNet.Tray.Avalonia.csproj') -c Release -r win-x64 --self-contained true -o $publishDir -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:AssemblyName=AutoNet.Tray --nologo
+            & $sdk publish (Join-Path $repo 'src/AutoNet.Tray.Avalonia/AutoNet.Tray.Avalonia.csproj') -c Release -r win-x64 --self-contained true -o $publishDir -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:AutoNetPublishIdentity=true --nologo
             Require ($LASTEXITCODE -eq 0) 'dotnet publish 返回非零退出码'
             Require (Test-Path -LiteralPath $exe) '发布产物缺少 AutoNet.Tray.exe'
             $inventory = @(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object { @{ name = $_.Name; length = $_.Length } })
@@ -89,7 +89,7 @@ try {
             $version = (Get-Item -LiteralPath $exe).VersionInfo
             Pass 'publish' @{
                 exe = $exe; files = $inventory; productVersion = $version.ProductVersion
-                assemblyName = 'AutoNet.Tray（-p:AssemblyName 覆盖，保持安装契约身份）'
+                assemblyName = 'AutoNet.Tray（-p:AutoNetPublishIdentity，csproj 内激活，保持安装契约身份）'
                 sdk = (& $sdk --version); commit = (& git -C $repo rev-parse HEAD)
             }
         }
