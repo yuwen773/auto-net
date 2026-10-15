@@ -207,6 +207,8 @@ internal static class AcceptanceRegression
         public void BlockAuthentication(AuthenticationBlock block) => store.BlockAuthentication(block);
         public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) =>
             FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.TryTransitionAuthentication(expected, next);
+        public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next) =>
+            FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.ResolveSubmissionPending(expected, next);
         public DisconnectBudget LoadDisconnectBudget(Settings settings) => store.LoadDisconnectBudget(settings);
         public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget)
         {

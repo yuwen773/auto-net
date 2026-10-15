@@ -20,7 +20,8 @@ public static class LogSummary
         "服务观测开始", "服务观测停止", "发现网络异常", "外网恢复验证通过", "继续追踪历史故障", "故障观测暂停",
         "恢复决策", "恢复动作开始", "恢复动作结束", "认证步骤", "Wi-Fi 请求结果", "安全状态写入开始",
         "安全状态写入完成", "操作异常", "操作恢复正常", "检测轮次中断", "日志证据缺口",
-        "认证提交获准", "认证提交被阻止", "断线前重新核验", "诊断事件", "开始恢复动作", "辅助检测失败",
+        "认证提交获准", "认证提交被阻止", "提交结果复检", "提交结果消解", "提交结果待人工",
+        "断线前重新核验", "诊断事件", "开始恢复动作", "辅助检测失败",
         "取消主动断线", "主动断线请求失败", "重新认证"
     };
 
@@ -58,7 +59,8 @@ public static class LogSummary
         "SessionStarted", "SessionStopped", "IncidentStarted", "IncidentRecovered", "IncidentResumed", "IncidentSuspended",
         "RecoveryDecision", "RecoveryActionStarted", "RecoveryActionCompleted", "PortalStep", "WifiRequestResult",
         "SafetyStateWriteStarted", "SafetyStateWritten", "OperationFailed", "OperationRecovered", "CycleInterrupted",
-        "LoggingGap", "StatusChanged", "SubmissionAuthorized", "SubmissionNotAuthorized", "DisconnectRecheck"
+        "LoggingGap", "StatusChanged", "SubmissionAuthorized", "SubmissionNotAuthorized", "DisconnectRecheck",
+        "SubmissionRechecking", "SubmissionResolved", "SubmissionUnresolved"
     };
     private static readonly HashSet<string> AllowedReasons = new(StringComparer.Ordinal)
     {
@@ -76,7 +78,7 @@ public static class LogSummary
         "MainCycle", "SettingsRead", "SettingsValidation", "DisconnectBudgetRead", "AuthenticationStateRead", "CredentialsRead",
         "WifiRead", "InternetProbe", "PortalInspection", "StatusWrite", "Authentication", "AuthenticationStateWrite", "WifiRequest",
         "DisconnectBudgetWrite", "Auxiliary", "AuxiliaryCancel", "Power", "ServiceLoop", "PreviousLogRead", "ReconnectWifi", "DisconnectWifi", "Authenticate",
-        "DisconnectRecheckInternet", "DisconnectRecheckPortal"
+        "DisconnectRecheckInternet", "DisconnectRecheckPortal", "SubmissionRecheck"
     };
 
     /// <summary>One line per entry, oldest first. Every value is allowlisted or a constant.</summary>

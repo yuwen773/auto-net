@@ -148,7 +148,9 @@ internal sealed class RecoveryJournal(IMonitorEnvironment environment, TimeProvi
         "PortalStep" => "认证步骤", "WifiRequestResult" => "Wi-Fi 请求结果", "SafetyStateWriteStarted" => "安全状态写入开始",
         "SafetyStateWritten" => "安全状态写入完成", "OperationFailed" => "操作异常", "OperationRecovered" => "操作恢复正常",
         "CycleInterrupted" => "检测轮次中断", "LoggingGap" => "日志证据缺口",
-        "SubmissionAuthorized" => "认证提交获准", "SubmissionNotAuthorized" => "认证提交被阻止", "DisconnectRecheck" => "断线前重新核验", _ => "诊断事件"
+        "SubmissionAuthorized" => "认证提交获准", "SubmissionNotAuthorized" => "认证提交被阻止",
+        "SubmissionRechecking" => "提交结果复检", "SubmissionResolved" => "提交结果消解", "SubmissionUnresolved" => "提交结果待人工",
+        "DisconnectRecheck" => "断线前重新核验", _ => "诊断事件"
     };
 
     private void WriteFailed(Exception error)

@@ -70,6 +70,11 @@ builder.Services.AddWindowsService(options => options.ServiceName = "AutoNet");
 builder.Services.Configure<HostOptions>(options => options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost);
 builder.Services.AddSingleton<IMonitorEnvironment, MonitorEnvironment>();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddHostedService<MonitorWorker>();
+// ADR-0001 QA fault injection: with AUTONET_QA_SUBMISSION_LOST=1 the submission request is
+// really sent but its response is treated as lost, for offline regression and live drill of
+// the recheck resolution; the classification and safety rules are untouched.
+builder.Services.AddHostedService(sp => new MonitorWorker(
+    sp.GetRequiredService<IMonitorEnvironment>(), sp.GetRequiredService<TimeProvider>(),
+    qaSubmissionLost: Environment.GetEnvironmentVariable("AUTONET_QA_SUBMISSION_LOST") == "1"));
 await builder.Build().RunAsync();
 return 0;

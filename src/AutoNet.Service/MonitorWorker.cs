@@ -6,7 +6,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace AutoNet.Service;
 
-public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider clock, PortalBudgets? budgets = null) : BackgroundService
+public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider clock, PortalBudgets? budgets = null, bool qaSubmissionLost = false) : BackgroundService
 {
     private readonly RecoveryPolicy policy = new();
     private readonly RecoveryJournal journal = new(environment, clock);
@@ -38,6 +38,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private AuthenticationBlock? authenticationExpected;
     private AuthenticationBlock? authenticationToWrite;
     private DateTimeOffset authenticationRetryUntil;
+    // ADR-0001 recheck schedule: read-only probes about 2s and 6s after the pending state
+    // appeared; the schedule re-arms after a restart.
+    private DateTimeOffset? submissionPendingSince;
+    private int submissionRechecks;
+    private static readonly TimeSpan[] SubmissionRecheckDelays = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(6)];
     private string lastError => journal.LastError;
     private HttpClient? directHttp;
     private string directKey = "";
@@ -125,6 +130,10 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         policy.CredentialsBlocked = block?.BlocksSubmissions == true;
         blockFailure = block?.Failure ?? PortalFailure.None;
         if (block?.State == AuthenticationState.RetryCoolingDown) policy.DeferAuthenticationUntil(authenticationRetryUntil);
+        // ADR-0001: the recheck schedule arms when the durable pending state is first observed
+        // (including after a restart) and is cleared as soon as the state leaves pending.
+        if (block?.State == AuthenticationState.SubmissionPending) submissionPendingSince ??= PolicyNow;
+        else { submissionPendingSince = null; submissionRechecks = 0; }
         var credentials = ReadStep("CredentialsRead", environment.LoadCredentials);
         UpdatePower(settings.Enabled && settings.KeepAwakeOnAc);
         var link = ReadStep("WifiRead", () => environment.ReadWifi(settings));
@@ -155,6 +164,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             }
         }
         else { directHttp?.Dispose(); directHttp = null; directKey = ""; }
+        await RecheckSubmissionAsync(settings, link, ct);
         var observation = new Observation(link.State, direct, portalState);
         var diagnostic = new DiagnosticData
         {
@@ -321,7 +331,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                                 ElapsedMilliseconds = step.ElapsedMilliseconds, Error = step.Error,
                                 HttpStatus = step.HttpStatus, Parameters = step.Evidence
                             });
-                        }, budgets).LoginDetailedAsync(credentials!, ct,
+                        }, budgets, qaSubmissionLost).LoginDetailedAsync(credentials!, ct,
                             review => AuthorizeSubmission(settings, link, ct, review))
                         : new(LoginResult.Unsupported, PortalStage.Submission, PortalFailure.SafetyPersistence);
                     detail = lastAuthentication.SafeSummary;
@@ -362,7 +372,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 : "自动认证因历史安全标记暂停；请先查看诊断和日志，再使用“解除认证暂停”。保存设置不会解除暂停。"
             : "自动认证及主动断线已暂停；" + lastAuthentication.SafeSummary + "；核实后使用“解除认证暂停”。";
         if (policy.CredentialsBlocked && authentication?.State == AuthenticationState.SubmissionPending && blockFailure == PortalFailure.None)
-            detail = "认证提交的持久结果尚未确认，认证及主动断线已暂停；请查看诊断和日志后使用“解除认证暂停”。保存设置或密码不会解除。";
+            detail = "认证提交的持久结果尚未确认，认证及主动断线已暂停；将进行只读复检定性，未证实成功前不会重发凭据。";
         if (policy.CredentialsBlocked && blockFailure == PortalFailure.InteractionRequired && authentication?.Attempts >= RecoveryPolicy.AuthenticationAttemptCap)
             detail = $"本次故障已达到 {RecoveryPolicy.AuthenticationAttemptCap} 次自动认证尝试，认证及主动断线已暂停；请诊断后人工确认，不会无限重试。";
         var state = !settings.Enabled ? "已暂停恢复" : direct ? "校园网在线" : link.OtherProfile ? "已切换其他 Wi-Fi" : policy.CredentialsBlocked ? "需要处理认证" : disconnectResult == WifiRequestStatus.Issued ? "正在重连校园 Wi-Fi" : observation.Condition switch
@@ -396,6 +406,79 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         };
         if (actionEvent is not null) Log(actionEvent, detail, snapshot: status with { LastError = lastError });
         return Publish(status);
+    }
+
+    // ADR-0001 recheck resolution: an unknown submission outcome is classified by read-only
+    // chkstatus probes alone — about 2s and 6s after the pending state appeared, never a new
+    // credential request; the internet probe is recorded as evidence only. LoggedIn resolves to
+    // Accepted (release audit first, then a revision-compared block clear with the attempt count
+    // reset); NeedsLogin is a definitive failure and cools down for the regular retry path;
+    // still-unknown after both probes stays SubmissionPending for manual handling.
+    private async Task RecheckSubmissionAsync(Settings settings, WifiLink link, CancellationToken ct)
+    {
+        if (submissionPendingSince is not { } since || submissionRechecks >= SubmissionRecheckDelays.Length) return;
+        if (PolicyNow < since.Add(SubmissionRecheckDelays[submissionRechecks])) return;
+        // The recheck reads chkstatus through the Wi-Fi adapter; while the link is unusable a
+        // probe would only fail, so the slot is not spent and the probe runs once it returns.
+        if (link.State != WifiState.Ready) return;
+        var ordinal = ++submissionRechecks;
+        journal.Stage = "SubmissionRecheck";
+        if (ordinal == 1) Notify(NotificationCodes.SubmissionRechecking);
+        journal.Write("SubmissionRechecking", $"提交结果未知，开始第 {ordinal} 次只读复检；不发送新凭据请求。", new()
+            { Stage = "SubmissionRecheck", Outcome = "Started", AuthenticationAttempts = authentication?.Attempts ?? 0 });
+        var inspection = await new DrcomPortal(DirectClient(link), new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct);
+        switch (inspection.ObservedState)
+        {
+            case PortalState.LoggedIn:
+                ResolveSubmissionByRecheck(inspection);
+                return;
+            case PortalState.NeedsLogin:
+                var attempts = authentication?.Attempts ?? 0;
+                if (WriteAuthentication(new AuthenticationBlock(PortalFailure.LoginRejected)
+                {
+                    State = AuthenticationState.RetryCoolingDown, Attempts = attempts > 0 ? attempts : 1,
+                    RetryDelaySeconds = RecoveryPolicy.FastRetrySeconds, RetryNotBefore = clock.GetUtcNow().AddSeconds(RecoveryPolicy.FastRetrySeconds)
+                }))
+                {
+                    policy.DeferAuthenticationUntil(authenticationRetryUntil);
+                    journal.Recovered("Authentication");
+                    journal.Write("SubmissionResolved", "复检确认门户未登录；提交未成功，冷却后将按既有退避重新认证。", new()
+                        { Stage = "SubmissionRecheck", Outcome = "Rejected", Authentication = inspection });
+                }
+                return;
+            default:
+                if (submissionRechecks < SubmissionRecheckDelays.Length) return;
+                Notify(NotificationCodes.SubmissionUnresolved);
+                journal.Write("SubmissionUnresolved", "两次只读复检均无法定性；保持提交结果未知状态，等待人工处理。",
+                    new() { Stage = "SubmissionRecheck", Authentication = inspection });
+                return;
+        }
+    }
+
+    private void ResolveSubmissionByRecheck(PortalAttempt inspection)
+    {
+        var next = new AuthenticationBlock { State = AuthenticationState.Ready, Revision = Guid.NewGuid() };
+        bool cleared;
+        try { cleared = environment.TryResolveSubmissionPending(authentication, next); }
+        catch (Exception e) when (IsStorageFailure(e))
+        {
+            journal.Fault("SubmissionRecheck", "复检确认门户已登录，但解除审计写入失败；保持提交结果未知状态。", e);
+            return;
+        }
+        if (!cleared)
+        {
+            journal.Fault("SubmissionRecheck", "复检确认门户已登录，但认证安全状态已变化；保持提交结果未知状态。");
+            return;
+        }
+        authentication = next;
+        authenticationBlockPending = false;
+        policy.CredentialsBlocked = false;
+        blockFailure = PortalFailure.None;
+        authenticationRetryUntil = DateTimeOffset.MinValue;
+        authenticationAcceptedAt = clock.GetUtcNow();
+        journal.Recovered("Authentication");
+        journal.Write("SubmissionResolved", "复检确认门户已登录；提交结果消解为已接受，认证阻断已清除并追加解除审计。", new()
+            { Stage = "SubmissionRecheck", Outcome = "Accepted", Authentication = inspection });
     }
 
     private HttpClient DirectClient(WifiLink link)
@@ -629,9 +712,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             next = new() { State = AuthenticationState.Ready, Attempts = attempts };
         else if (attempt.CredentialRequestStarted && !attempt.RetryPermitted)
         {
-            // SubmissionPending was flushed before sending. An ambiguous response never grants a retry.
+            // SubmissionPending was flushed before sending. An ambiguous response never grants a
+            // retry; from here the read-only rechecks (ADR-0001) classify the outcome instead.
             policy.CredentialsBlocked = true;
-            journal.Fault("Authentication", "认证提交结果未确认，保留持久安全暂停；请诊断后人工解除。");
+            submissionPendingSince ??= PolicyNow;
+            journal.Fault("Authentication", "认证提交结果未确认，保留持久安全暂停；稍后进行只读复检定性。");
             return;
         }
         else if (attempts >= 3) next = new(PortalFailure.InteractionRequired) { Attempts = 3 };

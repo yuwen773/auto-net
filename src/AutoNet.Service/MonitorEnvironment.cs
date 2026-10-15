@@ -13,6 +13,9 @@ public interface IMonitorEnvironment
     AuthenticationRecordKind AuthenticationRecordSource => AuthenticationRecordKind.NotRead;
     void BlockAuthentication(AuthenticationBlock block);
     bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next);
+    // ADR-0001 recheck resolution: the release audit is appended before the block clears; an
+    // audit write failure surfaces as an exception and the caller must not clear the block.
+    bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next);
     DisconnectBudget LoadDisconnectBudget(Settings settings);
     void SaveDisconnectBudget(Settings settings, DisconnectBudget budget);
     bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next);
@@ -39,6 +42,7 @@ internal sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
     public AuthenticationRecordKind AuthenticationRecordSource => safety.LastAuthenticationRecordKind;
     public void BlockAuthentication(AuthenticationBlock block) => safety.BlockAuthentication(block);
     public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) => safety.TryTransitionAuthentication(expected, next);
+    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next) => safety.ResolveSubmissionPending(expected, next);
     public DisconnectBudget LoadDisconnectBudget(Settings settings) => safety.LoadDisconnectBudget(settings);
     public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget) => safety.SaveDisconnectBudget(settings, budget);
     public bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next) => safety.TryTransitionDisconnectBudget(settings, expected, next);

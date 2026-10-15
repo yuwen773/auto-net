@@ -110,21 +110,43 @@ public sealed class SafetyStateStore(string directory)
         return true;
     }
 
+    // ADR-0001 recheck resolution: the same audit discipline as a manual release — the audit
+    // line lands first and a failed audit write keeps the blocking state untouched. The clear
+    // itself is a revision-compared transition, returning false on a concurrent change.
+    public bool ResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next)
+    {
+        using var gate = AuthenticationGate();
+        var previous = ReadAuthenticationBlock();
+        if (previous != expected) return false;
+        AppendReleaseAudit("复检消解", previous!);
+        Storage.AtomicWrite(AuthBlockPath, JsonSerializer.Serialize(next, Storage.Json));
+        return true;
+    }
+
     public void ClearAuthenticationBlock(AuthenticationBlock? expected = null)
     {
         using var gate = AuthenticationGate();
         var previous = ReadAuthenticationBlock();
         if (expected is not null && previous != expected) throw new InvalidOperationException("认证安全状态已变化，请重新诊断后确认。");
         if (previous is null) return;
+        AppendReleaseAudit("人工确认解除认证暂停", previous);
+        File.Delete(AuthBlockPath);
+    }
+
+    // The audit line must stay human-readable without a JSON enum converter, so both release
+    // paths record the enum names explicitly. Written before the block is cleared: an audit
+    // failure throws and leaves the blocking state untouched.
+    private void AppendReleaseAudit(string action, AuthenticationBlock previous)
+    {
         var audit = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
-            At = DateTimeOffset.UtcNow, Action = "人工确认解除认证暂停", previous.State, previous.Failure
+            At = DateTimeOffset.UtcNow, Action = action,
+            State = previous.State.ToString(), Failure = previous.Failure.ToString()
         }) + Environment.NewLine);
         using (var file = new FileStream(Path.Combine(directory, "auth-release-audit.jsonl"), FileMode.Append, FileAccess.Write, FileShare.Read))
         {
             file.Write(audit); file.Flush(true);
         }
-        File.Delete(AuthBlockPath);
     }
 
     private FileStream AuthenticationGate() => new(Path.Combine(directory, "auth-state.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);

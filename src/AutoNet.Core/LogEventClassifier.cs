@@ -15,7 +15,8 @@ public static class LogEventClassifier
                     or "CycleInterrupted" or "LoggingGap" or "StatusChanged" => LogEventCategory.State,
                 "RecoveryDecision" or "RecoveryActionStarted" or "RecoveryActionCompleted" or "WifiRequestResult"
                     or "SafetyStateWriteStarted" or "SafetyStateWritten" or "DisconnectRecheck" => LogEventCategory.Recovery,
-                "PortalStep" or "SubmissionAuthorized" or "SubmissionNotAuthorized" => LogEventCategory.Authentication,
+                "PortalStep" or "SubmissionAuthorized" or "SubmissionNotAuthorized"
+                    or "SubmissionRechecking" or "SubmissionResolved" or "SubmissionUnresolved" => LogEventCategory.Authentication,
                 _ => LogEventCategory.Other
             };
 

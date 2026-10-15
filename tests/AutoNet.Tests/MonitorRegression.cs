@@ -317,6 +317,111 @@ internal static class MonitorRegression
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { cancelled = true; }
             Require(cancelled && !fixture.Http.Requests.Any(u => u.Query.Contains("user_password")));
             Require(fixture.Logs.Any(e => e.EventCode == "CycleInterrupted"));
+        }),
+        ("复检消解：提交未知后只读复检确认登录即消解清阻断并记审计", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.PortalResult = "0";
+            using var worker = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
+            var pending = await worker.RunOnceAsync(default);
+            Require(pending.CredentialsBlocked && pending.CredentialRequestStarted);
+            Require(fixture.Authentication?.State == AuthenticationState.SubmissionPending);
+            Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1);
+            fixture.Http.PortalResult = "1";
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var resolved = await worker.RunOnceAsync(default);
+            Require(!resolved.CredentialsBlocked && resolved.AuthenticationAcceptedAt is not null);
+            Require(fixture.Authentication is { State: AuthenticationState.Ready, Attempts: 0 });
+            Require(fixture.ResolveCalls == 1);
+            Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1);
+            Require(fixture.Logs.Any(e => e.EventCode == "SubmissionRechecking"));
+            Require(fixture.Logs.Any(e => e.EventCode == "SubmissionResolved" && e.Diagnostics?.Outcome == "Accepted"));
+        }),
+        ("复检消解：复检明确未登录转冷却重试且不记解除审计", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.PortalResult = "0";
+            using var worker = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
+            await worker.RunOnceAsync(default);
+            Require(fixture.Authentication?.State == AuthenticationState.SubmissionPending);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var rejected = await worker.RunOnceAsync(default);
+            Require(fixture.Authentication is { State: AuthenticationState.RetryCoolingDown, Attempts: 1 });
+            Require(!rejected.CredentialsBlocked && fixture.ResolveCalls == 0);
+            Require(fixture.Logs.Any(e => e.EventCode == "SubmissionResolved" && e.Diagnostics?.Outcome == "Rejected"));
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            await worker.RunOnceAsync(default);
+            Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 2);
+        }),
+        ("复检消解：两次复检仍未知保持人工并通知，重启后重新复检可消解", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.PortalResult = "0";
+            using var worker = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
+            await worker.RunOnceAsync(default);
+            fixture.Http.PortalResult = "-1";
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var first = await worker.RunOnceAsync(default);
+            Require(first.CredentialsBlocked && first.Notification is { Code: NotificationCodes.SubmissionRechecking });
+            fixture.Clock.Advance(TimeSpan.FromSeconds(4));
+            var second = await worker.RunOnceAsync(default);
+            Require(second.CredentialsBlocked && second.Notification is { Code: NotificationCodes.SubmissionUnresolved });
+            Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1 && fixture.ResolveCalls == 0);
+            fixture.Clock.Advance(TimeSpan.FromHours(1));
+            var later = await worker.RunOnceAsync(default);
+            Require(later.CredentialsBlocked && later.Notification == second.Notification);
+            fixture.Http.PortalResult = "1";
+            using var restarted = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
+            var armed = await restarted.RunOnceAsync(default);
+            Require(armed.CredentialsBlocked && fixture.ResolveCalls == 0);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var resolved = await restarted.RunOnceAsync(default);
+            Require(!resolved.CredentialsBlocked && fixture.ResolveCalls == 1);
+        }),
+        ("复检消解：复检时 Wi-Fi 未就绪不消耗名额，恢复后立即复检", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.PortalResult = "0";
+            using var worker = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
+            await worker.RunOnceAsync(default);
+            var chkstatusCalls = fixture.Http.Requests.Count(u => u.AbsolutePath == "/drcom/chkstatus");
+            fixture.Link = new(false, null, null, 7, []);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var offline = await worker.RunOnceAsync(default);
+            Require(offline.CredentialsBlocked && fixture.ResolveCalls == 0);
+            // Wi-Fi 未就绪时复检不发起任何请求，直接按未知处理并推进调度。
+            Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/drcom/chkstatus") == chkstatusCalls);
+            fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
+            fixture.Http.PortalResult = "1";
+            fixture.Clock.Advance(TimeSpan.FromSeconds(4));
+            var resolved = await worker.RunOnceAsync(default);
+            Require(!resolved.CredentialsBlocked && fixture.ResolveCalls == 1);
+        }),
+        ("复检消解：解除审计写入失败保持提交未知不清除阻断", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.PortalResult = "0";
+            using var worker = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
+            await worker.RunOnceAsync(default);
+            fixture.Http.PortalResult = "1";
+            fixture.FailResolve = true;
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var failed = await worker.RunOnceAsync(default);
+            Require(failed.CredentialsBlocked && fixture.Authentication?.State == AuthenticationState.SubmissionPending);
+            Require(fixture.Logs.Any(e => e.EventCode == "OperationFailed" && e.Diagnostics?.Stage == "SubmissionRecheck"));
+        }),
+        ("复检消解：外网恢复不作为消解依据，chkstatus 是唯一权威", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.PortalResult = "0";
+            using var worker = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
+            await worker.RunOnceAsync(default);
+            fixture.Http.Online = true;
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var online = await worker.RunOnceAsync(default);
+            Require(online.Direct == "外网可达" && fixture.ResolveCalls == 0);
+            Require(fixture.Authentication is { State: AuthenticationState.RetryCoolingDown, Attempts: 1 });
+            Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1);
         })
     ];
 
@@ -379,6 +484,14 @@ internal sealed class MonitorFixture : IMonitorEnvironment
         if (LoadAuthenticationBlock() != expected) return false;
         BlockAuthentication(next);
         return true;
+    }
+    public int ResolveCalls { get; private set; }
+    public bool FailResolve { get; set; }
+    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next)
+    {
+        ResolveCalls++;
+        if (FailResolve) throw new IOException("fixture-secret-url");
+        return TryTransitionAuthentication(expected, next);
     }
     public DisconnectBudget LoadDisconnectBudget(Settings settings) => Budgets.GetValueOrDefault(settings.InterfaceId + "/" + settings.WifiProfile) ?? new();
     public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget)

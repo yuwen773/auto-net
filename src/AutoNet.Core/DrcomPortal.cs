@@ -19,7 +19,7 @@ public sealed record PortalBudgets(TimeSpan Preflight, TimeSpan Review, TimeSpan
         new(TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(3));
 }
 
-public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>? trace = null, PortalBudgets? budgets = null)
+public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>? trace = null, PortalBudgets? budgets = null, bool qaSubmissionLost = false)
 {
     private PortalEvidence evidence = new();
     private PortalStage responseStage;
@@ -340,6 +340,10 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
             };
             submitted = true;
             using var response = await GetAsync(loginUri.Uri, PortalStage.Submission, submission.Token);
+            // QA fault injection (ADR-0001): the request really left the machine; discarding the
+            // response recreates "sent but lost" so the read-only recheck path can be exercised
+            // offline and induced on a live machine without touching the safety classification.
+            if (qaSubmissionLost) throw new IOException("QA 故障注入：提交请求已发出，模拟响应丢失。");
             if (response.StatusCode != HttpStatusCode.OK)
                 return Outcome(HttpFailureResult(response.StatusCode), PortalFailure.HttpStatus, (int)response.StatusCode);
             using var json = ParseJsonp(await ReadResponseAsync(response, submission.Token));

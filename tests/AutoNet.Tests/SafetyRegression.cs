@@ -253,6 +253,34 @@ internal static class SafetyRegression
                 Directory.Delete(target, true);
             }
             return Task.CompletedTask;
+        }),
+        ("安全存储：复检消解比较修订先记审计后清阻断，审计失败不清除", () =>
+        {
+            AcceptanceRegression.WithStore((store, directory) =>
+            {
+                var pending = new AuthenticationBlock { State = AuthenticationState.SubmissionPending, Attempts = 1, Revision = Guid.NewGuid() };
+                Require(store.TryTransitionAuthentication(null, pending));
+                var ready = new AuthenticationBlock { State = AuthenticationState.Ready, Revision = Guid.NewGuid() };
+                // 修订比较：期望状态不匹配时既不清除也不留审计。
+                Require(!store.ResolveSubmissionPending(new AuthenticationBlock(PortalFailure.BindingRejected), ready));
+                Require(store.LoadAuthenticationBlock() == pending);
+                Require(!File.Exists(Path.Combine(directory, "auth-release-audit.jsonl")));
+                Require(store.ResolveSubmissionPending(pending, ready));
+                Require(store.LoadAuthenticationBlock() is { State: AuthenticationState.Ready, Attempts: 0 });
+                // 审计 JSON 默认转义非 ASCII；按解析后的字段断言，而不是匹配原始文本。
+                using var audit = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "auth-release-audit.jsonl")));
+                Require(audit.RootElement.GetProperty("Action").GetString() == "复检消解");
+                Require(audit.RootElement.GetProperty("State").GetString() == "SubmissionPending");
+                var blocked = new AuthenticationBlock { State = AuthenticationState.SubmissionPending, Attempts = 1, Revision = Guid.NewGuid() };
+                store.BlockAuthentication(blocked);
+                using (var locked = new FileStream(Path.Combine(directory, "auth-release-audit.jsonl"), FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    try { store.ResolveSubmissionPending(blocked, ready); throw new Exception("审计写入失败不得消解"); }
+                    catch (IOException) { }
+                }
+                Require(store.LoadAuthenticationBlock() == blocked);
+            });
+            return Task.CompletedTask;
         })
     ];
 
