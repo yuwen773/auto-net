@@ -2,6 +2,14 @@
 
 日期：2026-10-11（Asia/Shanghai）。已完成本次覆盖升级；此前一次真实 Wi-Fi 断连恢复记录保留在下方历史章节，真实认证失效、重启和长期稳定性仍待验收。
 
+## Avalonia 兼容原型（2026-10-15，工程 + 真机受控证据，未安装未部署）
+
+- 对应迁移工单 #2 的兼容关卡，完整结论与证据清单见 [UI-COMPAT-PROTOTYPE.md](UI-COMPAT-PROTOTYPE.md)。原型位于 `src/AutoNet.Tray.Avalonia/`，QA 入口 `scripts/qa-avalonia-prototype.ps1`。
+- 已验证（提交 `26eedd3`，Avalonia 12.1.4 + 官方 Fluent）：自包含 win-x64 单文件发布（`AutoNet.Tray.exe`，46.8 MB）且单文件复制到空目录即可运行；隐藏启动（`--tray`）、关闭隐藏、退出不停服务的生命周期四步状态；普通实例单实例互斥（第二个实例退出码 3）与独立提权入口不被互斥锁拦截（本机会话为管理员，走“已提权直接执行”分支；非管理员 `runas` 分支由单元回归覆盖）；明暗主题真实窗口渲染（非离屏）；安装器复制/回滚文件布局镜像通过（候选与旧版字节级校验）。全过程服务与已安装托盘状态/进程未变。
+- 未执行（真实安装验收层，见本文「安装、权限与回滚验收」）：服务停止/启动、ACL、HKLM 自启、快捷方式、真实覆盖安装与回退；真实 UAC 弹窗交互与托盘菜单点击的视觉确认也待人工。
+- 已知框架缺陷（不阻断迁移）：Avalonia 12.1.4 的 `RenderTargetBitmap` 离屏渲染会破坏部分中文长文本（真实窗口 GPU/软件渲染均正常），后续视觉证据统一使用真实窗口捕获。
+- 既有回归的机器相关失败（与本轮工作无关，另见原型 go/no-go 第 5 条）：`诊断包：缺少设置…` 因 `Storage.LoadSettings()` 回退读到本机真实配置而确定性失败；`托盘加固：五万次…` 在本机 60 秒预算内超时并干扰后续 UI 用例。两项在 baseline `79ccc02` 同样复现，待单独立项修复。
+
 ## 探测语义、门户改版检测与浏览器兜底标志（2026-10-15，仅离线验证，未部署）
 
 - 按「UI 单独开 PR、当前先不管 UI」的边界，本轮只做 Core/Service 管路，托盘消费端留给 UI PR。契约见 [ADR-0005](adr/0005-portal-layout-detection.md)、[ADR-0006](adr/0006-probe-semantics.md) 与 [ADR-0002](adr/0002-notification-and-fallback-plumbing.md)，术语见根目录 [CONTEXT.md](../CONTEXT.md)。

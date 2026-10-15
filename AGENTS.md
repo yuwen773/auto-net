@@ -5,10 +5,11 @@
 - `src/AutoNet.Core/`: recovery policy, Dr.COM authentication, Wi-Fi access, network probes, and credential storage.
 - `src/AutoNet.Service/`: Windows service, monitoring loop, and AC power wake requests.
 - `src/AutoNet.Tray/`: WinForms status window, settings, and tray controls.
+- `src/AutoNet.Tray.Avalonia/`: Avalonia compatibility prototype for the UI migration (tray, lifecycle, single instance, elevation routing, themes); replaced the WinForms tray only at the candidate-package stage.
 - `tests/AutoNet.Tests/`: executable regression suite and simulated HTTP responses.
-- `scripts/`: build, packaging, installation, and uninstallation.
+- `scripts/`: build, packaging, installation, uninstallation, and QA evidence (see `scripts/qa-avalonia-prototype.ps1`).
 - `CONTEXT.md`: domain glossary shared by code, logs, and docs. `docs/adr/`: architecture decision records.
-- `docs/VALIDATION.md`: verified behavior and remaining manual acceptance checks.
+- `docs/VALIDATION.md`: verified behavior and remaining manual acceptance checks. `docs/UI-COMPAT-PROTOTYPE.md`: the Avalonia compatibility go/no-go record.
 
 Keep generated binaries in ignored `artifacts/` and local SDK tooling in ignored `.tools/`. Application branding lives in `assets/AutoNet.png` and `assets/AutoNet.ico`; network-state glyphs are generated in code.
 
