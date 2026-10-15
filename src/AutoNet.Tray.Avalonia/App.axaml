@@ -1,0 +1,22 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AutoNet.Tray.Avalonia.App"
+             RequestedThemeVariant="Default">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="PrototypeCardBackground">#F5F5F5</SolidColorBrush>
+          <SolidColorBrush x:Key="PrototypeCardBorder">#E2E2E2</SolidColorBrush>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="PrototypeCardBackground">#2E2E2E</SolidColorBrush>
+          <SolidColorBrush x:Key="PrototypeCardBorder">#404040</SolidColorBrush>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+</Application>

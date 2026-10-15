@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <ApplicationIcon>../../assets/AutoNet.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AutoNet.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../assets/AutoNet.ico" LogicalName="AutoNet.Assets.Icon.ico" />
+  </ItemGroup>
+</Project>

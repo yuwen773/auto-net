@@ -1,0 +1,46 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AutoNet.Tray.Avalonia.MainView">
+  <ScrollViewer>
+    <StackPanel Margin="28" Spacing="16">
+      <StackPanel Spacing="6">
+        <TextBlock Text="AutoNet · Avalonia 兼容原型" FontSize="26" FontWeight="SemiBold" />
+        <TextBlock TextWrapping="Wrap" Opacity="0.75"
+                   Text="此原型只验证框架兼容性：托盘、隐藏启动、关闭隐藏、单实例、独立提权入口、明暗主题与自包含单文件发布。它不读取或修改任何配置，也不控制后台服务。" />
+      </StackPanel>
+
+      <Border CornerRadius="8" Padding="16" BorderThickness="1"
+              Background="{DynamicResource PrototypeCardBackground}"
+              BorderBrush="{DynamicResource PrototypeCardBorder}">
+        <StackPanel Spacing="10">
+          <TextBlock Text="外观主题" FontWeight="SemiBold" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button x:Name="themeSystem" Content="跟随系统" />
+            <Button x:Name="themeLight" Content="浅色" />
+            <Button x:Name="themeDark" Content="深色" />
+          </StackPanel>
+          <TextBlock x:Name="themeCurrent" Opacity="0.75" />
+        </StackPanel>
+      </Border>
+
+      <Border CornerRadius="8" Padding="16" BorderThickness="1"
+              Background="{DynamicResource PrototypeCardBackground}"
+              BorderBrush="{DynamicResource PrototypeCardBorder}">
+        <StackPanel Spacing="6">
+          <TextBlock Text="生命周期（与既有语义一致）" FontWeight="SemiBold" />
+          <TextBlock TextWrapping="Wrap" Text="关闭本窗口只是隐藏到托盘，后台继续运行。" />
+          <TextBlock TextWrapping="Wrap" Text="结束界面请使用托盘菜单“退出托盘（后台继续运行）”，它不会停止已安装的后台服务。" />
+        </StackPanel>
+      </Border>
+
+      <Border CornerRadius="8" Padding="16" BorderThickness="1"
+              Background="{DynamicResource PrototypeCardBackground}"
+              BorderBrush="{DynamicResource PrototypeCardBorder}">
+        <StackPanel Spacing="6">
+          <TextBlock Text="运行信息" FontWeight="SemiBold" />
+          <TextBlock x:Name="runInfo" TextWrapping="Wrap" Opacity="0.75" />
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>
