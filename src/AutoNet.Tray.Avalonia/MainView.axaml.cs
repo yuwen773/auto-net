@@ -11,11 +11,15 @@ namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 壳视图：左侧四页导航、页面宿主与底部状态栏。只负责把 <see cref="ShellController"/>
-/// 的选择、内容与状态渲染出来；导航与读取语义都在控制器一侧，便于受控测试。
+/// 的选择、内容与状态渲染出来；导航与读取语义都在控制器一侧，动作语义在
+/// <see cref="OverviewActions"/> 一侧，便于受控测试。
 /// </summary>
 public partial class MainView : UserControl
 {
     private ShellController? controller;
+    private OverviewActions? actions;
+    private OverviewContent? overviewShown;
+    private bool technicalExpanded;
     private bool syncingSelection;
 
     public MainView()
@@ -29,13 +33,14 @@ public partial class MainView : UserControl
         };
     }
 
-    /// <summary>接入壳控制器并建立渲染通路。应用内只会接入一次。</summary>
-    internal void Attach(ShellController shell)
+    /// <summary>接入壳控制器与概览动作并建立渲染通路。应用内只会接入一次。</summary>
+    internal void Attach(ShellController shell, OverviewActions? overviewActions = null)
     {
         controller = shell;
+        actions = overviewActions;
         BuildNavigation();
         shell.SelectionChanged += page => Dispatcher.UIThread.Post(() => SyncSelection(page));
-        shell.ContentChanged += scaffold => Dispatcher.UIThread.Post(() => RenderContent(scaffold));
+        shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
         shell.StatusChanged += reading => Dispatcher.UIThread.Post(() => RenderStatus(reading));
         SyncSelection(shell.SelectedPage);
         if (shell.Content is { } content) RenderContent(content);
@@ -51,6 +56,15 @@ public partial class MainView : UserControl
         catch (Exception)
         {
             // 导航路径上的异常不逃逸到 UI 事件循环；页面脚手架由控制器降级呈现。
+        }
+    }
+
+    /// <summary>动作点击共用的安全包装：概览动作自身失败关闭，异常也不逃逸到 UI 事件循环。</summary>
+    private async void RunActionSafelyAsync(Func<Task<bool>> operation)
+    {
+        try { await operation(); }
+        catch (Exception)
+        {
         }
     }
 
@@ -100,7 +114,29 @@ public partial class MainView : UserControl
         }
     }
 
-    private void RenderContent(PageScaffold scaffold)
+    private void RenderContent(PageContent content)
+    {
+        switch (content)
+        {
+            case OverviewContent overview:
+                // 指纹未变化时不重建：轮询刷新不打断技术详情展开状态与键盘焦点。
+                if (overviewShown is { } shown && shown.ContentKey == overview.ContentKey) return;
+                overviewShown = overview;
+                pageHost.Content = OverviewView.Build(
+                    overview,
+                    technicalExpanded,
+                    expanded => technicalExpanded = expanded,
+                    intent => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestRecoveryChangeAsync(intent)),
+                    () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestUnblockAsync()));
+                break;
+            case PageScaffold scaffold:
+                overviewShown = null;
+                pageHost.Content = ScaffoldView(scaffold);
+                break;
+        }
+    }
+
+    private static Control ScaffoldView(PageScaffold scaffold)
     {
         var title = new TextBlock { Text = scaffold.Title, FontSize = 26, FontWeight = FontWeight.SemiBold };
         var description = new TextBlock
@@ -118,7 +154,7 @@ public partial class MainView : UserControl
             FontSize = 12,
             Margin = new Thickness(0, 12, 0, 0)
         };
-        pageHost.Content = new StackPanel
+        return new StackPanel
         {
             Spacing = 10,
             MaxWidth = 640,

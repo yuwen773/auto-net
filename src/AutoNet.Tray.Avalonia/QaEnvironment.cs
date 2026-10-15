@@ -10,7 +10,9 @@ internal enum QaMode
     Hold,
     ThemeRender,
     /// <summary>壳级 QA：导航截图与状态栏降级证据（scripts/qa-avalonia-shell.ps1 使用）。</summary>
-    Shell
+    Shell,
+    /// <summary>概览页 QA：状态矩阵投影与动作意图记录（scripts/qa-avalonia-overview.ps1 使用）。</summary>
+    Overview
 }
 
 /// <summary>
@@ -29,6 +31,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "hold" => QaMode.Hold,
             "theme" => QaMode.ThemeRender,
             "shell" => QaMode.Shell,
+            "overview" => QaMode.Overview,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -43,8 +46,11 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string ThemeLightPath => Path.Combine(Directory, "theme-light.png");
     public string ThemeDarkPath => Path.Combine(Directory, "theme-dark.png");
     public string ShellReportPath => Path.Combine(Directory, "shell.json");
+    public string OverviewReportPath => Path.Combine(Directory, "overview.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string OverviewShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -87,4 +93,32 @@ internal sealed record ShellReport(
     string MutexName,
     string ThemeVariant,
     List<ShellStep> Steps,
+    string? Error = null);
+
+/// <summary>概览页一步证据：从真实窗口对应的 <see cref="OverviewContent"/> 投影逐项记录（用户实际看到的内容）。</summary>
+internal sealed record QaOverviewStep(
+    string State,
+    bool Trusted,
+    string Title,
+    bool AuthVisible,
+    string AuthTitle,
+    string RecoveryLabel,
+    bool RecoveryEnabled,
+    bool UnblockVisible,
+    bool UnblockEnabled,
+    string? File);
+
+/// <summary>一次动作驱动：上下文、明确意图、是否发起、实际记录到的命令。</summary>
+internal sealed record QaOverviewAction(string Context, string Intent, bool Launched, string? Command);
+
+internal sealed record QaOverviewReport(
+    string Mode,
+    bool Fixture,
+    string ProcessPath,
+    int ProcessId,
+    bool Administrator,
+    string MutexName,
+    string ThemeVariant,
+    List<QaOverviewStep> Steps,
+    List<QaOverviewAction> Actions,
     string? Error = null);

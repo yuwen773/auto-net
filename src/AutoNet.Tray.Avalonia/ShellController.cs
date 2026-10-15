@@ -2,15 +2,16 @@ namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 壳控制器：把导航选择、页面内容代次守卫与状态管道接到一起；不依赖 UI 类型，便于受控测试。
+/// 概览页内容按状态投影同步重建（#4）；其余页面经 <see cref="PageLoadCoordinator"/> 异步加载（后续工单）。
 /// 事件在触发线程上回调（状态事件来自读取线程，UI 侧负责调度到界面线程）。
 /// </summary>
 internal sealed class ShellController : IDisposable
 {
     private readonly StatusPipe pipe;
     private readonly PageLoadCoordinator coordinator = new();
-    private readonly Func<ShellPage, CancellationToken, Task<PageScaffold>> load;
+    private readonly Func<ShellPage, CancellationToken, Task<PageContent>> load;
 
-    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageScaffold>>? load = null)
+    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageContent>>? load = null)
     {
         this.pipe = pipe;
         this.load = load ?? ShellContent.LoadAsync;
@@ -21,13 +22,13 @@ internal sealed class ShellController : IDisposable
     public ShellPage SelectedPage { get; private set; } = ShellPages.Default;
 
     /// <summary>最近一次已应用的页面内容。</summary>
-    public PageScaffold? Content { get; private set; }
+    public PageContent? Content { get; private set; }
 
     /// <summary>最近一次已应用的状态读取（含可信度与状态栏文本）。</summary>
     public StatusReading? Status => pipe.Current;
 
     public event Action<ShellPage>? SelectionChanged;
-    public event Action<PageScaffold>? ContentChanged;
+    public event Action<PageContent>? ContentChanged;
     public event Action<StatusReading>? StatusChanged;
 
     /// <summary>启动：开始状态轮询并选中默认页。</summary>
@@ -42,6 +43,13 @@ internal sealed class ShellController : IDisposable
     {
         SelectedPage = page;
         SelectionChanged?.Invoke(page);
+        if (page == ShellPage.Overview)
+        {
+            // 概览内容由当前状态投影而来：纯函数、无 I/O，同步应用，无需代次守卫。
+            ApplyOverview(pipe.Current);
+            return Task.CompletedTask;
+        }
+
         return coordinator.NavigateAsync(page, load, ApplyContent, ApplyFailure);
     }
 
@@ -49,12 +57,18 @@ internal sealed class ShellController : IDisposable
     public Task RefreshStatusAsync(CancellationToken cancellationToken = default) =>
         pipe.RefreshAsync(cancellationToken);
 
-    private void ApplyContent(ShellPage page, PageScaffold scaffold)
+    private void ApplyOverview(StatusReading? reading)
+    {
+        Content = OverviewModel.From(reading);
+        ContentChanged?.Invoke(Content);
+    }
+
+    private void ApplyContent(ShellPage page, PageContent content)
     {
         // 双保险：守卫之外的当前选择核对，防止任何路径把旧页面内容写进新页面。
         if (SelectedPage != page) return;
-        Content = scaffold;
-        ContentChanged?.Invoke(scaffold);
+        Content = content;
+        ContentChanged?.Invoke(content);
     }
 
     private void ApplyFailure(ShellPage page, Exception exception)
@@ -67,7 +81,12 @@ internal sealed class ShellController : IDisposable
         ContentChanged?.Invoke(Content);
     }
 
-    private void OnStatusUpdated(StatusReading reading) => StatusChanged?.Invoke(reading);
+    private void OnStatusUpdated(StatusReading reading)
+    {
+        StatusChanged?.Invoke(reading);
+        // 概览页跟随状态更新重建；其他页面不被状态更新改写。
+        if (SelectedPage == ShellPage.Overview) ApplyOverview(reading);
+    }
 
     public void Dispose()
     {

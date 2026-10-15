@@ -8,9 +8,9 @@ public partial class MainWindow : Window
     private readonly ShellController? controller;
 
     /// <summary>供 XAML 资源运行时加载器使用的无参构造；应用内始终注入托盘会话与壳控制器。</summary>
-    public MainWindow() : this(new TraySession(), null) { }
+    public MainWindow() : this(new TraySession(), null, null) { }
 
-    internal MainWindow(TraySession session, ShellController? controller)
+    internal MainWindow(TraySession session, ShellController? controller, OverviewActions? actions)
     {
         this.session = session;
         this.controller = controller;
@@ -18,7 +18,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         if (controller is not null)
         {
-            view.Attach(controller);
+            view.Attach(controller, actions);
             // 窗口每次激活时刷新一次状态；定期轮询仍由状态管道负责。
             Activated += (_, _) => _ = RefreshStatusSafelyAsync();
         }

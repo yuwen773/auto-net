@@ -174,7 +174,7 @@ public static class NetworkDisplayMap
         NetworkPrimaryState.ProbeFailed =>
             ("检测异常", "本轮检测出现异常，AutoNet 会自动重试。", "若持续出现，请查看日志了解原因。"),
         NetworkPrimaryState.RecoveryPaused =>
-            ("自动恢复已暂停", "自动恢复已关闭，AutoNet 仍会检测网络但不会重连或认证。", "如需恢复自动处理，请在设置中重新开启。"),
+            ("自动恢复已暂停", "自动恢复已关闭，AutoNet 仍会检测网络但不会重连或认证。", "如需恢复自动处理，请重新开启自动恢复。"),
         _ =>
             ("未识别的服务状态", "后台服务返回了当前版本无法识别的状态，界面不会把它当作正常。", "请查看日志，并向维护者报告此状态。")
     };

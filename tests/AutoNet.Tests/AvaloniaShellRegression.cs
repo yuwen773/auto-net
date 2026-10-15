@@ -4,8 +4,9 @@ using AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 应用壳回归（迁移工单 #3）：导航模型、页面代次守卫（T02/故事 16）、状态管道的
-/// 完整性/时间有效性/安全降级矩阵（T02/故事 15）与托盘入口语义。
-/// 受控 UI 证据由 scripts/qa-avalonia-shell.ps1（shell 模式截图）提供。
+/// 完整性/时间有效性/安全降级矩阵（T02/故事 15）与托盘入口语义（含 #4 恢复开关条目）。
+/// 受控 UI 证据由 scripts/qa-avalonia-shell.ps1（shell 模式截图）提供；
+/// 概览页内容与动作见 OverviewRegression / scripts/qa-avalonia-overview.ps1。
 /// </summary>
 internal static class AvaloniaShellRegression
 {
@@ -208,28 +209,28 @@ internal static class AvaloniaShellRegression
                 File.WriteAllText(path, JsonSerializer.Serialize(Online(), Storage.Json));
                 var pipe = new StatusPipe(path, TimeSpan.FromMilliseconds(120));
                 ShellPage? pendingLengthPage = null;
-                var hold = new TaskCompletionSource<PageScaffold>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var hold = new TaskCompletionSource<PageContent>(TaskCreationOptions.RunContinuationsAsynchronously);
                 using var controller = new ShellController(pipe, (page, token) =>
                     page == pendingLengthPage ? hold.Task : ShellContent.LoadAsync(page, token));
 
                 var applied = new List<ShellPage>();
                 var selected = new List<ShellPage>();
                 controller.SelectionChanged += page => selected.Add(page);
-                controller.ContentChanged += scaffold => applied.Add(scaffold.Page);
+                controller.ContentChanged += content => applied.Add(content.Page);
 
                 await controller.SelectAsync(ShellPage.Logs);
                 Require(applied.SequenceEqual([ShellPage.Logs]) && controller.Content!.Page == ShellPage.Logs, "页面内容未应用");
 
-                pendingLengthPage = ShellPage.Overview;
-                var slow = controller.SelectAsync(ShellPage.Overview);
-                Require(controller.SelectedPage == ShellPage.Overview && selected[^1] == ShellPage.Overview, "选择未立即生效");
+                pendingLengthPage = ShellPage.Diagnostics;
+                var slow = controller.SelectAsync(ShellPage.Diagnostics);
+                Require(controller.SelectedPage == ShellPage.Diagnostics && selected[^1] == ShellPage.Diagnostics, "选择未立即生效");
                 pendingLengthPage = null;
-                await controller.SelectAsync(ShellPage.Diagnostics);
-                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Diagnostics]), "新页面内容未应用");
-                hold.SetResult(new PageScaffold(ShellPage.Overview, "概览", "旧内容", "旧内容"));
+                await controller.SelectAsync(ShellPage.Settings);
+                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Settings]), "新页面内容未应用");
+                hold.SetResult(new PageScaffold(ShellPage.Diagnostics, "网络诊断", "旧内容", "旧内容"));
                 await slow;
-                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Diagnostics]), "旧页面内容覆写了当前页");
-                Require(controller.Content!.Page == ShellPage.Diagnostics, "当前内容与选择不一致");
+                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Settings]), "旧页面内容覆写了当前页");
+                Require(controller.Content!.Page == ShellPage.Settings, "当前内容与选择不一致");
 
                 StatusReading? latest = null;
                 controller.StatusChanged += reading => latest = reading;
@@ -239,15 +240,17 @@ internal static class AvaloniaShellRegression
             }
             finally { Directory.Delete(directory, recursive: true); }
         }),
-        ("壳回归：托盘核心入口保持既有语义与命令契约", () => Sync(() =>
+        ("壳回归：托盘入口保持既有语义，恢复开关随状态同步", () => Sync(() =>
         {
-            // 既有完整菜单的其余入口（自动恢复开关、解除认证暂停、查看日志）属于 #4/#5/#7 切片，见 TrayMenuModel 注释。
+            // 解除认证暂停（#5）与查看日志（#7）随后续切片接入；本票按既有完整菜单补入自动恢复开关。
             var labels = TrayMenuModel.Entries.Select(entry => entry.Label).ToArray();
-            Require(labels.SequenceEqual(["打开 AutoNet", "设置认证信息…", "", "退出托盘（后台继续运行）"]), "托盘入口文案变化");
+            Require(labels.SequenceEqual(["打开 AutoNet", "设置认证信息…", "自动恢复状态待确认", "", "退出托盘（后台继续运行）"]), "托盘入口文案变化");
             Require(TrayMenuModel.Entries[0].Action == TrayMenuAction.Open, "打开入口动作变化");
             Require(TrayMenuModel.Entries[1].Action == TrayMenuAction.Settings, "设置入口动作变化");
-            Require(ReferenceEquals(TrayMenuModel.Entries[2], TrayMenuEntry.Separator), "分隔线必须使用 Separator");
-            Require(TrayMenuModel.Entries[3].Action == TrayMenuAction.Exit, "退出入口动作变化");
+            Require(TrayMenuModel.Entries[2].Action == TrayMenuAction.RecoverySwitch, "恢复开关入口动作变化");
+            Require(TrayMenuModel.Entries[2].Label == OverviewModel.RecoverySwitch(null).Label, "托盘开关占位文案应与概览开关同源");
+            Require(ReferenceEquals(TrayMenuModel.Entries[3], TrayMenuEntry.Separator), "分隔线必须使用 Separator");
+            Require(TrayMenuModel.Entries[4].Action == TrayMenuAction.Exit, "退出入口动作变化");
             Require(ElevatedOperationKind.Settings.CommandLineArgument() == "--settings", "提权入口参数与既有契约不符");
         }))
     ];

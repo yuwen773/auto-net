@@ -13,6 +13,12 @@ internal sealed record StatusReading(
     DateTimeOffset ReadAt)
 {
     /// <summary>
+    /// 状态边界是否允许依据其内容显示事实或执行动作：快照存在、通过完整性校验且在新鲜窗口内。
+    /// 概览投影与动作重验共用这一判定，避免各处自行组合条件。
+    /// </summary>
+    public bool Trusted => Snapshot is not null && Valid && Fresh;
+
+    /// <summary>
     /// 壳底部状态栏文本：只描述后台服务与状态文件的可信度，不复述网络状态本身
     /// （网络状态由概览页呈现）。措辞与既有 WinForms 托盘逐字一致。
     /// </summary>

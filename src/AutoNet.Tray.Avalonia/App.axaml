@@ -9,11 +9,37 @@
           <SolidColorBrush x:Key="ShellNavBackground">#F7F7F7</SolidColorBrush>
           <SolidColorBrush x:Key="ShellStripBackground">#FBFBFB</SolidColorBrush>
           <SolidColorBrush x:Key="ShellBorder">#E5E5E5</SolidColorBrush>
+          <SolidColorBrush x:Key="CardBackground">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="CardBorder">#E2E6EC</SolidColorBrush>
+          <SolidColorBrush x:Key="TextMuted">#626E7A</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGood">#146C45</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGoodSurface">#E8F5ED</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttention">#1E5FA0</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttentionSurface">#E9F1FA</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarning">#9E5C08</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarningSurface">#FCF4E6</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblem">#A62A2A</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblemSurface">#FDECEC</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutral">#606A78</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutralSurface">#F0F3F7</SolidColorBrush>
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
           <SolidColorBrush x:Key="ShellNavBackground">#2B2B2B</SolidColorBrush>
           <SolidColorBrush x:Key="ShellStripBackground">#292929</SolidColorBrush>
           <SolidColorBrush x:Key="ShellBorder">#3D3D3D</SolidColorBrush>
+          <SolidColorBrush x:Key="CardBackground">#2A2A2A</SolidColorBrush>
+          <SolidColorBrush x:Key="CardBorder">#3F3F3F</SolidColorBrush>
+          <SolidColorBrush x:Key="TextMuted">#A9B2BD</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGood">#7BD3A0</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGoodSurface">#20352A</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttention">#8CBDF0</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttentionSurface">#1F2C3D</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarning">#E2B25C</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarningSurface">#37301E</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblem">#F09A9A</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblemSurface">#3B2426</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutral">#A8B0BC</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutralSurface">#2C3036</SolidColorBrush>
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>

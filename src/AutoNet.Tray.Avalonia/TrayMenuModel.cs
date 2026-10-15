@@ -5,6 +5,8 @@ internal enum TrayMenuAction
 {
     Open,
     Settings,
+    /// <summary>自动恢复开关：标签与可用性随状态同步（由 <see cref="OverviewModel.RecoverySwitch"/> 派生），点击发送明确意图。</summary>
+    RecoverySwitch,
     Exit
 }
 
@@ -16,9 +18,10 @@ internal sealed record TrayMenuEntry(string Label, TrayMenuAction? Action)
 }
 
 /// <summary>
-/// 迁移期托盘菜单：保留既有核心入口语义——打开、设置认证信息…（独立提权入口）、退出托盘（后台继续运行）。
-/// 既有完整菜单中的自动恢复开关、解除认证暂停与查看日志，属于后续切片（#4/#5/#7），届时按原语义接入；
-/// 本票不提前实现其逻辑，也不改变上述核心入口的含义。普通托盘互斥锁始终不拦截独立管理员操作。
+/// 迁移期托盘菜单：保留既有核心入口语义——打开、设置认证信息…（独立提权入口）、
+/// 自动恢复开关（#4：与概览开关同源，默认显示“待确认”占位，运行时随状态同步）、
+/// 退出托盘（后台继续运行）。既有完整菜单中的解除认证暂停（#5）与查看日志（#7）
+/// 随后续切片按原语义接入；普通托盘互斥锁始终不拦截独立管理员操作。
 /// </summary>
 internal static class TrayMenuModel
 {
@@ -26,6 +29,7 @@ internal static class TrayMenuModel
     [
         new("打开 AutoNet", TrayMenuAction.Open),
         new("设置认证信息…", TrayMenuAction.Settings),
+        new("自动恢复状态待确认", TrayMenuAction.RecoverySwitch),
         TrayMenuEntry.Separator,
         new("退出托盘（后台继续运行）", TrayMenuAction.Exit)
     ];
