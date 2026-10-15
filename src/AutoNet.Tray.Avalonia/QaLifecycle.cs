@@ -32,22 +32,22 @@ internal static class QaLifecycle
                 window.Opacity = 0;
                 window.ShowInTaskbar = false;
                 await Task.Delay(200);
-                steps.Add(new LifecycleStep("started", window.IsVisible, true, LifecycleReport.Timestamp()));
+                steps.Add(new LifecycleStep("started", window.IsVisible, true, QaReports.Timestamp()));
                 QaReports.Write(qa.LifecycleReportPath, Build("started"));
                 if (qa.Mode == QaMode.Hold) return;
 
                 tray.ShowMainWindow();
                 await Task.Delay(250);
-                steps.Add(new LifecycleStep("shown", window.IsVisible, true, LifecycleReport.Timestamp()));
+                steps.Add(new LifecycleStep("shown", window.IsVisible, true, QaReports.Timestamp()));
 
                 // 与用户点击窗口关闭按钮相同的路径：Window.Close() 会走 OnClosing 的隐藏分支。
                 window.Close();
                 await Task.Delay(250);
-                steps.Add(new LifecycleStep("closed", window.IsVisible, true, LifecycleReport.Timestamp()));
+                steps.Add(new LifecycleStep("closed", window.IsVisible, true, QaReports.Timestamp()));
 
                 // 刻意停留：证明关闭窗口后界面进程仍在运行，随后才由托盘“退出”结束。
                 await Task.Delay(600);
-                steps.Add(new LifecycleStep("alive-after-close", window.IsVisible, true, LifecycleReport.Timestamp()));
+                steps.Add(new LifecycleStep("alive-after-close", window.IsVisible, true, QaReports.Timestamp()));
 
                 QaReports.Write(qa.LifecycleReportPath, Build("exit-requested"));
                 tray.RequestExit();

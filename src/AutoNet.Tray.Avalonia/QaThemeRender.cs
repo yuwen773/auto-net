@@ -34,8 +34,8 @@ internal static class QaThemeRender
             }
             catch (Exception e)
             {
-                Directory.CreateDirectory(qa.Directory);
-                File.WriteAllText(Path.Combine(qa.Directory, "theme-error.txt"), e.ToString());
+                QaReports.Write(Path.Combine(qa.Directory, "theme-error.json"),
+                    new { phase = "error", error = e.GetType().Name + ": " + e.Message });
                 lifetime.Shutdown(1);
             }
         });

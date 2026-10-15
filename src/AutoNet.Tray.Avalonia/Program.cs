@@ -39,7 +39,7 @@ internal static class Program
                     operation = decision.Operation!.Value.CommandLineArgument(),
                     isAdministrator = true,
                     processId = Environment.ProcessId,
-                    at = LifecycleReport.Timestamp()
+                    at = QaReports.Timestamp()
                 });
             }
 
@@ -63,7 +63,7 @@ internal static class Program
                     reportedBy = Environment.ProcessId,
                     processPath = Environment.ProcessPath,
                     mutex = MutexName,
-                    at = LifecycleReport.Timestamp()
+                    at = QaReports.Timestamp()
                 });
                 return 3;
             }
@@ -87,7 +87,7 @@ internal static class Program
                 processId = Environment.ProcessId,
                 processPath = Environment.ProcessPath,
                 commandLineArgs = Environment.GetCommandLineArgs().Skip(1),
-                at = LifecycleReport.Timestamp()
+                at = QaReports.Timestamp()
             });
             return 4;
         }

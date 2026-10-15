@@ -114,7 +114,7 @@ internal static class AvaloniaPrototypeRegression
                 var qa = new QaEnvironment(QaMode.Hold, directory);
                 QaReports.Write(qa.LifecycleReportPath, new LifecycleReport(
                     "started", "Hold", true, "C:\\虚构\\AutoNet.Tray.exe", 1, false, AutoNet.Tray.Avalonia.Program.MutexName, "Default",
-                    [new LifecycleStep("started", false, true, LifecycleReport.Timestamp())]));
+                    [new LifecycleStep("started", false, true, QaReports.Timestamp())]));
                 QaReports.Write(qa.ElevationRecordPath, new { phase = "elevation-requested", operation = "--settings" });
                 QaReports.Write(qa.AlreadyRunningReportPath, new { phase = "already-running" });
 

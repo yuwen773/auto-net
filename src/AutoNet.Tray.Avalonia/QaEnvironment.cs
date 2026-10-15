@@ -46,6 +46,9 @@ internal static class QaReports
 {
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
+    /// <summary>QA 证据统一时间戳（ISO 8601，UTC）。</summary>
+    public static string Timestamp() => DateTimeOffset.UtcNow.ToString("o");
+
     public static void Write(string path, object payload)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -65,7 +68,4 @@ internal sealed record LifecycleReport(
     string MutexName,
     string ThemeVariant,
     List<LifecycleStep> Steps,
-    string? Error = null)
-{
-    public static string Timestamp() => DateTimeOffset.UtcNow.ToString("o");
-}
+    string? Error = null);

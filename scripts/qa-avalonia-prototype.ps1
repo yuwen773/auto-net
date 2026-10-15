@@ -56,6 +56,12 @@ function New-QaDirectory([string]$Name) {
     New-Item -ItemType Directory -Path $path | Out-Null
     return $path
 }
+# 已安装托盘（C:\Program Files\AutoNet）的进程快照：只排除本证据目录下的原型进程，绝不触碰已安装实例。
+function Get-InstalledTrayPids {
+    return @(Get-Process -Name 'AutoNet.Tray' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and -not [IO.Path]::GetFullPath($_.Path).StartsWith($evidencePrefix, [StringComparison]::OrdinalIgnoreCase) } |
+        ForEach-Object { $_.Id })
+}
 
 # 只清理本证据目录下的原型进程，绝不触碰 C:\Program Files\AutoNet 下已安装的托盘。
 $evidencePrefix = [IO.Path]::GetFullPath($evidence) + [IO.Path]::DirectorySeparatorChar
@@ -66,9 +72,7 @@ Get-Process -Name 'AutoNet.Tray' -ErrorAction SilentlyContinue |
 try {
     $service = Get-Service -Name AutoNet -ErrorAction SilentlyContinue
     $serviceBefore = if ($service) { @{ status = [string]$service.Status; processId = (Get-CimInstance Win32_Service -Filter "Name='AutoNet'").ProcessId } } else { @{ status = 'absent'; processId = 0 } }
-    $installedTrayBefore = @(Get-Process -Name 'AutoNet.Tray' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -and -not [IO.Path]::GetFullPath($_.Path).StartsWith($evidencePrefix, [StringComparison]::OrdinalIgnoreCase) } |
-        ForEach-Object { $_.Id })
+    $installedTrayBefore = Get-InstalledTrayPids
 
     # 1) 发布：自包含 win-x64 单文件，程序名保持 AutoNet.Tray.exe（安装器契约身份）
     if ($SkipPublish) { Pass 'publish' @{ skipped = $true; exe = $exe } }
@@ -142,14 +146,29 @@ try {
         $instanceC = Start-Prototype -Executable $exe -Arguments @('--settings') -QaDirectory $runtimeC -QaMode ''
         $elevatedInline = Join-Path $runtimeC 'elevated-inline.json'
         $elevationRequest = Join-Path $runtimeC 'elevation.json'
-        Require (Wait-ForFile $elevatedInline 20) '管理员操作未在普通实例运行时进入提权路径'
+        # 两种合法分支：管理员上下文直接执行（elevated-inline.json）；普通上下文记录提权请求后退出（elevation.json，退出码 4）。
+        # 共同点是提权入口先于单实例检查，绝不能被普通实例互斥锁拦成 already-running.json。
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        while ([DateTime]::UtcNow -lt $deadline -and -not (Test-Path -LiteralPath $elevatedInline) -and -not (Test-Path -LiteralPath $elevationRequest)) {
+            Start-Sleep -Milliseconds 150
+        }
         $blockedForC = Join-Path $runtimeC 'already-running.json'
         Require (-not (Test-Path -LiteralPath $blockedForC)) '管理员操作被普通实例互斥锁拦截'
-        if (Test-Path -LiteralPath $elevationRequest) { throw '同一操作同时出现提权请求与直接执行证据' }
-        $inline = Get-Content -LiteralPath $elevatedInline -Raw | ConvertFrom-Json
-        Require ($inline.operation -eq '--settings') ('提权操作参数被改写：' + $inline.operation)
+        if (Test-Path -LiteralPath $elevatedInline) {
+            $branch = 'elevated-inline'
+            $recordPath = $elevatedInline
+        }
+        elseif (Test-Path -LiteralPath $elevationRequest) {
+            $branch = 'elevation-request'
+            $recordPath = $elevationRequest
+            Require (Wait-Exit $instanceC 20) '提权请求进程未退出'
+            Require ($instanceC.ExitCode -eq 4) ('提权请求退出码为 ' + $instanceC.ExitCode + '（预期 4）')
+        }
+        else { throw '管理员操作既未直接执行也未记录提权请求' }
+        $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+        Require ($record.operation -eq '--settings') ('提权操作参数被改写：' + $record.operation)
         Require (-not $instanceA.HasExited) '提权操作影响了实例 A'
-        Pass 'elevated-entry' @{ branch = 'elevated-inline（当前会话为管理员）'; report = $elevatedInline; operation = $inline.operation }
+        Pass 'elevated-entry' @{ branch = $branch; report = $recordPath; operation = $record.operation }
         if (-not $instanceC.HasExited) { $instanceC.Kill($true); [void]$instanceC.WaitForExit(5000) }
     }
     catch { Fail 'single-instance-and-elevated' $_.Exception.Message }
@@ -223,9 +242,7 @@ try {
     try {
         $service = Get-Service -Name AutoNet -ErrorAction SilentlyContinue
         $serviceAfter = if ($service) { @{ status = [string]$service.Status; processId = (Get-CimInstance Win32_Service -Filter "Name='AutoNet'").ProcessId } } else { @{ status = 'absent'; processId = 0 } }
-        $installedTrayAfter = @(Get-Process -Name 'AutoNet.Tray' -ErrorAction SilentlyContinue |
-            Where-Object { $_.Path -and -not [IO.Path]::GetFullPath($_.Path).StartsWith($evidencePrefix, [StringComparison]::OrdinalIgnoreCase) } |
-            ForEach-Object { $_.Id })
+        $installedTrayAfter = Get-InstalledTrayPids
         Require ($serviceAfter.status -eq $serviceBefore.status -and $serviceAfter.processId -eq $serviceBefore.processId) '后台服务状态或进程发生变化'
         Require (($installedTrayBefore -join ',') -eq ($installedTrayAfter -join ',')) '已安装托盘进程发生变化'
         Pass 'service-untouched' @{ before = $serviceBefore; after = $serviceAfter; installedTrayPids = $installedTrayAfter }

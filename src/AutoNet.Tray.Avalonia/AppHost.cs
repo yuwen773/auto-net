@@ -15,11 +15,10 @@ internal static class AppHost
 
     private static int Run(AppMode mode)
     {
-        // OnExplicitShutdown：窗口关闭只隐藏，进程只由托盘“退出”或提示窗口关闭结束（故事 6、7）。
+        // ShutdownMode 在 App.OnFrameworkInitializationCompleted 统一设置（托盘语义，见 App.axaml.cs）。
         var lifetime = new ClassicDesktopStyleApplicationLifetime
         {
-            Args = [],
-            ShutdownMode = ShutdownMode.OnExplicitShutdown
+            Args = []
         };
         var builder = AppBuilder.Configure(() => new App(mode)).UsePlatformDetect();
         builder.SetupWithLifetime(lifetime);
