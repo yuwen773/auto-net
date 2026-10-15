@@ -3,4 +3,5 @@
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Core/AutoNet.Core.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Service/AutoNet.Service.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Tray/AutoNet.Tray.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/AutoNet.Tray.Avalonia/AutoNet.Tray.Avalonia.csproj" /></ItemGroup>
 </Project>
