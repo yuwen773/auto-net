@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using AutoNet.Core;
 using AutoNet.Service;
 
@@ -398,6 +399,110 @@ internal static class PortalRegression
             using var restarted = new MonitorWorker(fixture, fixture.Clock);
             var historical = await restarted.RunOnceAsync(default);
             Require(historical.CredentialsBlocked && historical.Detail.Contains("历史"));
+        }),
+        ("探测语义：门户重定向记劫持嫌疑，非门户重定向仍是 HTTP 状态", async () =>
+        {
+            // ADR-0006: production probes never follow redirects, so a 3xx reaches the probe
+            // itself. A Location carrying portal keywords is a captive-portal hijack — a
+            // different fact from a body that failed the content check. The vocabulary is
+            // the ADR's (drcom/portal/webauth/srun), matched anywhere in the target URL;
+            // the campus host itself carries none of them by design.
+            foreach (var (location, expected) in new (string?, string)[]
+            {
+                ("https://portal.example/", "HijackSuspected"),
+                ("https://webauth.example/portal/page", "HijackSuspected"),
+                ("http://www.drcom.com.cn/", "HijackSuspected"),
+                ("https://srun.example/", "HijackSuspected"),
+                ("https://www.example.com/?next=portal", "HijackSuspected"),
+                ("https://www.example.com/", "HttpStatus"),
+                (null, "HttpStatus")
+            })
+            {
+                using var http = new HttpClient(new RedirectHandler(location));
+                var evidence = await HealthChecks.InternetDetailedAsync(http, default);
+                Require(!evidence.Online);
+                Require(evidence.Probes.All(p => p.Failure == expected && p.HttpStatus == 302 && !p.Passed));
+            }
+        }),
+        ("探测语义：生产探测客户端禁用自动重定向", () =>
+        {
+            // The hijack classification only works if the handler answers the 3xx to the
+            // probe; both production probe clients are pinned here so a future handler
+            // change cannot silently start following portal redirects.
+            Require(!HealthChecks.SystemHandler("").AllowAutoRedirect);
+            Require(!DirectNetwork.CreateHandler(new(true, null, IPAddress.Parse("10.0.0.1"), 7, [])).AllowAutoRedirect);
+            return Task.CompletedTask;
+        }),
+        ("探测语义：探测证据带置信度标注，当前均为 Confirmed", async () =>
+        {
+            using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, "User-agent: *"));
+            var evidence = await HealthChecks.InternetDetailedAsync(http, default);
+            Require(evidence.Online && evidence.Probes.All(p => p.Confidence == "Confirmed"));
+            // The annotation rides the structured diagnostic record, not just the return value.
+            var serialized = JsonSerializer.Serialize(evidence.Probes[0], Storage.Json);
+            Require(serialized.Contains("Confirmed"));
+        }),
+        ("认证诊断：chkstatus 缺 result 字段记结构变化，异常取值仍是状态未知", async () =>
+        {
+            // ADR-0005 distinguishes a changed response shape (InvalidResponse, a layout
+            // signal that pauses like the other structural failures) from an unrecognised
+            // state value (StatusUnknown, not a layout signal).
+            foreach (var (body, expected) in new (string, PortalFailure)[]
+            {
+                ("dr1001({\"code\":200,\"v4ip\":\"10.0.0.1\"})", PortalFailure.InvalidResponse),
+                ("{\"result\":-1,\"v4ip\":\"10.0.0.1\"}", PortalFailure.StatusUnknown)
+            })
+            {
+                var handler = new MonitorHttp { StatusJson = body };
+                using var http = new HttpClient(handler);
+                var outcome = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginDetailedAsync(new("test", "never-real"), default);
+                Require(outcome.Stage == PortalStage.Status && outcome.Failure == expected && !outcome.CredentialRequestStarted);
+                Require(outcome.Result == (expected == PortalFailure.InvalidResponse ? LoginResult.Unsupported : LoginResult.Rejected));
+            }
+        }),
+        ("认证诊断：状态接口非200不升级为门户改版信号", async () =>
+        {
+            // A transient 5xx/429 on chkstatus keeps the pre-existing status-unknown
+            // classification; only a 200 with a changed body shape is a layout signal.
+            var handler = new MonitorHttp { StatusJson = null, FailurePath = "/drcom/chkstatus", FailureStatus = HttpStatusCode.ServiceUnavailable };
+            using var http = new HttpClient(handler);
+            var outcome = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).LoginDetailedAsync(new("test", "never-real"), default);
+            Require(outcome.Stage == PortalStage.Status && outcome.Failure == PortalFailure.StatusUnknown && outcome.HttpStatus == 503);
+            Require(!outcome.CredentialRequestStarted && !PortalLayoutSignal.IsStructural(outcome.Failure));
+            var inspect = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).InspectDetailedAsync(default);
+            Require(inspect.Failure == PortalFailure.HttpStatus && inspect.HttpStatus == 503);
+        }),
+        ("认证诊断：状态无法识别时只读检查不报告完成", async () =>
+        {
+            // The read-only path must not hide a changed chkstatus shape behind "complete";
+            // an already-logged-in portal still completes, because there is nothing to submit.
+            var handler = new MonitorHttp { StatusJson = "dr1001({\"code\":200})" };
+            using var http = new HttpClient(handler);
+            var changed = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).DiagnoseAsync(default);
+            Require(changed.Failure == PortalFailure.InvalidResponse && !changed.CredentialRequestStarted);
+            handler.StatusJson = null;
+            handler.PortalResult = "1";
+            var online = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn")).DiagnoseAsync(default);
+            Require(online.Failure == PortalFailure.None && online.Stage == PortalStage.Complete);
+        }),
+        ("门户改版：结构类集合只含门户形状失败，与普通失败互斥", () =>
+        {
+            foreach (var failure in new[]
+            {
+                PortalFailure.MissingFlag, PortalFailure.InvalidFlagType, PortalFailure.UnsupportedFlag,
+                PortalFailure.DuplicateFlag, PortalFailure.MalformedConfiguration, PortalFailure.InvalidResponse,
+                PortalFailure.MissingGatewayParameters
+            })
+                Require(PortalLayoutSignal.IsStructural(failure));
+            foreach (var failure in new[]
+            {
+                PortalFailure.None, PortalFailure.InvalidTarget, PortalFailure.AlreadyAuthenticated, PortalFailure.StatusUnknown,
+                PortalFailure.HttpStatus, PortalFailure.MissingClientIpv4, PortalFailure.Timeout, PortalFailure.Transport,
+                PortalFailure.Tls, PortalFailure.CredentialsRejected, PortalFailure.InteractionRequired, PortalFailure.LoginRejected,
+                PortalFailure.BindingRejected, PortalFailure.SafetyPersistence
+            })
+                Require(!PortalLayoutSignal.IsStructural(failure));
+            return Task.CompletedTask;
         })
     ];
 
@@ -414,6 +519,18 @@ internal sealed class GatewayCancellationHandler(CancellationTokenSource cancell
             ct.ThrowIfCancellationRequested();
         }
         return base.SendAsync(request, ct);
+    }
+}
+
+// Answers every probe with a redirect, optionally carrying a Location; models a captive
+// portal or gateway intercepting the probe targets (ADR-0006).
+internal sealed class RedirectHandler(string? location) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.Redirect) { Content = new StringContent("") };
+        if (location is not null) response.Headers.Location = new Uri(location, UriKind.RelativeOrAbsolute);
+        return Task.FromResult(response);
     }
 }
 

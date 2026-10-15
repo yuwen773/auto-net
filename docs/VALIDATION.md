@@ -2,6 +2,16 @@
 
 日期：2026-10-11（Asia/Shanghai）。已完成本次覆盖升级；此前一次真实 Wi-Fi 断连恢复记录保留在下方历史章节，真实认证失效、重启和长期稳定性仍待验收。
 
+## 探测语义、门户改版检测与浏览器兜底标志（2026-10-15，仅离线验证，未部署）
+
+- 按「UI 单独开 PR、当前先不管 UI」的边界，本轮只做 Core/Service 管路，托盘消费端留给 UI PR。契约见 [ADR-0005](adr/0005-portal-layout-detection.md)、[ADR-0006](adr/0006-probe-semantics.md) 与 [ADR-0002](adr/0002-notification-and-fallback-plumbing.md)，术语见根目录 [CONTEXT.md](../CONTEXT.md)。
+- **探测语义（ADR-0006）**：探测禁用自动重定向（`HealthChecks.SystemHandler` 与 `DirectNetwork.CreateHandler` 均固定 `AllowAutoRedirect=false`，新增回归钉扎）；3xx 时检查 Location，含 drcom/portal/webauth/srun 关键词记 `HijackSuspected`（区别于正文不匹配的 `ContentMismatch`），非门户重定向仍是 `HttpStatus`；`ProbeEvidence` 增加 `Confidence` 标注（受控值 Confirmed/Tentative，当前均为 Confirmed，随结构化诊断日志落盘——为与 `Failure` 一致采用字符串而非枚举，避免无转换器时日志里出现数字）。Online 判定维持「双源任一通过即在线」，未改为需第二源确认。
+- **门户改版检测（ADR-0005）**：`PortalLayoutSignal.IsStructural` 定义结构类集合 = MissingFlag / InvalidFlagType / UnsupportedFlag / DuplicateFlag / MalformedConfiguration / InvalidResponse / MissingGatewayParameters；`ReadStateAsync` 区分「缺 result 字段」（结构变化 → InvalidResponse）与「result 取值无法识别」（StatusUnknown，**不**是改版信号）。预检失败落在结构类集合时聚合为 PortalLayoutChanged：journal 事件 + `status.json` 的 `PortalLayoutSuspected` 标志 + 一次性通知；只读诊断路径（DiagnoseAsync）在状态无法识别时不再报告「完成」。改版真发生时的处置仍是既有安全语义（Unsupported 类持久暂停、MissingGatewayParameters 退避重试），本轮不改动暂停/重试判据，只加检测信号。
+- **浏览器兜底标志（ADR-0002）**：连续认证失败达阈值（InteractionRequired 阻断且尝试数达到 `AuthenticationAttemptCap`）时，服务只在 status.json 置 `BrowserFallbackRequested` 与 `BrowserFallbackNotBefore`（授予时刻 + 10 分钟冷却，每段落戳一次，重启重新授予；托盘自有首次去重与重复节奏）并广播一次通知；不自行启动浏览器（会话 0 不可见，凭据不进浏览器进程），托盘消费留给 UI PR。阈值语义依 CONTEXT.md「连续认证失败达阈值」：只有能累积到上限的失败（前置检查类失败、尝试限额拒发）会置位；凭据被明确拒绝、绑定拒绝等首次即持久阻断的场景停在 attempts=1，只广播 AuthenticationPaused、不置兜底标志。验证码类 InteractionRequired 未达阈值不置位。通知通道改为「每轮至多一条」：同一轮内更具体的事件（改版/兜底）先发射，通用的 AuthenticationPaused 不再覆盖它（ADR-0002 的重放语义不变：重启后无其他事件时仍重放暂停通知）。
+- **改版提示文案**：结构类失败多进入持久暂停，而暂停文案整体替换 detail，故「门户结构疑似变化…请导出诊断包反馈」一句置于所有暂停文案之后追加（回归已钉住两种场景：无凭据只读观测与持久暂停）。
+- Release 构建零警告、零错误；回归新增 12 项：门户关键词劫持分类、生产客户端禁重定向、置信度标注、chkstatus 缺字段记结构变化、状态接口非 200 不升级为改版信号、只读检查不报告完成、结构类集合互斥、改版信号置位/清除/不重复广播、改版信号跨重启保留、非结构类失败不置位、兜底达阈值置位带冷却且只广播一次、验证码未达阈值不请求兜底。完整回归 **197/197** 通过，证据：`artifacts/validation/build.json`、`tests.txt`。
+- 未验证：托盘气泡/菜单/浏览器打开（均属 UI PR）；真实门户改版或门户重定向场景下的信号时序（需现场或实机诱发）；15 秒恢复目标不在本轮范围。
+
 ## 通知管路（2026-10-15，仅离线验证，未部署）
 
 - 按“UI 单独开 PR、当前先不管 UI”的边界，本轮只做 Core/Service 管路：服务把状态沿以受控代码写入 status.json 的 `Notification` 字段（Code + At），托盘消费端留给 UI PR。契约见 [ADR-0002](adr/0002-notification-and-fallback-plumbing.md)，术语见根目录 [CONTEXT.md](../CONTEXT.md)。

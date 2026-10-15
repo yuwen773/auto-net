@@ -6,7 +6,7 @@
 
 1. 哪个程序版本、哪次进程运行、哪个目标网络，在何时首次发现异常？
 2. Wi-Fi 是已断开、正在关联、等待地址还是已就绪？本机 IPv4 与门户参数分别是否可用？
-3. 两个外网目标各自失败在哪一类：DNS、连接、TLS、超时、HTTP 状态还是内容检查？
+3. 两个外网目标各自失败在哪一类：DNS、连接、TLS、超时、HTTP 状态还是内容检查？是否出现门户关键词重定向（劫持嫌疑）？
 4. 程序为何执行某个动作，或为何没有动作？是等待样本、观察窗口、冷却、关闭恢复、缺少凭据、安全暂停还是额度限制？
 5. 动作是否开始、是否返回、返回什么原生错误？认证是否真正发起凭据请求，服务器是否接受，外网是否随后恢复？
 6. 服务重启、取消、写入失败或日志损坏，是否留下了需要承认的观测缺口？
@@ -34,6 +34,8 @@
 | RecoveryActionStarted / RecoveryActionCompleted | 同一 actionId 的动作边界与结果；缺少完成事件不能推定成功 |
 | PortalStep | 固定认证步骤的请求开始、收到响应头、读完响应或失败；收到 HTTP 200 不等于认证成功 |
 | SubmissionAuthorized / SubmissionNotAuthorized | 持久提交授权与最后复核是否通过；未获授权的具体原因 |
+| PortalLayoutChanged | 预检失败落在结构类集合（门户形状疑似变化）；含当时观察到的认证失败分类，自动认证按既有安全语义暂停 |
+| BrowserFallbackRequested | 连续认证失败达阈值；记录请求在用户会话打开门户页，只开页不填表 |
 | SafetyStateWriteStarted / SafetyStateWritten | 认证或断线安全状态的持久保存意图与成功；意图不代表成功 |
 | DisconnectRecheck | 主动断线前的新鲜 HTTPS、认证、配置与链路复核 |
 | WifiRequestResult | Issued / Skipped / Failed 及原生错误码；Issued 不代表物理连接或断线已完成 |

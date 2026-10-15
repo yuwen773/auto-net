@@ -46,6 +46,20 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private string lastError => journal.LastError;
     private HttpClient? directHttp;
     private string directKey = "";
+    // ADR-0005 portal layout detection: the durable signal derived from the latest portal
+    // observation, plus the transition tracker that keeps the announcement one-shot.
+    private bool portalLayoutSuspected;
+    private bool portalLayoutPublished;
+    // ADR-0002 browser fallback: the cap-reached flag with its cooldown timestamp. The
+    // service never launches a browser (session 0); the tray acts on the flag.
+    private bool browserFallbackRequested;
+    private bool browserFallbackPublished;
+    private DateTimeOffset browserFallbackNotBefore;
+    // One one-shot notification per cycle: a more specific event raised earlier in the
+    // same cycle already tells the user authentication is paused, so the generic pause
+    // announcement in Publish must not supersede it.
+    private bool notifiedThisCycle;
+    private static readonly TimeSpan BrowserFallbackCooldown = TimeSpan.FromMinutes(10);
 
     private DateTimeOffset PolicyNow => clockOrigin + clock.GetElapsedTime(clockStart);
 
@@ -72,6 +86,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     // A complete cycle, with only external Windows/HTTP/file boundaries replaced in offline fixtures.
     public async Task<StatusSnapshot> RunOnceAsync(CancellationToken ct)
     {
+        notifiedThisCycle = false;
         journal.BeginCycle();
         try { return await TickAsync(ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -366,6 +381,40 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 _ => "重新认证"
             };
         }
+        // ADR-0005 portal layout detection: a preflight failure inside the structural set
+        // means the portal's response shape changed — not bad credentials, not a network
+        // fault. Aggregate it into one durable signal (journal event, status flag, one-shot
+        // notification) instead of a generic dynamic parser, which has no fixtures and
+        // would put guesswork into the production authentication path. Only this cycle's
+        // fresh evidence counts; a persisted block keeps the signal across restarts.
+        portalLayoutSuspected = PortalLayoutSignal.IsStructural(blockFailure) ||
+            (inspection is { Failure: var observedFailure } && PortalLayoutSignal.IsStructural(observedFailure)) ||
+            (action == ActionKind.Authenticate && lastAuthentication is { Failure: var attemptedFailure } && PortalLayoutSignal.IsStructural(attemptedFailure));
+        if (portalLayoutSuspected && !portalLayoutPublished)
+        {
+            portalLayoutPublished = true;
+            Notify(NotificationCodes.PortalLayoutChanged);
+            journal.Write("PortalLayoutChanged", "门户预检失败落在结构类集合；门户结构疑似变化，自动认证已安全暂停，请导出诊断包反馈给网管。",
+                diagnostic with { Authentication = inspection ?? lastAuthentication });
+        }
+        if (!portalLayoutSuspected) portalLayoutPublished = false;
+        // ADR-0002 browser fallback: consecutive authentication failures reaching the cap
+        // mean the automatic path is exhausted. The service only raises the flag with a
+        // cooldown timestamp in status.json — it runs in session 0 and cannot show a
+        // browser to the user, and credentials never enter a browser process. The
+        // timestamp is stamped once per episode (grant time + cooldown); the tray owns
+        // first-open dedup and its own repeat cadence, and a service restart re-grants.
+        browserFallbackRequested = blockFailure == PortalFailure.InteractionRequired &&
+            (authentication?.Attempts ?? 0) >= RecoveryPolicy.AuthenticationAttemptCap;
+        if (browserFallbackRequested && !browserFallbackPublished)
+        {
+            browserFallbackPublished = true;
+            browserFallbackNotBefore = clock.GetUtcNow().Add(BrowserFallbackCooldown);
+            Notify(NotificationCodes.BrowserFallbackRequested);
+            journal.Write("BrowserFallbackRequested", $"连续自动认证失败已达 {RecoveryPolicy.AuthenticationAttemptCap} 次阈值；请在用户会话用默认浏览器打开门户认证页人工处理。只开页、不填表，凭据不进浏览器进程。",
+                diagnostic with { AuthenticationAttempts = authentication?.Attempts ?? 0, AuthenticationAttemptMax = RecoveryPolicy.AuthenticationAttemptCap });
+        }
+        if (!browserFallbackRequested) { browserFallbackPublished = false; browserFallbackNotBefore = default; }
         if (policy.CredentialsBlocked) detail = lastAuthentication is null
             ? blockFailure == PortalFailure.BindingRejected
                 ? "网关或设备绑定被拒绝，认证及主动断线已暂停；请核实 VLAN、MAC/AC 参数后使用“解除认证暂停”，不要仅修改密码。"
@@ -373,8 +422,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             : "自动认证及主动断线已暂停；" + lastAuthentication.SafeSummary + "；核实后使用“解除认证暂停”。";
         if (policy.CredentialsBlocked && authentication?.State == AuthenticationState.SubmissionPending && blockFailure == PortalFailure.None)
             detail = "认证提交的持久结果尚未确认，认证及主动断线已暂停；将进行只读复检定性，未证实成功前不会重发凭据。";
-        if (policy.CredentialsBlocked && blockFailure == PortalFailure.InteractionRequired && authentication?.Attempts >= RecoveryPolicy.AuthenticationAttemptCap)
-            detail = $"本次故障已达到 {RecoveryPolicy.AuthenticationAttemptCap} 次自动认证尝试，认证及主动断线已暂停；请诊断后人工确认，不会无限重试。";
+        if (policy.CredentialsBlocked && browserFallbackRequested)
+            detail = $"本次故障已达到 {RecoveryPolicy.AuthenticationAttemptCap} 次自动认证尝试，认证及主动断线已暂停；请诊断后人工确认，不会无限重试。可打开门户认证页在浏览器中人工登录。";
+        // Appended last: the pause wordings above replace the detail wholesale, and the
+        // structural scenario is exactly the one that ends up paused.
+        if (portalLayoutSuspected) detail += " 门户结构疑似变化，自动认证已安全暂停；请导出诊断包反馈给网管。";
         var state = !settings.Enabled ? "已暂停恢复" : direct ? "校园网在线" : link.OtherProfile ? "已切换其他 Wi-Fi" : policy.CredentialsBlocked ? "需要处理认证" : disconnectResult == WifiRequestStatus.Issued ? "正在重连校园 Wi-Fi" : observation.Condition switch
         {
             NetworkCondition.WaitingForAddress => "等待网络地址",
@@ -404,6 +456,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             AuthenticationPersistentState = authentication?.State.ToString() ?? "Ready",
             CredentialsBlocked = policy.CredentialsBlocked
         };
+        status = WithFallbackFlags(status);
         if (actionEvent is not null) Log(actionEvent, detail, snapshot: status with { LastError = lastError });
         return Publish(status);
     }
@@ -783,6 +836,15 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
     }
 
+    // Single projection for the B5 status flags, used by both the main construction and
+    // Publish so an early-return snapshot carries the same durable signal values.
+    private StatusSnapshot WithFallbackFlags(StatusSnapshot status) => status with
+    {
+        PortalLayoutSuspected = portalLayoutSuspected,
+        BrowserFallbackRequested = browserFallbackRequested,
+        BrowserFallbackNotBefore = browserFallbackRequested ? browserFallbackNotBefore : null
+    };
+
     private StatusSnapshot Publish(StatusSnapshot status)
     {
         // Entering the safety pause is announced once per transition, whichever path set the block;
@@ -790,11 +852,14 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         if (policy.CredentialsBlocked && !blockedPublished)
         {
             blockedPublished = true;
-            Notify(NotificationCodes.AuthenticationPaused);
+            // A more specific event raised earlier in the same cycle (portal layout change,
+            // browser fallback) already tells the user authentication is paused; the generic
+            // announcement must not supersede it on the one-shot channel.
+            if (!notifiedThisCycle) Notify(NotificationCodes.AuthenticationPaused);
         }
         if (!policy.CredentialsBlocked) blockedPublished = false;
-        status = status with { UpdatedAt = clock.GetUtcNow(), LastError = lastError, Notification = notification,
-            DisconnectAttempts = policy.DisconnectAttempts, CredentialsBlocked = policy.CredentialsBlocked };
+        status = WithFallbackFlags(status with { UpdatedAt = clock.GetUtcNow(), LastError = lastError, Notification = notification,
+            DisconnectAttempts = policy.DisconnectAttempts, CredentialsBlocked = policy.CredentialsBlocked });
         var key = status.State + "/" + status.Detail + "/" + status.Wifi + "/" + status.Direct + "/" + status.Portal + "/" + status.Tunnel + "/" + status.Uu + "/" + status.LastError;
         if (key != lastEvent && Log(status.State, status.Detail, snapshot: status)) lastEvent = key;
         status = status with { LastError = journal.ErrorExcept("StatusWrite") };
@@ -809,7 +874,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
 
     // One-shot broadcast to the tray. The payload persists until superseded and the tray balloons
     // only when At advances, so no persistent sequence counter is needed.
-    private void Notify(string code) => notification = new(code, clock.GetUtcNow());
+    private void Notify(string code)
+    {
+        notification = new(code, clock.GetUtcNow());
+        notifiedThisCycle = true;
+    }
 
     private static bool IsStorageFailure(Exception e) => e is IOException or UnauthorizedAccessException or System.Security.SecurityException;
 

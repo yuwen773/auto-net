@@ -22,7 +22,13 @@ public sealed record DiagnosticError(string Type, int HResult, string? HttpError
     }
 }
 
-public sealed record ProbeEvidence(string Target, bool Passed, string Failure, double ElapsedMilliseconds, int? HttpStatus = null, DiagnosticError? Error = null);
+/// <summary>
+/// ADR-0006 confidence annotation. Controlled values: "Confirmed" (content-verified
+/// against a known endpoint) or "Tentative" (reserved for a future loose single-source
+/// probe). A string like <see cref="ProbeEvidence.Failure"/> so the structured diagnostic
+/// log stays readable without an enum converter; every current probe is Confirmed.
+/// </summary>
+public sealed record ProbeEvidence(string Target, bool Passed, string Failure, double ElapsedMilliseconds, int? HttpStatus = null, DiagnosticError? Error = null, string Confidence = "Confirmed");
 public sealed record InternetEvidence(ProbeEvidence[] Probes)
 {
     public bool Online => Probes.Any(p => p.Passed);

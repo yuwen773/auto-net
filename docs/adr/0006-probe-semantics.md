@@ -8,3 +8,9 @@ Online 判定维持“任一探测通过即在线”。改为“需第二源确�
 
 - 劫持与内容不匹配在日志和诊断包中可区分，网管反馈时能直接指认拦截设备。
 - 置信度字段为将来引入宽松单源探测预留了语义位置，不改变当前判定。
+
+## 实现映射（2026-10-15，B5）
+
+- 探测禁用自动重定向由两个生产客户端工厂保证：`HealthChecks.SystemHandler` 与 `DirectNetwork.CreateHandler` 均固定 `AllowAutoRedirect=false`；新增回归直接断言这两个工厂，防止未来改动悄悄开始跟随重定向。
+- 3xx 分类在 `ProbeDetailedAsync`：Location（整个 URL）含 drcom/portal/webauth/srun 任一关键词（不区分大小写）记 `HijackSuspected`，否则仍是 `HttpStatus`；门户关键词表与 CONTEXT.md「劫持嫌疑」术语一致。校园门户主机名本身不含这些关键词，这是 ADR 词表的本意，不是遗漏。
+- `ProbeEvidence.Confidence` 为字符串受控值（"Confirmed"/"Tentative"），与 `Failure` 同样式，使结构化日志无需枚举转换器即可读；当前所有探测均为 "Confirmed"。`LogSummary` 探测白名单加入 `HijackSuspected`。

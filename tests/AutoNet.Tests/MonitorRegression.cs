@@ -422,6 +422,118 @@ internal static class MonitorRegression
             Require(online.Direct == "外网可达" && fixture.ResolveCalls == 0);
             Require(fixture.Authentication is { State: AuthenticationState.RetryCoolingDown, Attempts: 1 });
             Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1);
+        }),
+        ("门户改版：状态结构变化聚合改版信号，恢复后清除且不重复广播", async () =>
+        {
+            // ADR-0005: a chkstatus body that parses but lost the result field is a shape
+            // change, not a credential or network fault. It must surface as one signal —
+            // status flag, journal event, one-shot notification — and clear once the
+            // portal answers in the known shape again.
+            var fixture = new MonitorFixture { HasCredentials = false };
+            fixture.Http.StatusJson = "dr1001({\"code\":200,\"v4ip\":\"10.0.0.1\"})";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var first = await worker.RunOnceAsync(default);
+            Require(first.PortalLayoutSuspected && first.Notification is { Code: NotificationCodes.PortalLayoutChanged });
+            Require(first.Detail.Contains("门户") && first.Detail.Contains("诊断包"));
+            Require(fixture.Logs.Any(e => e.EventCode == "PortalLayoutChanged"));
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var second = await worker.RunOnceAsync(default);
+            Require(second.PortalLayoutSuspected && second.Notification == first.Notification);
+            Require(fixture.Logs.Count(e => e.EventCode == "PortalLayoutChanged") == 1);
+            fixture.Http.StatusJson = null;
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var clean = await worker.RunOnceAsync(default);
+            Require(!clean.PortalLayoutSuspected);
+        }),
+        ("门户改版：结构类预检失败置标志，重启后随持久暂停保留", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.ConfigJson = "{\"data\":{\"en_md5\":1,\"password_cut\":0,\"enable_r3\":0}}";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var blocked = await worker.RunOnceAsync(default);
+            Require(blocked.CredentialsBlocked && blocked.PortalLayoutSuspected);
+            Require(blocked.AuthenticationFailure == "UnsupportedFlag");
+            // The pause wording replaces the detail wholesale, so the layout guidance must
+            // be appended after it — the structural scenario is exactly the paused one.
+            Require(blocked.Detail.Contains("门户结构疑似变化") && blocked.Detail.Contains("诊断包"));
+            // The pause announcement shares the one-shot channel; the more specific layout
+            // event raised earlier in the same cycle must not be superseded by it.
+            Require(blocked.Notification is { Code: NotificationCodes.PortalLayoutChanged });
+            Require(fixture.Logs.Any(e => e.EventCode == "PortalLayoutChanged"));
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var still = await worker.RunOnceAsync(default);
+            Require(still.PortalLayoutSuspected && still.Notification == blocked.Notification);
+            Require(fixture.Logs.Count(e => e.EventCode == "PortalLayoutChanged") == 1);
+            using var restarted = new MonitorWorker(fixture, fixture.Clock);
+            var afterRestart = await restarted.RunOnceAsync(default);
+            Require(afterRestart.CredentialsBlocked && afterRestart.PortalLayoutSuspected);
+            Require(afterRestart.Notification is { Code: NotificationCodes.PortalLayoutChanged });
+            // The signal is re-derived from the persisted block, so the restart re-announces it.
+            Require(fixture.Logs.Count(e => e.EventCode == "PortalLayoutChanged") == 2);
+        }),
+        ("门户改版：非结构类失败不置改版标志", async () =>
+        {
+            // An explicit credential rejection and a temporarily missing client IPv4 say
+            // nothing about the portal's layout; neither may raise the signal.
+            var rejected = new MonitorFixture();
+            rejected.Http.LoginResult = "{\"result\":0,\"msg\":\"密码错误\"}";
+            using (var worker = new MonitorWorker(rejected, rejected.Clock))
+            {
+                var first = await worker.RunOnceAsync(default);
+                Require(first.CredentialsBlocked && !first.PortalLayoutSuspected);
+                Require(!rejected.Logs.Any(e => e.EventCode == "PortalLayoutChanged"));
+            }
+            var missing = new MonitorFixture();
+            missing.Http.GatewayLocation = null;
+            missing.Http.StatusClientIpv4 = null;
+            missing.Http.HomePage = "<html>no-address</html>";
+            using (var worker = new MonitorWorker(missing, missing.Clock))
+            {
+                var first = await worker.RunOnceAsync(default);
+                Require(first.AuthenticationFailure == "MissingClientIpv4" && !first.PortalLayoutSuspected);
+                Require(!missing.Logs.Any(e => e.EventCode == "PortalLayoutChanged"));
+            }
+        }),
+        ("浏览器兜底：连续认证失败达阈值置标志、带冷却时间戳且只广播一次", async () =>
+        {
+            // ADR-0002: the cap is reached on the third consecutive failure. A missing
+            // client IPv4 is used because it is a preflight failure that never sends
+            // credentials — a generic login rejection instead takes the ADR-0001
+            // submission-pending/recheck path and reaches the cap on a longer cadence.
+            var fixture = new MonitorFixture();
+            fixture.Http.GatewayLocation = null;
+            fixture.Http.StatusClientIpv4 = null;
+            fixture.Http.HomePage = "<html>no-address</html>";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var second = await worker.RunOnceAsync(default);
+            Require(!second.BrowserFallbackRequested && second.BrowserFallbackNotBefore is null);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var capped = await worker.RunOnceAsync(default);
+            Require(capped.CredentialsBlocked && capped.AuthenticationPersistentState == "InteractionRequired");
+            Require(capped.BrowserFallbackRequested);
+            Require(capped.BrowserFallbackNotBefore == fixture.Clock.GetUtcNow().AddMinutes(10));
+            Require(capped.Notification is { Code: NotificationCodes.BrowserFallbackRequested });
+            Require(capped.Detail.Contains("浏览器"));
+            Require(fixture.Logs.Any(e => e.EventCode == "BrowserFallbackRequested"));
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var still = await worker.RunOnceAsync(default);
+            Require(still.BrowserFallbackRequested && still.Notification == capped.Notification);
+            Require(fixture.Logs.Count(e => e.EventCode == "BrowserFallbackRequested") == 1);
+        }),
+        ("浏览器兜底：人工验证未达失败阈值不请求兜底", async () =>
+        {
+            // A captcha on the first attempt needs interaction, not the failure-count
+            // threshold; the flag stays down and the pause announcement is what publishes.
+            var fixture = new MonitorFixture();
+            fixture.Http.LoginResult = "{\"result\":0,\"msg\":\"captcha required\"}";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var captcha = await worker.RunOnceAsync(default);
+            Require(captcha.CredentialsBlocked && captcha.AuthenticationPersistentState == "InteractionRequired");
+            Require(!captcha.BrowserFallbackRequested && captcha.BrowserFallbackNotBefore is null);
+            Require(captcha.Notification is { Code: NotificationCodes.AuthenticationPaused });
+            Require(!fixture.Logs.Any(e => e.EventCode == "BrowserFallbackRequested"));
         })
     ];
 
@@ -548,6 +660,9 @@ internal sealed class MonitorHttp : HttpMessageHandler
     public string PortalResult { get; set; } = "0";
     // The real status endpoint always reports v4ip; null exercises the home-page fallback.
     public string? StatusClientIpv4 { get; set; } = "10.0.0.1";
+    // Overrides the chkstatus body wholesale; models a changed JSONP shape (ADR-0005), e.g. a
+    // response that parses but no longer carries the result field.
+    public string? StatusJson { get; set; }
     public string LoginResult { get; set; } = "{\"result\":1}";
     // null forces the home-page fallback, exercising the address resolution chain.
     public string? GatewayLocation { get; set; } = GatewayRedirect;
@@ -585,7 +700,7 @@ internal sealed class MonitorHttp : HttpMessageHandler
         {
             "/robots.txt" => Online ? "User-agent: *" : "offline",
             "/connecttest.txt" => "Microsoft Connect Test",
-            "/drcom/chkstatus" => "{\"result\":" + PortalResult + (StatusClientIpv4 is null ? "" : ",\"v4ip\":\"" + StatusClientIpv4 + "\"") + "}",
+            "/drcom/chkstatus" => StatusJson ?? "{\"result\":" + PortalResult + (StatusClientIpv4 is null ? "" : ",\"v4ip\":\"" + StatusClientIpv4 + "\"") + "}",
             "/" => HomePage,
             "/eportal/portal/page/loadConfig" => ConfigJson,
             "/eportal/portal/login" => LoginResult,

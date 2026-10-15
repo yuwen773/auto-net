@@ -16,7 +16,8 @@ public static class LogEventClassifier
                 "RecoveryDecision" or "RecoveryActionStarted" or "RecoveryActionCompleted" or "WifiRequestResult"
                     or "SafetyStateWriteStarted" or "SafetyStateWritten" or "DisconnectRecheck" => LogEventCategory.Recovery,
                 "PortalStep" or "SubmissionAuthorized" or "SubmissionNotAuthorized"
-                    or "SubmissionRechecking" or "SubmissionResolved" or "SubmissionUnresolved" => LogEventCategory.Authentication,
+                    or "SubmissionRechecking" or "SubmissionResolved" or "SubmissionUnresolved"
+                    or "PortalLayoutChanged" or "BrowserFallbackRequested" => LogEventCategory.Authentication,
                 _ => LogEventCategory.Other
             };
 

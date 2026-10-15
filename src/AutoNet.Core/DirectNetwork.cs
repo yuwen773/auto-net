@@ -8,7 +8,12 @@ namespace AutoNet.Core;
 
 public static class DirectNetwork
 {
-    public static HttpClient CreateClient(WifiLink link)
+    public static HttpClient CreateClient(WifiLink link) => new(CreateHandler(link)) { Timeout = TimeSpan.FromSeconds(2) };
+
+    // Handler separated from the client so the offline regression can pin "probes never
+    // follow redirects" (ADR-0006): a 3xx must reach the probe, not be followed to the
+    // portal's landing page.
+    internal static SocketsHttpHandler CreateHandler(WifiLink link)
     {
         if (link.Address is null || link.Index == 0) throw new InvalidOperationException("Wi-Fi 尚未取得 IPv4 地址。");
         // A recreated Wi-Fi client must not reuse DNS answers from a previous association.
@@ -36,7 +41,7 @@ public static class DirectNetwork
                 throw new SocketException((int)SocketError.HostUnreachable);
             }
         };
-        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
+        return handler;
     }
 
     private static void Pin(Socket socket, WifiLink link)

@@ -9,3 +9,10 @@
 - 改版真发生时，诊断包提供真实夹具，届时再建解析器（可能仍是配置驱动的参数映射，而非 HTML 抓取）。
 - 在检测到位前，改版表现为“安全暂停 + 明确信号”，不会静默无限重试或误判凭据错误。
 - 明确拒绝的方案：现在就实现通用动态解析。理由是不可测、无夹具，且会把猜测逻辑放进生产认证路径。
+
+## 实现映射（2026-10-15，B5）
+
+- 结构类集合由 `PortalLayoutSignal.IsStructural` 定义：MissingFlag / InvalidFlagType / UnsupportedFlag / DuplicateFlag / MalformedConfiguration / InvalidResponse / MissingGatewayParameters。前四个是 loadConfig 三标志契约的类型、缺失、值与重复变化；InvalidResponse 覆盖不可解析响应体，含 chkstatus JSONP 失去 result 字段；MissingGatewayParameters 覆盖网关 302 不再携带登录上下文。
+- `ReadStateAsync` 因此区分两种 Unknown：缺 result 字段（形状变化 → InvalidResponse，是信号）与 result 取值无法识别（StatusUnknown，**不是**信号——形状仍被识别，只是状态值未知）。
+- 信号落点：journal 事件 `PortalLayoutChanged`、`status.json` 的 `PortalLayoutSuspected` 标志、一次性通知（词表新增项）。只读诊断路径在状态无法识别时不再报告 Complete/None，避免诊断包把改版形状藏起来。
+- 本 ADR 只加检测，不改处置：Unsupported 类仍持久暂停，MissingGatewayParameters 仍退避重试；暂停/重试判据属于既有安全设计，不在本轮范围。

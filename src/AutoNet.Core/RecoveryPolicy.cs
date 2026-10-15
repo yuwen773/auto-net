@@ -201,6 +201,18 @@ public sealed record StatusSnapshot
     public bool CredentialRequestStarted { get; init; }
     public string LastError { get; init; } = "";
     public bool CredentialsBlocked { get; init; }
+    /// <summary>ADR-0005: the latest portal observation fell in the structural failure set; the portal's shape is suspected to have changed.</summary>
+    public bool PortalLayoutSuspected { get; init; }
+    /// <summary>
+    /// ADR-0002: consecutive authentication failures reached the cap; the tray should open the portal page in the user session.
+    /// </summary>
+    public bool BrowserFallbackRequested { get; init; }
+    /// <summary>
+    /// Grant time plus the 10-minute cooldown, stamped once per episode. The tray owns first-open
+    /// dedup and its own repeat cadence; the service never refreshes it while the flag stays up,
+    /// and a service restart re-grants it.
+    /// </summary>
+    public DateTimeOffset? BrowserFallbackNotBefore { get; init; }
     /// <summary>Latest one-shot notification, or null when none was emitted; older builds omit the field.</summary>
     public StatusNotification? Notification { get; init; }
 }
@@ -213,9 +225,10 @@ public static class NotificationCodes
     public const string SubmissionRechecking = "SubmissionRechecking";
     public const string SubmissionUnresolved = "SubmissionUnresolved";
     public const string BrowserFallbackRequested = "BrowserFallbackRequested";
+    public const string PortalLayoutChanged = "PortalLayoutChanged";
 
     public static bool IsKnown(string? code) => code is InternetRecovered or AuthenticationPaused
-        or SubmissionRechecking or SubmissionUnresolved or BrowserFallbackRequested;
+        or SubmissionRechecking or SubmissionUnresolved or BrowserFallbackRequested or PortalLayoutChanged;
 }
 
 /// <summary>

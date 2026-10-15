@@ -89,8 +89,12 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
         if (!Settings.IsSupportedPortal(origin)) return Unknown(PortalFailure.InvalidTarget);
         try
         {
-            var (state, status, _) = await ReadStateAsync(ct);
+            var (state, status, _, shape) = await ReadStateAsync(ct);
+            // A 200 whose body no longer carries the result field is a changed response
+            // shape (ADR-0005); a recognised shape with an unrecognised state value stays
+            // StatusUnknown, which is not a layout signal.
             var failure = status is not null && status != 200 ? PortalFailure.HttpStatus :
+                !shape ? PortalFailure.InvalidResponse :
                 state == PortalState.Unknown ? PortalFailure.StatusUnknown : PortalFailure.None;
             return new PortalAttempt(failure == PortalFailure.None ? LoginResult.Accepted : LoginResult.Rejected,
                 PortalStage.Status, failure, status) { ObservedState = state, Evidence = evidence };
@@ -101,22 +105,26 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
         catch (IOException e) { return Unknown(PortalFailure.Transport, e); }
     }
 
-    private sealed record PortalStatus(PortalState State, int? HttpStatus, string? ClientIpv4);
+    // ResultField reports whether the status response kept the known shape (a result
+    // property); the state itself may still be an unrecognised value.
+    private sealed record PortalStatus(PortalState State, int? HttpStatus, string? ClientIpv4, bool ResultField = true);
 
     // The status endpoint already reports the client IPv4 as a JSON field on every response,
     // authenticated or not. The home page only carries it while a session is established,
     // so scraping it there fails exactly when login is needed.
     private async Task<PortalStatus> ReadStateAsync(CancellationToken ct)
     {
-        if (!Settings.IsSupportedPortal(origin)) return new(PortalState.Unknown, null, null);
+        if (!Settings.IsSupportedPortal(origin)) return new(PortalState.Unknown, null, null, ResultField: false);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(2000);
         using var response = await GetAsync(new Uri(origin, "/drcom/chkstatus?callback=dr1001&v=" + Random.Shared.Next(100000, 999999)), PortalStage.Status, timeout.Token);
-        if (response.StatusCode != HttpStatusCode.OK) return new(PortalState.Unknown, (int)response.StatusCode, null);
+        if (response.StatusCode != HttpStatusCode.OK) return new(PortalState.Unknown, (int)response.StatusCode, null, ResultField: false);
         using var json = ParseJsonp(await ReadResponseAsync(response, timeout.Token));
         evidence = evidence with { ResponseShape = json.RootElement.ValueKind.ToString() };
+        // No result property means the response shape changed (ADR-0005 layout signal);
+        // a present-but-unrecognised value stays a plain unknown state.
         if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("result", out var result))
-            return new(PortalState.Unknown, (int)response.StatusCode, null);
+            return new(PortalState.Unknown, (int)response.StatusCode, null, ResultField: false);
         var state = result.ToString() switch { "1" => PortalState.LoggedIn, "0" => PortalState.NeedsLogin, _ => PortalState.Unknown };
         var clientIp = json.RootElement.TryGetProperty("v4ip", out var ip) && ip.ValueKind == JsonValueKind.String ? ip.GetString() : null;
         evidence = evidence with { StatusAddress = AddressEvidence(clientIp) };
@@ -230,7 +238,25 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
             var inspection = await ReadStateAsync(requestToken);
             state = inspection.State;
             if (credentials is not null && state != PortalState.NeedsLogin)
-                return Outcome(LoginResult.Rejected, state == PortalState.LoggedIn ? PortalFailure.AlreadyAuthenticated : PortalFailure.StatusUnknown, inspection.HttpStatus);
+            {
+                // A 200 whose body lost the result field is a changed response shape
+                // (ADR-0005): pause like the other structural failures instead of retrying
+                // into it. A recognised shape with an unrecognised value stays StatusUnknown,
+                // and a non-200 keeps the pre-existing status-unknown classification.
+                var shapeChanged = inspection.HttpStatus == 200 && !inspection.ResultField;
+                return Outcome(shapeChanged ? LoginResult.Unsupported : LoginResult.Rejected,
+                    state == PortalState.LoggedIn ? PortalFailure.AlreadyAuthenticated :
+                    shapeChanged ? PortalFailure.InvalidResponse : PortalFailure.StatusUnknown, inspection.HttpStatus);
+            }
+            // The read-only path must not report a complete preflight when the status
+            // response itself is unrecognisable (ADR-0005); an already-logged-in portal
+            // still completes, because there is nothing to submit.
+            if (credentials is null && state == PortalState.Unknown)
+            {
+                var shapeChanged = inspection.HttpStatus == 200 && !inspection.ResultField;
+                return Outcome(shapeChanged ? LoginResult.Unsupported : LoginResult.Rejected,
+                    shapeChanged ? PortalFailure.InvalidResponse : PortalFailure.StatusUnknown, inspection.HttpStatus);
+            }
 
             // Transport and timeout failures here fall through to the same classification as
             // the other stages rather than being caught locally.

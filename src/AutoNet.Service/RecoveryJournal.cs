@@ -150,6 +150,7 @@ internal sealed class RecoveryJournal(IMonitorEnvironment environment, TimeProvi
         "CycleInterrupted" => "检测轮次中断", "LoggingGap" => "日志证据缺口",
         "SubmissionAuthorized" => "认证提交获准", "SubmissionNotAuthorized" => "认证提交被阻止",
         "SubmissionRechecking" => "提交结果复检", "SubmissionResolved" => "提交结果消解", "SubmissionUnresolved" => "提交结果待人工",
+        "PortalLayoutChanged" => "门户疑似改版", "BrowserFallbackRequested" => "浏览器兜底请求",
         "DisconnectRecheck" => "断线前重新核验", _ => "诊断事件"
     };
 

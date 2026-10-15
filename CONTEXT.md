@@ -60,6 +60,7 @@ _Avoid_: ping、204 探测
 
 **探测置信度**:
 Confirmed（双源加正文校验）或 Tentative（宽松单源）；当前探测均为 Confirmed。
+`ProbeEvidence.Confidence` 随结构化诊断日志落盘，为将来引入宽松单源探测预留语义位置。
 
 **劫持嫌疑（HijackSuspected）**:
 探测重定向目标 URL 含 drcom/portal/webauth/srun 等门户关键词时的失败分类。
@@ -71,9 +72,12 @@ _Avoid_: 消息、推送
 
 **浏览器兜底**:
 连续认证失败达阈值后，请求在用户会话用默认浏览器打开门户认证页；只开页、不填表，凭据不进浏览器进程。
+服务侧只置标志（status.json 的 `BrowserFallbackRequested` + `BrowserFallbackNotBefore` 冷却时间戳）并广播一次通知；服务运行在会话 0，不能自行弹浏览器，托盘见标志后打开门户页。
 
 **门户改版信号（PortalLayoutChanged）**:
 预检失败落在结构类集合时的聚合信号，表示门户结构疑似变化、自动认证已安全暂停。
+结构类集合见 `PortalLayoutSignal.IsStructural`：loadConfig 标志契约变化（缺失/类型/值/重复）、配置结构变化、响应无法解析（含 chkstatus 缺 result 字段）、网关 302 缺少登录参数；result 取值无法识别（StatusUnknown）不算。
+落点：journal 事件 + status.json 的 `PortalLayoutSuspected` 标志 + 一次性通知。
 _Avoid_: 解析失败
 
 **诊断包**:

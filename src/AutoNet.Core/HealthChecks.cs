@@ -25,18 +25,30 @@ public static class HealthChecks
     public static async Task<bool> ProbeAsync(HttpClient http, Uri uri, bool robots, CancellationToken ct)
         => (await ProbeDetailedAsync(http, uri, robots, ct, "ConfiguredEndpoint")).Passed;
 
+    // ADR-0006: a redirect whose target carries portal keywords is a captive-portal hijack,
+    // which is a different fact from a body that failed the content check. Production probe
+    // clients disable auto-redirect, so the 3xx — and its Location — reaches the probe.
+    private static readonly string[] PortalRedirectKeywords = ["drcom", "portal", "webauth", "srun"];
+
+    internal static bool IsPortalRedirect(Uri? location) => location is not null &&
+        PortalRedirectKeywords.Any(keyword => location.ToString().Contains(keyword, StringComparison.OrdinalIgnoreCase));
+
     private static async Task<ProbeEvidence> ProbeDetailedAsync(HttpClient http, Uri uri, bool robots, CancellationToken ct, string target)
     {
         var started = Stopwatch.GetTimestamp();
         int? status = null;
         ProbeEvidence Result(string failure, DiagnosticError? error = null) => new(target, failure == "None", failure,
-            Math.Round(Stopwatch.GetElapsedTime(started).TotalMilliseconds, 2), status, error);
+            Math.Round(Stopwatch.GetElapsedTime(started).TotalMilliseconds, 2), status, error, "Confirmed");
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(2000);
             using var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             status = (int)response.StatusCode;
+            // A 3xx is classified, never followed: a portal-keyword Location is a hijack
+            // suspicion, any other redirect target is a plain HTTP status failure.
+            if (status is >= 300 and < 400)
+                return Result(IsPortalRedirect(response.Headers.Location) ? "HijackSuspected" : "HttpStatus");
             if (!response.IsSuccessStatusCode) return Result("HttpStatus");
             if (!robots) return Result("None");
             return Result((await DrcomPortal.ReadLimitedAsync(response, timeout.Token)).Contains("User-agent:", StringComparison.OrdinalIgnoreCase) ? "None" : "ContentMismatch");
@@ -46,11 +58,15 @@ public static class HealthChecks
         catch (IOException e) { return Result("ResponseRead", DiagnosticError.From(e)); }
     }
 
-    public static HttpClient SystemClient(string proxy = "") => new(new SocketsHttpHandler
+    // Handler separated from the client so the offline regression can pin "probes never
+    // follow redirects" (ADR-0006) without touching the network.
+    internal static SocketsHttpHandler SystemHandler(string proxy = "") => new()
     {
         UseProxy = proxy != "", Proxy = proxy == "" ? null : new WebProxy(proxy), AllowAutoRedirect = false,
         AutomaticDecompression = DecompressionMethods.All
-    }) { Timeout = TimeSpan.FromSeconds(2) };
+    };
+
+    public static HttpClient SystemClient(string proxy = "") => new(SystemHandler(proxy)) { Timeout = TimeSpan.FromSeconds(2) };
 
     public static async Task<string> SystemPathAsync(Settings settings, WifiLink wifi, CancellationToken ct)
     {

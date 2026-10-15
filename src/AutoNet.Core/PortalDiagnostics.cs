@@ -3,6 +3,27 @@ namespace AutoNet.Core;
 public enum PortalStage { Unknown, Status, GatewayRedirect, HomePage, ClientIpv4, Configuration, AuthenticationMode, Submission, Complete }
 public enum PortalFailure { None, InvalidTarget, AlreadyAuthenticated, StatusUnknown, HttpStatus, MissingClientIpv4, MalformedConfiguration, MissingFlag, InvalidFlagType, UnsupportedFlag, DuplicateFlag, InvalidResponse, Timeout, Transport, Tls, CredentialsRejected, InteractionRequired, LoginRejected, MissingGatewayParameters, BindingRejected, SafetyPersistence }
 
+/// <summary>
+/// ADR-0005 structural failure set. A preflight failure in this set means the portal's
+/// response shape changed — not that credentials are wrong and not that the network is
+/// down. The service aggregates it into the PortalLayoutChanged signal (journal event,
+/// status flag, one-shot notification) instead of a generic dynamic parser, which would
+/// put untestable guesswork into the production authentication path.
+/// Mapping of the ADR's enumeration: MissingFlag/UnsupportedFlag (+ the type and
+/// duplicate variants of the same loadConfig contract) and MalformedConfiguration cover
+/// the configuration shape; InvalidResponse covers unparseable bodies, including a
+/// chkstatus JSONP that lost its result field; MissingGatewayParameters covers a gateway
+/// redirect that no longer carries the login context. StatusUnknown is deliberately not
+/// structural: a recognised shape with an unrecognised state value is not a layout change.
+/// </summary>
+public static class PortalLayoutSignal
+{
+    public static bool IsStructural(PortalFailure failure) => failure is
+        PortalFailure.MissingFlag or PortalFailure.InvalidFlagType or PortalFailure.UnsupportedFlag or
+        PortalFailure.DuplicateFlag or PortalFailure.MalformedConfiguration or PortalFailure.InvalidResponse or
+        PortalFailure.MissingGatewayParameters;
+}
+
 public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, PortalFailure Failure, int? HttpStatus = null, string? Field = null, bool CredentialRequestStarted = false)
 {
     public PortalState ObservedState { get; init; } = PortalState.Unknown;

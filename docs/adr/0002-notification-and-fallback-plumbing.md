@@ -15,3 +15,9 @@
 - 通知与兜底的“发生了”可离线测试；“用户看到了什么”要等 UI PR 后现场验收。
 - 文案不在 Core：新增通知只加词表项，不改数据结构。
 - 原始设想中的 Seq 持久序号被 At 单调比较取代：序号需要额外的持久计数器与崩溃恢复，而 At 已经随每次发布天然递增。
+
+## 实现映射（2026-10-15，B5）
+
+- 词表新增 `PortalLayoutChanged`（门户改版信号，ADR-0005）；`BrowserFallbackRequested` 的发射点在 B5 接上：阈值达成时置 `BrowserFallbackRequested` + `BrowserFallbackNotBefore`（授予时刻 + 10 分钟，每段落戳、重启重新授予）并广播一次。
+- 一次性通道增加「每轮至多一条」优先级：同一轮内先发射的更具体事件（改版/兜底）不被随后 Publish 的通用 AuthenticationPaused 覆盖；重启重放语义不变（无其他事件时仍重放暂停通知）。
+- 浏览器兜底的阈值语义依 CONTEXT.md「连续认证失败达阈值」：凭据/绑定拒绝等首次即持久阻断的场景只广播 AuthenticationPaused，不置兜底标志。

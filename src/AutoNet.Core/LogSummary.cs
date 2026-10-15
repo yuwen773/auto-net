@@ -22,7 +22,8 @@ public static class LogSummary
         "安全状态写入完成", "操作异常", "操作恢复正常", "检测轮次中断", "日志证据缺口",
         "认证提交获准", "认证提交被阻止", "提交结果复检", "提交结果消解", "提交结果待人工",
         "断线前重新核验", "诊断事件", "开始恢复动作", "辅助检测失败",
-        "取消主动断线", "主动断线请求失败", "重新认证"
+        "取消主动断线", "主动断线请求失败", "重新认证",
+        "门户疑似改版", "浏览器兜底请求"
     };
 
     static LogSummary() => AllowedActions.UnionWith(NetworkDisplayMap.KnownStates);
@@ -60,7 +61,8 @@ public static class LogSummary
         "RecoveryDecision", "RecoveryActionStarted", "RecoveryActionCompleted", "PortalStep", "WifiRequestResult",
         "SafetyStateWriteStarted", "SafetyStateWritten", "OperationFailed", "OperationRecovered", "CycleInterrupted",
         "LoggingGap", "StatusChanged", "SubmissionAuthorized", "SubmissionNotAuthorized", "DisconnectRecheck",
-        "SubmissionRechecking", "SubmissionResolved", "SubmissionUnresolved"
+        "SubmissionRechecking", "SubmissionResolved", "SubmissionUnresolved",
+        "PortalLayoutChanged", "BrowserFallbackRequested"
     };
     private static readonly HashSet<string> AllowedReasons = new(StringComparer.Ordinal)
     {
@@ -155,7 +157,7 @@ public static class LogSummary
         foreach (var probe in data.Probes ?? [])
         {
             if (probe.Target is not ("BaiduRobots" or "MicrosoftRobots")) continue;
-            var failure = probe.Failure is "None" or "HttpStatus" or "ContentMismatch" or "Timeout" or "ResponseRead" ? probe.Failure :
+            var failure = probe.Failure is "None" or "HttpStatus" or "ContentMismatch" or "HijackSuspected" or "Timeout" or "ResponseRead" ? probe.Failure :
                 Enum.TryParse<HttpRequestError>(probe.Failure, out var http) && Enum.IsDefined(http) ? http.ToString() : "Unknown";
             parts.Add($"探测 {probe.Target}/{failure}/HTTP {probe.HttpStatus}");
             if (probe.Error is { } probeError) AppendError(parts, probeError);
