@@ -3,10 +3,19 @@
     <OutputType>WinExe</OutputType>
     <ApplicationIcon>../../assets/AutoNet.ico</ApplicationIcon>
   </PropertyGroup>
+  <!-- 发布契约：脚本传入 -p:AutoNetPublishIdentity=true 时，EXE 保持 AutoNet.Tray.exe 安装身份。
+       不能改用命令行覆盖 AssemblyName：全局属性会传播到被引用工程（AutoNet.Core），
+       并触发 NuGet“Ambiguous project name”；因此身份只在本地激活。 -->
+  <PropertyGroup Condition="'$(AutoNetPublishIdentity)' == 'true'">
+    <AssemblyName>AutoNet.Tray</AssemblyName>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.4" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AutoNet.Core/AutoNet.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="AutoNet.Tests" />
