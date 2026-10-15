@@ -33,6 +33,67 @@ internal static class PortalRegression
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { cancelled = true; }
             Require(cancelled && handler.Requests.All(u => !u.Query.Contains("user_password")));
         }),
+        ("阶段预算：预检、复核、提交默认值符合 ADR-0004 的 4/5/3 秒", () =>
+        {
+            // Policy anchor: the ADR's numbers live here; a change must update the record.
+            var budgets = PortalBudgets.Default;
+            Require(budgets.Preflight == TimeSpan.FromSeconds(4));
+            Require(budgets.Review == TimeSpan.FromSeconds(5));
+            Require(budgets.Submission == TimeSpan.FromSeconds(3));
+            return Task.CompletedTask;
+        }),
+        ("阶段预算：预检挂死归类在预检阶段且不发送凭据", async () =>
+        {
+            // A status endpoint that never answers is aborted by the preflight budget alone;
+            // the timeout must be classified at the preflight stage, not disguised as a
+            // submission timeout, and no credential request may leave the machine.
+            var budgets = new PortalBudgets(TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(150));
+            using var http = new HttpClient(new HangingHandler("/drcom/chkstatus"));
+            var outcome = await new DrcomPortal(http, new Uri("https://login.csust.edu.cn"), null, budgets)
+                .LoginDetailedAsync(new("test", "never-real"), default);
+            Require(outcome.Stage == PortalStage.Status && outcome.Failure == PortalFailure.Timeout);
+            Require(outcome.Result == LoginResult.Rejected && !outcome.CredentialRequestStarted);
+        }),
+        ("阶段预算：复核链收到可取消令牌，链超时按安全拒发", async () =>
+        {
+            var budgets = new PortalBudgets(TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(200));
+            var handler = new MonitorHttp();
+            using var http = new HttpClient(handler);
+            var portal = new DrcomPortal(http, new Uri("https://login.csust.edu.cn"), null, budgets);
+            var cancelled = false;
+            var outcome = await portal.LoginDetailedAsync(new("test", "never-real"), default, review =>
+            {
+                // The chain learns its budget expired only between steps, like the real
+                // file/WLAN reads; aborting there must refuse the submission safely.
+                while (!review.IsCancellationRequested) Thread.Sleep(5);
+                cancelled = true;
+                review.ThrowIfCancellationRequested();
+                return true;
+            });
+            Require(cancelled);
+            Require(outcome.Result == LoginResult.Unsupported && outcome.Failure == PortalFailure.SafetyPersistence);
+            Require(outcome.Stage == PortalStage.Submission && !outcome.CredentialRequestStarted);
+            Require(handler.Requests.All(u => !u.Query.Contains("user_password")));
+        }),
+        ("阶段预算：提交窗口独立于预检耗时，登录超时仍归类提交阶段", async () =>
+        {
+            var budgets = new PortalBudgets(TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(150));
+            var handler = new MonitorHttp
+            {
+                Delay = uri => uri.AbsolutePath == "/eportal/portal/login" ? TimeSpan.FromMilliseconds(400) : TimeSpan.FromMilliseconds(60)
+            };
+            using var http = new HttpClient(handler);
+            var portal = new DrcomPortal(http, new Uri("https://login.csust.edu.cn"), null, budgets);
+            // The preflight stays inside its own budget, yet the credential request still
+            // times out: the submission window is a fresh budget, not "whatever is left".
+            var slow = await portal.LoginDetailedAsync(new("test", "never-real"), default);
+            Require(slow.Stage == PortalStage.Submission && slow.Failure == PortalFailure.Timeout);
+            Require(slow.Result == LoginResult.Rejected && slow.CredentialRequestStarted);
+            handler.Delay = null;
+            var fast = await portal.LoginDetailedAsync(new("test", "never-real"), default);
+            Require(fast.Result == LoginResult.Accepted && fast.CredentialRequestStarted && fast.Failure == PortalFailure.None);
+            Require(handler.Requests.Count(u => u.Query.Contains("user_password")) == 2);
+        }),
         ("认证加固：网关 IPv4 优先且有效上下文只向固定 HTTPS 端点提交一次", async () =>
         {
             var handler = new MonitorHttp { StatusClientIpv4 = "10.9.9.9" };
@@ -353,5 +414,16 @@ internal sealed class GatewayCancellationHandler(CancellationTokenSource cancell
             ct.ThrowIfCancellationRequested();
         }
         return base.SendAsync(request, ct);
+    }
+}
+
+// Models a portal stage that never answers: the request is aborted only when the
+// caller's token fires, exactly like a real black-holed connection.
+internal sealed class HangingHandler(string path) : HttpMessageHandler
+{
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        if (request.RequestUri!.AbsolutePath == path) await Task.Delay(Timeout.Infinite, ct);
+        return new HttpResponseMessage(HttpStatusCode.OK);
     }
 }

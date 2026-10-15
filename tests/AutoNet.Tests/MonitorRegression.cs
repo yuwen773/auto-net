@@ -289,6 +289,34 @@ internal static class MonitorRegression
             using var restarted = new MonitorWorker(fixture, fixture.Clock);
             var afterRestart = await restarted.RunOnceAsync(default);
             Require(afterRestart.Notification is { Code: NotificationCodes.AuthenticationPaused });
+        }),
+        ("阶段预算：复核链超时记显式拒绝且零提交", async () =>
+        {
+            var fixture = new MonitorFixture();
+            var budgets = new PortalBudgets(TimeSpan.FromMilliseconds(400), TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(400));
+            using var worker = new MonitorWorker(fixture, fixture.Clock, budgets);
+            // The chain's Wi-Fi read blocks past the review budget; the between-step check
+            // aborts the chain instead of letting it eat the submission window.
+            fixture.BeforeWifiRead = () => Thread.Sleep(350);
+            var status = await worker.RunOnceAsync(default);
+            Require(!status.CredentialRequestStarted && !status.CredentialsBlocked);
+            Require(!fixture.Http.Requests.Any(u => u.Query.Contains("user_password")));
+            Require(fixture.Logs.Any(e => e.EventCode == "SubmissionNotAuthorized" && e.Diagnostics?.Reason == "ReviewChainTimeout"));
+        }),
+        ("阶段预算：复核链期间调用方取消必须传播且不提交", async () =>
+        {
+            using var cancellation = new CancellationTokenSource();
+            var fixture = new MonitorFixture();
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var reads = 0;
+            // The chain's Wi-Fi read is the cycle's second one (the first belongs to the
+            // cycle itself); cancelling there must propagate, not become a silent refusal.
+            fixture.BeforeWifiRead = () => { if (++reads == 2) cancellation.Cancel(); };
+            var cancelled = false;
+            try { await worker.RunOnceAsync(cancellation.Token); }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { cancelled = true; }
+            Require(cancelled && !fixture.Http.Requests.Any(u => u.Query.Contains("user_password")));
+            Require(fixture.Logs.Any(e => e.EventCode == "CycleInterrupted"));
         })
     ];
 
@@ -416,25 +444,29 @@ internal sealed class MonitorHttp : HttpMessageHandler
     public string? FailurePath { get; set; }
     public HttpStatusCode FailureStatus { get; set; }
     public Exception? FailureException { get; set; }
+    // Per-path response delay; models slow portal I/O that still answers. Cancellation-aware,
+    // so a phase budget aborts an in-flight request exactly like a real socket would.
+    public Func<Uri, TimeSpan>? Delay { get; set; }
     public List<Uri> Requests { get; } = [];
     public Action? BeforeLogin { get; set; }
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri!;
         Requests.Add(uri);
         if (uri.AbsolutePath == "/eportal/portal/login") BeforeLogin?.Invoke();
+        if (Delay?.Invoke(uri) is { } delay && delay > TimeSpan.Zero) await Task.Delay(delay, cancellationToken);
         if (uri.AbsolutePath == FailurePath)
         {
-            if (FailureException is not null) return Task.FromException<HttpResponseMessage>(FailureException);
+            if (FailureException is not null) throw FailureException;
             var failure = new HttpResponseMessage(FailureStatus) { Content = new StringContent("fixture-secret-response") };
             failure.Headers.Location = new Uri("https://untrusted.example/redirect");
-            return Task.FromResult(failure);
+            return failure;
         }
         if (uri.AbsolutePath == "/connecttest.txt" && GatewayLocation is not null)
         {
             var redirected = new HttpResponseMessage(GatewayStatus) { Content = new StringContent("") };
             redirected.Headers.Location = new Uri(GatewayLocation, UriKind.RelativeOrAbsolute);
-            return Task.FromResult(redirected);
+            return redirected;
         }
         var body = uri.AbsolutePath switch
         {
@@ -446,6 +478,6 @@ internal sealed class MonitorHttp : HttpMessageHandler
             "/eportal/portal/login" => LoginResult,
             _ => throw new InvalidOperationException("未知夹具请求")
         };
-        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
     }
 }

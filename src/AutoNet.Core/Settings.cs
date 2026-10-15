@@ -89,15 +89,35 @@ public static class Storage
     public static void AtomicWrite(string path, byte[] bytes)
     {
         // Directory ACLs must be provisioned by the elevated installer first.
-        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
+        // A reader that opens the destination without FILE_SHARE_DELETE (AV or an indexer)
+        // can lose the replace race with access denied — the 10-12/13 status.json failures.
+        // Three short backoffs ride the race out; only a still-failing write surfaces to the
+        // caller, which records it. The atomic temp+replace stays: settings and credentials
+        // depend on it, so an in-place non-atomic write is not an option.
+        for (var attempt = 0; ; attempt++)
         {
-            using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
             {
-                file.Write(bytes); file.Flush(true);
+                using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    file.Write(bytes); file.Flush(true);
+                }
+                File.Move(temp, path, true);
+                return;
             }
-            File.Move(temp, path, true);
+            catch (Exception e) when (attempt < 3 && e is IOException or UnauthorizedAccessException)
+            {
+                // Retried below after the backoff; the destination keeps its previous content.
+            }
+            finally
+            {
+                // Best-effort: the next attempt uses a fresh temp name, and a debris file must
+                // not mask the original failure.
+                try { if (File.Exists(temp)) File.Delete(temp); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            Thread.Sleep(attempt switch { 0 => 50, 1 => 100, _ => 200 });
         }
-        finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 }

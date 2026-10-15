@@ -10,12 +10,22 @@ namespace AutoNet.Core;
 public enum PortalState { Unknown, LoggedIn, NeedsLogin }
 public enum LoginResult { Accepted, RejectedCredentials, NeedsInteraction, Rejected, Unsupported, RejectedBinding }
 
-public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>? trace = null)
+// Phase budgets for one portal attempt (ADR-0004): the preflight, the submission review
+// chain and the credential request each get their own window, so slow safety I/O can
+// neither eat the submission window nor disguise itself as a portal timeout.
+public sealed record PortalBudgets(TimeSpan Preflight, TimeSpan Review, TimeSpan Submission)
+{
+    public static PortalBudgets Default { get; } =
+        new(TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(3));
+}
+
+public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>? trace = null, PortalBudgets? budgets = null)
 {
     private PortalEvidence evidence = new();
     private PortalStage responseStage;
     private int? responseStatus;
     private long requestStarted;
+    private readonly PortalBudgets budgets = budgets ?? PortalBudgets.Default;
 
     private async Task<string> ReadResponseAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -192,12 +202,12 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
     public async Task<LoginResult> LoginAsync(Credentials credentials, CancellationToken ct) =>
         (await LoginDetailedAsync(credentials, ct)).Result;
 
-    public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct, Func<bool>? authorizeSubmission = null) => ExecuteAsync(credentials, ct, authorizeSubmission);
+    public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct, Func<CancellationToken, bool>? authorizeSubmission = null) => ExecuteAsync(credentials, ct, authorizeSubmission);
 
     // Reads the same prerequisites as login; this path has no credentials and cannot submit them.
     public Task<PortalAttempt> DiagnoseAsync(CancellationToken ct) => ExecuteAsync(null, ct);
 
-    private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct, Func<bool>? authorizeSubmission = null)
+    private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct, Func<CancellationToken, bool>? authorizeSubmission = null)
     {
         evidence = new(); responseStatus = null;
         var stage = PortalStage.Unknown;
@@ -208,9 +218,12 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
         PortalAttempt Outcome(LoginResult result, PortalFailure failure, int? status = null, string? field = null) =>
             new(result, stage, failure, status ?? (responseStage == stage ? responseStatus : null), field, submitted) { ObservedState = state, Flags = flags, Evidence = evidence, Error = error };
         if (!Settings.IsSupportedPortal(origin)) return Outcome(LoginResult.Unsupported, PortalFailure.InvalidTarget);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(6));
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
-        var requestToken = linked.Token;
+        // Phase budgets (ADR-0004): preflight, review chain and submission each get their own
+        // window. A shared deadline let slow safety I/O eat the submission window and made
+        // every overrun look like a submission timeout.
+        using var preflightBudget = new CancellationTokenSource(budgets.Preflight);
+        using var preflight = CancellationTokenSource.CreateLinkedTokenSource(ct, preflightBudget.Token);
+        var requestToken = preflight.Token;
         try
         {
             stage = PortalStage.Status;
@@ -257,10 +270,14 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
             var configUri = new UriBuilder(origin) { Port = 802, Path = "/eportal/portal/page/loadConfig",
                 Query = EncodeQuery(configQuery) };
             stage = PortalStage.Configuration;
-            using var configResponse = await GetAsync(configUri.Uri, PortalStage.Configuration, requestToken);
+            // Bounded like the status and gateway reads: a hung configuration request must
+            // not spend the whole preflight phase.
+            using var configTimeout = CancellationTokenSource.CreateLinkedTokenSource(requestToken);
+            configTimeout.CancelAfter(2000);
+            using var configResponse = await GetAsync(configUri.Uri, PortalStage.Configuration, configTimeout.Token);
             if (configResponse.StatusCode != HttpStatusCode.OK)
                 return Outcome(HttpFailureResult(configResponse.StatusCode), PortalFailure.HttpStatus, (int)configResponse.StatusCode);
-            using var config = ParseJsonp(await ReadResponseAsync(configResponse, requestToken));
+            using var config = ParseJsonp(await ReadResponseAsync(configResponse, configTimeout.Token));
             evidence = evidence with { ResponseShape = config.RootElement.ValueKind.ToString() };
             if (config.RootElement.ValueKind != JsonValueKind.Object || config.RootElement.EnumerateObject().Count(p => p.Name == "data") != 1 ||
                 !config.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
@@ -277,6 +294,11 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
             }
             if (firstFailure != PortalFailure.None) return Outcome(LoginResult.Unsupported, firstFailure, field: firstField);
 
+            // The preflight budget must still be alive before the review and submission
+            // phases start. Checked here — before the stage is re-signed to Submission — an
+            // expiry is classified at the last preflight stage instead of disguising itself
+            // as a submission timeout.
+            requestToken.ThrowIfCancellationRequested();
             stage = PortalStage.Submission;
             // Without the gateway's MAC token the portal answers "只能绑定指定的VLAN设备", so
             // refuse rather than submit a request that cannot succeed. Reported as Rejected,
@@ -285,10 +307,29 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
             if (!gateway.CanSubmit)
                 return Outcome(LoginResult.Rejected, PortalFailure.MissingGatewayParameters);
             if (credentials is null) { stage = PortalStage.Complete; return Outcome(LoginResult.Accepted, PortalFailure.None); }
-            requestToken.ThrowIfCancellationRequested();
-            if (authorizeSubmission is not null && !authorizeSubmission())
-                return Outcome(LoginResult.Unsupported, PortalFailure.SafetyPersistence);
-            requestToken.ThrowIfCancellationRequested();
+            if (authorizeSubmission is not null)
+            {
+                // The review chain runs between steps only: a file or WLAN read that blocks
+                // cannot be interrupted, but every step boundary checks the chain's own
+                // budget. Expiry is a safe refusal, never a submission and never a portal
+                // timeout, so the log tells "the chain was too slow" from "the portal never
+                // answered".
+                using var reviewBudget = new CancellationTokenSource(budgets.Review);
+                using var review = CancellationTokenSource.CreateLinkedTokenSource(ct, reviewBudget.Token);
+                bool authorized;
+                try { authorized = authorizeSubmission(review.Token); }
+                catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
+                {
+                    error = DiagnosticError.From(e);
+                    return Outcome(LoginResult.Unsupported, PortalFailure.SafetyPersistence);
+                }
+                if (!authorized) return Outcome(LoginResult.Unsupported, PortalFailure.SafetyPersistence);
+            }
+            // The credential request itself gets a fresh window, whatever the preflight and
+            // the review chain spent; caller cancellation still aborts before anything is sent.
+            using var submissionBudget = new CancellationTokenSource(budgets.Submission);
+            using var submission = CancellationTokenSource.CreateLinkedTokenSource(ct, submissionBudget.Token);
+            submission.Token.ThrowIfCancellationRequested();
 
             // Production transport disables redirects, so this credential-bearing request is
             // the only one that leaves the machine and it is never followed anywhere else.
@@ -298,10 +339,10 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
                 Query = BuildLoginQuery(credentials, clientIp, gateway)
             };
             submitted = true;
-            using var response = await GetAsync(loginUri.Uri, PortalStage.Submission, requestToken);
+            using var response = await GetAsync(loginUri.Uri, PortalStage.Submission, submission.Token);
             if (response.StatusCode != HttpStatusCode.OK)
                 return Outcome(HttpFailureResult(response.StatusCode), PortalFailure.HttpStatus, (int)response.StatusCode);
-            using var json = ParseJsonp(await ReadResponseAsync(response, requestToken));
+            using var json = ParseJsonp(await ReadResponseAsync(response, submission.Token));
             evidence = evidence with { ResponseShape = json.RootElement.ValueKind.ToString() };
             var result = Classify(json.RootElement);
             var outcome = Outcome(result, result switch

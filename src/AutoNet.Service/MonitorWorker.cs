@@ -6,7 +6,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace AutoNet.Service;
 
-public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider clock) : BackgroundService
+public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider clock, PortalBudgets? budgets = null) : BackgroundService
 {
     private readonly RecoveryPolicy policy = new();
     private readonly RecoveryJournal journal = new(environment, clock);
@@ -150,7 +150,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             if (!direct)
             {
                 journal.Stage = "PortalInspection";
-                inspection = await new DrcomPortal(http, new Uri(settings.PortalOrigin)).InspectDetailedAsync(ct);
+                inspection = await new DrcomPortal(http, new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct);
                 portalState = inspection.ObservedState;
             }
         }
@@ -321,8 +321,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                                 ElapsedMilliseconds = step.ElapsedMilliseconds, Error = step.Error,
                                 HttpStatus = step.HttpStatus, Parameters = step.Evidence
                             });
-                        }).LoginDetailedAsync(credentials!, ct,
-                            () => AuthorizeSubmission(settings, link, ct))
+                        }, budgets).LoginDetailedAsync(credentials!, ct,
+                            review => AuthorizeSubmission(settings, link, ct, review))
                         : new(LoginResult.Unsupported, PortalStage.Submission, PortalFailure.SafetyPersistence);
                     detail = lastAuthentication.SafeSummary;
                     if (lastAuthentication.Failure != PortalFailure.None) journal.Fault("Authentication", detail);
@@ -467,7 +467,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         journal.Recovered("MainCycle/DisconnectRecheckInternet");
         if (internet.Online) return Result(false, link, true, "新鲜 HTTPS 检查已恢复，取消断线。", "FreshInternetRecovered");
         journal.Stage = "DisconnectRecheckPortal";
-        inspection = await new DrcomPortal(fresh, new Uri(settings.PortalOrigin)).InspectDetailedAsync(ct);
+        inspection = await new DrcomPortal(fresh, new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct);
         if (inspection.ObservedState == PortalState.NeedsLogin) return Result(false, link, false, "最新状态明确需认证，取消断线并优先等待安全认证恢复。", "AuthenticateRequired");
         ct.ThrowIfCancellationRequested();
         current = ReadStep("SettingsRead", environment.LoadSettings);
@@ -571,29 +571,44 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         });
     }
 
-    private bool AuthorizeSubmission(Settings settings, WifiLink link, CancellationToken ct)
+    // The submission review chain. `review` is the chain's own budget (ADR-0004): steps are
+    // only interruptible at their boundaries, and expiry is an explicit, logged refusal —
+    // never a silent authorization and never a portal timeout. `ct` is the caller's token:
+    // its cancellation propagates out of the chain instead of being converted.
+    private bool AuthorizeSubmission(Settings settings, WifiLink link, CancellationToken ct, CancellationToken review)
     {
-        ct.ThrowIfCancellationRequested();
-        var currentSettings = ReadStep("SettingsRead", environment.LoadSettings);
-        var currentLink = ReadStep("WifiRead", () => environment.ReadWifi(settings));
-        if (currentSettings is null || currentSettings != settings || !currentSettings.Enabled || currentLink.State != WifiState.Ready ||
-            currentLink.Index != link.Index || !Equals(currentLink.Address, link.Address))
-            return RejectSubmission(currentSettings != settings ? "SettingsChanged" : currentSettings?.Enabled != true ? "RecoveryDisabled" : "WifiChanged");
-        var current = ReadStep("AuthenticationStateRead", environment.LoadAuthenticationBlock);
-        if (current != authentication || current?.State != AuthenticationState.RetryCoolingDown) return RejectSubmission("AuthenticationStateChanged");
-        if (!WriteAuthentication(new()
+        try
         {
-            State = AuthenticationState.SubmissionPending, Attempts = current.Attempts
-        })) return RejectSubmission("SubmissionReservationFailed");
-        ct.ThrowIfCancellationRequested();
-        currentSettings = ReadStep("SettingsRead", environment.LoadSettings);
-        currentLink = ReadStep("WifiRead", () => environment.ReadWifi(settings));
-        var allowed = currentSettings is not null && currentSettings == settings && currentSettings.Enabled && currentLink.State == WifiState.Ready &&
-            currentLink.Index == link.Index && Equals(currentLink.Address, link.Address);
-        if (!allowed) return RejectSubmission("FinalSettingsOrWifiChanged");
-        journal.Write("SubmissionAuthorized", "提交授权已持久保存，最终复核通过；尚未表示服务器接受。", new()
-            { Stage = "Submission", ActionId = journal.ActionId, Outcome = "Authorized" });
-        return true;
+            review.ThrowIfCancellationRequested();
+            var currentSettings = ReadStep("SettingsRead", environment.LoadSettings);
+            review.ThrowIfCancellationRequested();
+            var currentLink = ReadStep("WifiRead", () => environment.ReadWifi(settings));
+            if (currentSettings is null || currentSettings != settings || !currentSettings.Enabled || currentLink.State != WifiState.Ready ||
+                currentLink.Index != link.Index || !Equals(currentLink.Address, link.Address))
+                return RejectSubmission(currentSettings != settings ? "SettingsChanged" : currentSettings?.Enabled != true ? "RecoveryDisabled" : "WifiChanged");
+            review.ThrowIfCancellationRequested();
+            var current = ReadStep("AuthenticationStateRead", environment.LoadAuthenticationBlock);
+            if (current != authentication || current?.State != AuthenticationState.RetryCoolingDown) return RejectSubmission("AuthenticationStateChanged");
+            if (!WriteAuthentication(new()
+            {
+                State = AuthenticationState.SubmissionPending, Attempts = current.Attempts
+            })) return RejectSubmission("SubmissionReservationFailed");
+            review.ThrowIfCancellationRequested();
+            currentSettings = ReadStep("SettingsRead", environment.LoadSettings);
+            currentLink = ReadStep("WifiRead", () => environment.ReadWifi(settings));
+            var allowed = currentSettings is not null && currentSettings == settings && currentSettings.Enabled && currentLink.State == WifiState.Ready &&
+                currentLink.Index == link.Index && Equals(currentLink.Address, link.Address);
+            if (!allowed) return RejectSubmission("FinalSettingsOrWifiChanged");
+            journal.Write("SubmissionAuthorized", "提交授权已持久保存，最终复核通过；尚未表示服务器接受。", new()
+                { Stage = "Submission", ActionId = journal.ActionId, Outcome = "Authorized" });
+            return true;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // The chain ran out of its own review budget; an explicit refusal, logged apart
+            // from a portal timeout so the evidence tells the two apart.
+            return RejectSubmission("ReviewChainTimeout");
+        }
     }
 
     private bool RejectSubmission(string reason)

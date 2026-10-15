@@ -19,6 +19,14 @@
 - 另在真机以未提权方式执行一次 `--export-diagnostics`：退出码 0，产出 8 条目（含 10-13/14/15 三天真实日志、实时 net_state 与门户诊断），因读不到受限私有目录而按设计回退当前连接配置并标注；对解包内容扫描凭据关键词与 MAC 形态均无命中（日志仅含 `credentialRequestStarted`/`hasCredentials` 布尔字段名，属 schemaVersion 2 既有契约）。
 - 未验证：提权管理员身份下的完整采集（含已保存设置路径）、托盘菜单触发、用户不在场时的可见性（均属 UI PR 或需授权现场）；15 秒恢复目标不在本包证明范围内（ADR-0003：导出物只证明采集时所见）。
 
+## 门户阶段预算与写入重试（2026-10-15，仅离线验证，未部署）
+
+- 按 [ADR-0004](adr/0004-portal-phase-budgets.md) 把 `ExecuteAsync` 的共享 6 秒 deadline 拆为阶段预算：预检 4 秒（status/gateway/config 各 2 秒串行，config 的 2 秒上限为本次新增）、复核链 5 秒、提交 3 秒。`PortalBudgets.Default` 固定 4/5/3；测试经可选构造函数参数把预算缩放后再断言行为，生产路径一律用默认值。
+- 复核链（`AuthorizeSubmission`）改为步骤间检查取消令牌：链超时记 `SubmissionNotAuthorized`（Reason=ReviewChainTimeout）并按 SafetyPersistence 安全拒发，不发送凭据；调用方取消仍原样传播为 CycleInterrupted。预检预算耗尽在改签 Submission 阶段之前检查，超时归类在预检阶段，不再伪装成提交超时。
+- `Storage.AtomicWrite` 对 IOException/UnauthorizedAccessException 增加 3 次退避重试（50/100/200ms），仍失败才向上抛、由调用方记 OperationFailed；保留 temp+File.Move 原子性，未改原地非原子写。
+- Release 构建零警告、零错误，完整回归 **178/178** 通过（新增 7 项：默认预算符合 ADR、预检挂死归类预检阶段、复核链收到可取消令牌且超时安全拒发、提交窗口独立于预检耗时、复核链超时显式拒绝且零提交、复核链期间调用方取消传播、写入竞争退避后恢复与持续竞争仍失败不留临时文件）。证据：`artifacts/validation/build.json`、`tests.txt`。
+- 未验证：真实门户慢响应下的各阶段耗时分布、AV/索引器竞争复现、现场 15 秒恢复目标（不在本轮范围）；config 的 2 秒单请求上限与 status/gateway 既有上限一样仅由阶段预算测试间接覆盖，未做单独计时用例。
+
 ## 覆盖安装验证（2026-10-11 14:15–14:16，已完成）
 
 - 经用户明确授权，将源码提交 `517b2fe55f4b1547748de8cda707975f16c35c1c` 的自包含 Service/Tray 发布包覆盖安装到现有 AutoNet。按该提交重建，Release 零警告、零错误，135/135 回归通过，构建元数据 `trackedChanges=false`。

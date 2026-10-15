@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using AutoNet.Core;
@@ -203,6 +204,46 @@ internal static class SafetyRegression
                 File.WriteAllText(Directory.GetFiles(directory, "disconnect-*.json").Single(), "{\"Attempts\":4}");
                 try { store.LoadDisconnectBudget(settings); throw new Exception("损坏额度不得自动清零"); }
                 catch (InvalidDataException) { }
+            }
+            finally
+            {
+                var tempRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath())) + Path.DirectorySeparatorChar;
+                var target = Path.GetFullPath(directory);
+                if (!target.StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("测试清理越界");
+                Directory.Delete(target, true);
+            }
+            return Task.CompletedTask;
+        }),
+        ("安全存储：写入竞争退避后恢复，持续竞争仍失败且不留临时文件", () =>
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "AutoNet-write-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var path = Path.Combine(directory, "status.json");
+                // A reader without FILE_SHARE_DELETE (AV or an indexer) loses the replace race
+                // with access denied — the 10-12/13 status.json failures. Released mid-retry,
+                // the write must still land instead of surfacing as a failed round.
+                File.WriteAllText(path, "seed");
+                using (var blocker = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    var released = Task.Delay(90).ContinueWith(_ => blocker.Dispose());
+                    Storage.AtomicWrite(path, "{\"state\":\"recovered\"}");
+                    released.Wait(1000);
+                }
+                Require(File.ReadAllText(path) == "{\"state\":\"recovered\"}");
+                Require(Directory.GetFiles(directory, "*.tmp").Length == 0);
+                // A competitor that never lets go still fails after the backoffs: the previous
+                // content survives and no temporary debris is left behind.
+                using (var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    var started = Stopwatch.GetTimestamp();
+                    try { Storage.AtomicWrite(path, "{\"state\":\"never-written\"}"); throw new Exception("持续竞争必须退避后抛出"); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                    Require(Stopwatch.GetElapsedTime(started) >= TimeSpan.FromMilliseconds(300));
+                }
+                Require(File.ReadAllText(path) == "{\"state\":\"recovered\"}");
+                Require(Directory.GetFiles(directory, "*.tmp").Length == 0);
             }
             finally
             {
