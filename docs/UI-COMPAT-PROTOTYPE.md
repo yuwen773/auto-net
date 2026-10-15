@@ -21,7 +21,7 @@ Date: 2026-10-15（Asia/Shanghai）
 ## 产出物
 
 - 原型工程：`src/AutoNet.Tray.Avalonia/`（Avalonia 12.1.4，官方 Fluent；托盘图标与菜单、`--tray` 隐藏启动、关闭隐藏、退出不停服务、单实例与提权路由、明暗主题）。
-- 发布产物：`artifacts/validation/ui-avalonia-prototype/publish/AutoNet.Tray.exe`（自包含 win-x64 单文件，`-p:AssemblyName=AutoNet.Tray` 保持安装契约身份；ProductVersion `0.2.1+26eedd3`）。
+- 发布产物：`artifacts/validation/ui-avalonia-prototype/publish/AutoNet.Tray.exe`（自包含 win-x64 单文件，发布身份 `AutoNet.Tray.exe` 保持安装契约；工单 #3 起由 `-p:AutoNetPublishIdentity=true` 在 csproj 内激活，替代会传播到被引用工程的 `-p:AssemblyName` 全局覆盖；ProductVersion `0.2.1+26eedd3`）。
 - QA 脚本：`scripts/qa-avalonia-prototype.ps1`（复现命令见下节）。
 - 回归用例：`tests/AutoNet.Tests/AvaloniaPrototypeRegression.cs`（6 项，全部通过）。
 - 证据目录（被忽略的 `artifacts/`，不随提交分发）：`publish/`、`isolated/`、`runtime-a|-b|-c/`、`theme/`、`layout/`、`diagnostics/`、`qa-result.json`。
