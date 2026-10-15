@@ -2,6 +2,14 @@
 
 日期：2026-10-11（Asia/Shanghai）。已完成本次覆盖升级；此前一次真实 Wi-Fi 断连恢复记录保留在下方历史章节，真实认证失效、重启和长期稳定性仍待验收。
 
+## 通知管路（2026-10-15，仅离线验证，未部署）
+
+- 按“UI 单独开 PR、当前先不管 UI”的边界，本轮只做 Core/Service 管路：服务把状态沿以受控代码写入 status.json 的 `Notification` 字段（Code + At），托盘消费端留给 UI PR。契约见 [ADR-0002](adr/0002-notification-and-fallback-plumbing.md)，术语见根目录 [CONTEXT.md](../CONTEXT.md)。
+- 新增受控词表 `NotificationCodes`（InternetRecovered / AuthenticationPaused / SubmissionRechecking / SubmissionUnresolved / BrowserFallbackRequested；后三者为复检消解与浏览器兜底批次预留）。本轮落地两个发射点：故障后首次观测到联网恢复（每个故障恰好一次），以及进入安全阻断（每次转入一次；服务重启后重新发布，用户重新登录即可看到）。
+- 通知载荷不含文案，托盘按 At 单调递增去重；`ActivityLog` 投影 `NotificationCode`，脱敏摘要与可读文本只放行词表内代码，未知代码不进摘要。
+- Release 构建零警告、零错误，完整回归 **162/162** 通过（新增 2 项：联网恢复不重复广播；安全暂停广播一次且重启后重新可见）。证据：`artifacts/validation/build.json`、`tests.txt`。
+- 未验证：托盘气泡渲染、点击行为、用户不在场时的可见性（均属 UI PR 范围）；真实故障下的通知时序未做实机验收。
+
 ## 覆盖安装验证（2026-10-11 14:15–14:16，已完成）
 
 - 经用户明确授权，将源码提交 `517b2fe55f4b1547748de8cda707975f16c35c1c` 的自包含 Service/Tray 发布包覆盖安装到现有 AutoNet。按该提交重建，Release 零警告、零错误，135/135 回归通过，构建元数据 `trackedChanges=false`。

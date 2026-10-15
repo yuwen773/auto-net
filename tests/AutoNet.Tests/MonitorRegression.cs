@@ -258,6 +258,37 @@ internal static class MonitorRegression
             await worker.RunOnceAsync(default);
             var recovered = await worker.RunOnceAsync(default);
             Require(recovered.Tunnel == "系统路径恢复" && fixture.Connects >= 2 && fixture.AuxiliaryCalls == 2);
+        }),
+        ("监测：联网恢复只广播一次恢复通知，不随在线状态重复", async () =>
+        {
+            var fixture = new MonitorFixture { Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []) };
+            fixture.Http.PortalResult = "0";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var offline = await worker.RunOnceAsync(default);
+            Require(offline.Notification is null);
+            fixture.Http.Online = true;
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var recovered = await worker.RunOnceAsync(default);
+            Require(recovered.Notification is { Code: NotificationCodes.InternetRecovered } first && first.At == fixture.Clock.GetUtcNow());
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var steady = await worker.RunOnceAsync(default);
+            Require(steady.Notification == recovered.Notification);
+            Require(fixture.Logs.Any(e => e.NotificationCode == NotificationCodes.InternetRecovered));
+        }),
+        ("监测：进入安全暂停广播一次暂停通知，重启后重新可见", async () =>
+        {
+            var fixture = new MonitorFixture { Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []) };
+            fixture.Http.PortalResult = "0";
+            fixture.Http.LoginResult = "{\"result\":0,\"msg\":\"密码错误\"}";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var blocked = await worker.RunOnceAsync(default);
+            Require(blocked.CredentialsBlocked && blocked.Notification is { Code: NotificationCodes.AuthenticationPaused });
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var still = await worker.RunOnceAsync(default);
+            Require(still.CredentialsBlocked && still.Notification == blocked.Notification);
+            using var restarted = new MonitorWorker(fixture, fixture.Clock);
+            var afterRestart = await restarted.RunOnceAsync(default);
+            Require(afterRestart.Notification is { Code: NotificationCodes.AuthenticationPaused });
         })
     ];
 

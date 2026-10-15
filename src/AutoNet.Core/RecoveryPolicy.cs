@@ -201,4 +201,26 @@ public sealed record StatusSnapshot
     public bool CredentialRequestStarted { get; init; }
     public string LastError { get; init; } = "";
     public bool CredentialsBlocked { get; init; }
+    /// <summary>Latest one-shot notification, or null when none was emitted; older builds omit the field.</summary>
+    public StatusNotification? Notification { get; init; }
 }
+
+/// <summary>Controlled vocabulary for <see cref="StatusNotification.Code"/>; the tray owns the wording.</summary>
+public static class NotificationCodes
+{
+    public const string InternetRecovered = "InternetRecovered";
+    public const string AuthenticationPaused = "AuthenticationPaused";
+    public const string SubmissionRechecking = "SubmissionRechecking";
+    public const string SubmissionUnresolved = "SubmissionUnresolved";
+    public const string BrowserFallbackRequested = "BrowserFallbackRequested";
+
+    public static bool IsKnown(string? code) => code is InternetRecovered or AuthenticationPaused
+        or SubmissionRechecking or SubmissionUnresolved or BrowserFallbackRequested;
+}
+
+/// <summary>
+/// One-shot state transition broadcast to the tray through status.json. The service stamps
+/// <see cref="At"/>; the tray renders wording from <see cref="Code"/> and balloons only when At
+/// advances, so the payload carries no text and needs no persistent sequence counter.
+/// </summary>
+public sealed record StatusNotification(string Code, DateTimeOffset At);

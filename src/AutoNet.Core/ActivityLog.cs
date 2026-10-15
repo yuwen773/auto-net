@@ -40,6 +40,7 @@ public sealed record ActivityLog
     public string? AuthenticationPersistentState { get; init; }
     public int? AuthenticationHttpStatus { get; init; }
     public bool? CredentialRequestStarted { get; init; }
+    public string? NotificationCode { get; init; }
     public string? LastError { get; init; }
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -57,6 +58,7 @@ public sealed record ActivityLog
         AuthenticationStage = status?.AuthenticationStage, AuthenticationFailure = status?.AuthenticationFailure,
         AuthenticationPersistentState = status?.AuthenticationPersistentState,
         AuthenticationHttpStatus = status?.AuthenticationHttpStatus, CredentialRequestStarted = status?.CredentialRequestStarted,
+        NotificationCode = status?.Notification?.Code,
         LastError = status?.LastError
     };
 
@@ -121,6 +123,7 @@ public sealed record ActivityLog
             "BindingRejected" => "设备绑定拒绝", "CredentialsRejected" => "凭据被拒绝", "InteractionRequired" => "需要人工确认",
             _ => "安全暂停"
         }));
+        if (NotificationCode is { } notify && NotificationCodes.IsKnown(notify)) text.AppendLine("通知事件：" + notify);
         if (SystemPath is not null) text.AppendLine("系统路径：" + SystemPath);
         if (Uu is not null) text.AppendLine("UU：" + Uu);
         if (!string.IsNullOrEmpty(LastError)) text.AppendLine("最近异常：" + LastError);

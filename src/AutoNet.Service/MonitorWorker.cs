@@ -31,6 +31,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private DateTimeOffset? actionFinishedAt;
     private DateTimeOffset? authenticationAcceptedAt;
     private PortalAttempt? lastAuthentication;
+    private StatusNotification? notification;
+    private bool blockedPublished;
     private bool authenticationBlockPending;
     private AuthenticationBlock? authentication;
     private AuthenticationBlock? authenticationExpected;
@@ -179,8 +181,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         {
             lastRecoverySeconds = Math.Round((PolicyNow - since).TotalSeconds, 2);
             lastRecoveryAt = clock.GetUtcNow();
+            Notify(NotificationCodes.InternetRecovered);
             Log("观测到联网恢复", $"HTTPS 外网检查已通过；本轮自动动作 {policy.Attempts} 次。恢复来源无法确认，可能包含人工处理或网络自行恢复。", lastRecoverySeconds,
-                new StatusSnapshot { Wifi = "已连接", Direct = "外网可达", Attempts = policy.Attempts, OutageSince = outageObservedAt,
+                new StatusSnapshot { Wifi = "已连接", Direct = "外网可达", Notification = notification, Attempts = policy.Attempts, OutageSince = outageObservedAt,
                     ActionStartedAt = actionStartedAt, ActionFinishedAt = actionFinishedAt, AuthenticationAcceptedAt = authenticationAcceptedAt,
                     LastRecoveryAt = lastRecoveryAt, Tunnel = systemPath, Uu = uu });
         }
@@ -682,7 +685,15 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
 
     private StatusSnapshot Publish(StatusSnapshot status)
     {
-        status = status with { UpdatedAt = clock.GetUtcNow(), LastError = lastError,
+        // Entering the safety pause is announced once per transition, whichever path set the block;
+        // leaving it re-arms the announcement for the next pause.
+        if (policy.CredentialsBlocked && !blockedPublished)
+        {
+            blockedPublished = true;
+            Notify(NotificationCodes.AuthenticationPaused);
+        }
+        if (!policy.CredentialsBlocked) blockedPublished = false;
+        status = status with { UpdatedAt = clock.GetUtcNow(), LastError = lastError, Notification = notification,
             DisconnectAttempts = policy.DisconnectAttempts, CredentialsBlocked = policy.CredentialsBlocked };
         var key = status.State + "/" + status.Detail + "/" + status.Wifi + "/" + status.Direct + "/" + status.Portal + "/" + status.Tunnel + "/" + status.Uu + "/" + status.LastError;
         if (key != lastEvent && Log(status.State, status.Detail, snapshot: status)) lastEvent = key;
@@ -695,6 +706,10 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
 
     private bool Log(string action, string detail, double? seconds = null, StatusSnapshot? snapshot = null)
         => journal.Write("StatusChanged", detail, snapshot: snapshot, displayAction: action, seconds: seconds);
+
+    // One-shot broadcast to the tray. The payload persists until superseded and the tray balloons
+    // only when At advances, so no persistent sequence counter is needed.
+    private void Notify(string code) => notification = new(code, clock.GetUtcNow());
 
     private static bool IsStorageFailure(Exception e) => e is IOException or UnauthorizedAccessException or System.Security.SecurityException;
 

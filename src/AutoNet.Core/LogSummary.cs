@@ -99,6 +99,7 @@ public static class LogSummary
             if (entry.AuthenticationStage is { } stage && AllowedStages.Contains(stage)) parts.Add("阶段 " + stage);
             if (entry.AuthenticationFailure is { } failure && failure != nameof(PortalFailure.None) && AllowedFailures.Contains(failure))
                 parts.Add("分类 " + failure);
+            if (entry.NotificationCode is { } notify && NotificationCodes.IsKnown(notify)) parts.Add("通知 " + notify);
             AppendDiagnostics(parts, entry);
             lines.Add(string.Join(" · ", parts));
         }
