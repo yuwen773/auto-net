@@ -23,6 +23,10 @@ try {
     if ($testExit -ne 0) { throw 'Regression checks failed.' }
     if ($Publish) {
         $bundle = Join-Path $repo 'artifacts/AutoNet-win-x64'
+        # The previous bundle is scratch, not a rollback asset — the installed program and
+        # git history are. Shipping leftover files (an old nested package with stale
+        # binaries once rode along) inside a fresh package is a delivery defect.
+        if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
         foreach ($project in @('Service', 'Tray')) {
             $output = Join-Path $bundle $project.ToLowerInvariant()
             & $sdk publish "src/AutoNet.$project/AutoNet.$project.csproj" -c Release -r win-x64 --self-contained true -o $output -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true --nologo
