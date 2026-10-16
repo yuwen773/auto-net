@@ -51,11 +51,26 @@ public sealed class App : Application
     }
 
     /// <summary>
-    /// 管理员操作（#4 起）：恢复开关按明确目标改写已保存设置；解除认证暂停（#5）与设置（#8）
-    /// 仍为受控占位。成功保持既有“静默成功”语义（结果经状态管道回到界面），失败显示受控提示。
+    /// 管理员操作（#4 起）：恢复开关按明确目标改写已保存设置；解除认证暂停（#5）走
+    /// 确认 → 只读复核 → 修订核对 → 持久审计后解除的完整安全流程；设置（#8）仍为受控占位。
+    /// 成功保持既有“静默成功”语义（结果经状态管道回到界面），需要说明的结果显示受控提示。
     /// </summary>
     private static void StartElevated(IClassicDesktopStyleApplicationLifetime desktop, ElevatedMode elevated)
     {
+        if (elevated.Operation is ElevatedOperationKind.UnblockAuthentication)
+        {
+            // 只有 unblock 模式才走隔离夹具：其他 QA 模式走到这里仍按生产语义执行，
+            // 绝不因为“设了 AUTONET_QA_DIR”就改用夹具。
+            if (elevated.Qa.Mode == QaMode.Unblock)
+            {
+                QaUnblock.Run(elevated.Qa, code => desktop.Shutdown(code));
+                return;
+            }
+
+            StartUnblock(desktop);
+            return;
+        }
+
         if (elevated.Operation is ElevatedOperationKind.EnableRecovery or ElevatedOperationKind.DisableRecovery)
         {
             if (elevated.Qa.Active)
@@ -81,6 +96,37 @@ public sealed class App : Application
         // 受控占位：入口已成立（不被普通互斥锁拦截），具体页面随后续工单提供。
         StartNotice(desktop, elevated.Operation.DisplayName() + "（迁移中）",
             "该操作将在界面迁移完成后通过新的页面提供。\n当前版本不会修改任何设置、凭据或服务。");
+    }
+
+    /// <summary>
+    /// 解除认证暂停（#5 / T08 / 故事 42）：提权进程内完成确认 → 只读复核 → 修订核对 → 审计后解除。
+    /// 流程需要交互与异步诊断，因此整段在界面线程上驱动；拒绝 UAC 时本进程根本不会运行到这里，
+    /// 拒绝确认、复核未通过或修订变化都在写入之前中止并保留认证暂停。
+    /// </summary>
+    private static void StartUnblock(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                var unblock = UnblockAuthentication.Production(_ =>
+                    ConfirmWindow.AskAsync(UnblockAuthentication.ConfirmHeading, UnblockAuthentication.ConfirmBody));
+                var result = await unblock.RunAsync();
+
+                // 成功与用户取消保持静默：结果经状态管道回到界面，不弹无信息量的窗口。
+                if (result.RequiresNotice)
+                    StartNotice(desktop, UnblockAuthentication.HeadingFor(result.Outcome), result.Message, width: 560);
+                else
+                    desktop.Shutdown(0);
+            }
+            catch (Exception e)
+            {
+                // 安全边界：SafeSummary 与 lastError 是仅有的异常出口，绝不携带异常文本或 URL。
+                // 这里只报异常类型，并明确告知认证暂停保持不变（审计写入失败等场景的真实结论）。
+                StartNotice(desktop, "解除认证暂停未完成",
+                    "解除认证暂停未完成：" + e.GetType().Name + "。\n认证暂停保持不变；请检查后台服务是否已安装，然后重试。");
+            }
+        });
     }
 
     private void StartTrayMode(IClassicDesktopStyleApplicationLifetime desktop, TrayMode tray)
@@ -119,9 +165,9 @@ public sealed class App : Application
         }
     }
 
-    private static void StartNotice(IClassicDesktopStyleApplicationLifetime desktop, string heading, string body)
+    private static void StartNotice(IClassicDesktopStyleApplicationLifetime desktop, string heading, string body, double width = 440)
     {
-        var notice = NoticeWindow.Create(heading, body);
+        var notice = NoticeWindow.Create(heading, body, width);
         notice.Show();
         notice.Closed += (_, _) => desktop.Shutdown();
     }

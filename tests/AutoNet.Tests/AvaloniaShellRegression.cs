@@ -244,13 +244,16 @@ internal static class AvaloniaShellRegression
         {
             // 解除认证暂停（#5）与查看日志（#7）随后续切片接入；本票按既有完整菜单补入自动恢复开关。
             var labels = TrayMenuModel.Entries.Select(entry => entry.Label).ToArray();
-            Require(labels.SequenceEqual(["打开 AutoNet", "设置认证信息…", "自动恢复状态待确认", "", "退出托盘（后台继续运行）"]), "托盘入口文案变化");
+            // #5 起托盘恢复既有“解除认证暂停…”条目：与概览解除入口同源，仅在存在待解除阻断时可用。
+            Require(labels.SequenceEqual(["打开 AutoNet", "设置认证信息…", "自动恢复状态待确认", "解除认证暂停…", "", "退出托盘（后台继续运行）"]), "托盘入口文案变化");
             Require(TrayMenuModel.Entries[0].Action == TrayMenuAction.Open, "打开入口动作变化");
             Require(TrayMenuModel.Entries[1].Action == TrayMenuAction.Settings, "设置入口动作变化");
             Require(TrayMenuModel.Entries[2].Action == TrayMenuAction.RecoverySwitch, "恢复开关入口动作变化");
             Require(TrayMenuModel.Entries[2].Label == OverviewModel.RecoverySwitch(null).Label, "托盘开关占位文案应与概览开关同源");
-            Require(ReferenceEquals(TrayMenuModel.Entries[3], TrayMenuEntry.Separator), "分隔线必须使用 Separator");
-            Require(TrayMenuModel.Entries[4].Action == TrayMenuAction.Exit, "退出入口动作变化");
+            Require(TrayMenuModel.Entries[3].Action == TrayMenuAction.UnblockAuthentication, "解除入口动作变化");
+            Require(TrayMenuModel.Entries[3].Label == OverviewModel.PlaceholderLabel, "托盘解除占位文案应与概览同源");
+            Require(ReferenceEquals(TrayMenuModel.Entries[4], TrayMenuEntry.Separator), "分隔线必须使用 Separator");
+            Require(TrayMenuModel.Entries[5].Action == TrayMenuAction.Exit, "退出入口动作变化");
             Require(ElevatedOperationKind.Settings.CommandLineArgument() == "--settings", "提权入口参数与既有契约不符");
         }))
     ];

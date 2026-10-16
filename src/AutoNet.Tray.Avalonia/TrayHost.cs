@@ -19,6 +19,7 @@ internal sealed class TrayHost : IDisposable
     private readonly ShellController shell;
     private readonly Action<StatusReading> statusHandler;
     private NativeMenuItem? recoveryItem;
+    private NativeMenuItem? unblockItem;
 
     /// <summary>最近一次同步到菜单上的开关意图；点击时按用户看到的那一个发送，绝不重新翻转。</summary>
     private RecoveryIntent? displayedIntent;
@@ -45,6 +46,12 @@ internal sealed class TrayHost : IDisposable
                 recoveryItem = item;
                 item.Click += (_, _) => HandleRecovery();
             }
+            else if (action == TrayMenuAction.UnblockAuthentication)
+            {
+                // 解除入口与概览按钮同源：可用性由可信状态与认证暂停事实共同决定，点击走同一条提权路径。
+                unblockItem = item;
+                item.Click += (_, _) => _ = RequestUnblockSafelyAsync();
+            }
             else
             {
                 item.Click += (_, _) => Handle(action);
@@ -64,10 +71,10 @@ internal sealed class TrayHost : IDisposable
         icons = new TrayIcons { tray };
         TrayIcon.SetIcons(Application.Current!, icons);
 
-        // 开关条目随状态同步（状态事件来自读取线程，菜单更新必须回到界面线程）。
-        statusHandler = reading => Dispatcher.UIThread.Post(() => SyncRecovery(reading));
+        // 开关与解除条目随状态同步（状态事件来自读取线程，菜单更新必须回到界面线程）。
+        statusHandler = reading => Dispatcher.UIThread.Post(() => SyncEntries(reading));
         shell.StatusChanged += statusHandler;
-        SyncRecovery(shell.Status);
+        SyncEntries(shell.Status);
     }
 
     private void Handle(TrayMenuAction action)
@@ -86,19 +93,39 @@ internal sealed class TrayHost : IDisposable
         }
     }
 
-    private void SyncRecovery(StatusReading? reading)
+    private void SyncEntries(StatusReading? reading)
     {
-        if (recoveryItem is null) return;
-        var state = OverviewModel.RecoverySwitch(reading);
-        recoveryItem.Header = state.Label;
-        recoveryItem.IsEnabled = state.Enabled;
-        displayedIntent = state.Intent;
+        if (recoveryItem is not null)
+        {
+            var state = OverviewModel.RecoverySwitch(reading);
+            recoveryItem.Header = state.Label;
+            recoveryItem.IsEnabled = state.Enabled;
+            displayedIntent = state.Intent;
+        }
+
+        if (unblockItem is not null)
+        {
+            var entry = OverviewModel.UnblockEntry(reading);
+            // 不可信时菜单项保留但禁用：既不谎报存在待解除阻断，也不给出可点的假入口。
+            unblockItem.Header = entry.Visible ? entry.Label : OverviewModel.PlaceholderLabel;
+            unblockItem.IsEnabled = entry.Enabled;
+        }
     }
 
     private void HandleRecovery()
     {
         if (displayedIntent is not { } intent) return;
         _ = RequestRecoverySafelyAsync(intent);
+    }
+
+    private async Task RequestUnblockSafelyAsync()
+    {
+        // 点击前由 OverviewActions 重读并核对可信状态与暂停事实；此处只负责不让异常逃逸到原生菜单回调。
+        try { await actions.RequestUnblockAsync(); }
+        catch (Exception)
+        {
+            // 受控：菜单点击异常不逃逸，且失败关闭意味着什么都不发生。
+        }
     }
 
     private async Task RequestRecoverySafelyAsync(RecoveryIntent intent)

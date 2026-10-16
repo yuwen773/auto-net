@@ -100,6 +100,9 @@ internal static class OverviewModel
     /// <summary>不可用的解除入口（可信且没有暂停事实时，按 #5“仅在存在待解除阻断时提供入口”不显示）。</summary>
     public static readonly UnblockEntryState HiddenUnblock = new(false, false, "解除认证暂停…");
 
+    /// <summary>解除入口的默认占位标签：托盘菜单与概览共用同一术语，状态未知时不谎报存在待解除阻断。</summary>
+    public const string PlaceholderLabel = "解除认证暂停…";
+
     private const string RecoveryCaveat =
         "观测耗时从首次发现故障算起，只说明 AutoNet 观察到外网重新可达，无法区分是程序自动恢复、人工处理还是网络自行恢复；真实端到端耗时需现场测量。";
 
@@ -127,6 +130,17 @@ internal static class OverviewModel
         return reading.Snapshot!.Enabled
             ? new RecoverySwitchState("已开启", "关闭自动恢复", true, RecoveryIntent.Disable)
             : new RecoverySwitchState("已关闭", "开启自动恢复", true, RecoveryIntent.Enable);
+    }
+
+    /// <summary>
+    /// 解除入口状态（#5 / T08）：托盘菜单与概览解除按钮共用同一投影。
+    /// 不可信时可见但禁用（不能证明存在待解除阻断，也不能依据陈旧信息操作），
+    /// 可信且确有认证暂停时才可用；标签随失败事实切换，与既有 WinForms 托盘逐字一致。
+    /// </summary>
+    public static UnblockEntryState UnblockEntry(StatusReading? reading)
+    {
+        if (reading is not { Trusted: true }) return UnconfirmedUnblock;
+        return Unblock(true, reading.Snapshot);
     }
 
     /// <summary>把一次状态读取投影为概览页内容；<paramref name="reading"/> 为 null 表示尚未取得状态。</summary>
