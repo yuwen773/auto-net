@@ -127,6 +127,21 @@ internal static class DiagnosticsExporterRegression
             var exporter4 = clean.Build();
             exporter4.RunAsync().GetAwaiter().GetResult();
             Require(exporter4.State.Phase == DiagnosticsExportPhase.Succeeded && exporter4.State.NotesList.Count == 0, "无缺口成功不列明细");
+
+            // 结果文件未回传：成功但不得谎称无缺口，只引导查看包内 README（故事 80）。
+            var unconfirmed = new Flow { Picked = "C:\\t.zip", LaunchResult = new DiagnosticsExportLaunch(0, null, [], DetailsConfirmed: false) };
+            var exporter5 = unconfirmed.Build();
+            exporter5.RunAsync().GetAwaiter().GetResult();
+            Require(exporter5.State.Phase == DiagnosticsExportPhase.Succeeded
+                && exporter5.State.Message.Contains("README.txt", StringComparison.Ordinal)
+                && exporter5.State.NotesList.Count == 0, "明细未确认时不得谎称无缺口");
+
+            // 等待超时：如实说明未确认完成，不得伪报确定性失败或成功（决策 13）。
+            var timedOut = new Flow { Picked = "C:\\t.zip", LaunchResult = new DiagnosticsExportLaunch(int.MinValue, "Timeout", [], DetailsConfirmed: false) };
+            var exporter6 = timedOut.Build();
+            exporter6.RunAsync().GetAwaiter().GetResult();
+            Require(exporter6.State.Phase == DiagnosticsExportPhase.Failed
+                && exporter6.State.Message.Contains("以实际文件为准", StringComparison.Ordinal), "超时呈现应说明以实际文件为准");
             return Task.CompletedTask;
         }),
         ("导出：结果文件 roundtrip 与匹配校验（防旧结果冒充本次）", () =>

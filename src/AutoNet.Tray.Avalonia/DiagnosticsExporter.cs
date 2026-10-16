@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using AutoNet.Core;
 
@@ -41,13 +42,14 @@ internal sealed record DiagnosticsExportOutcome(bool Ok, string TargetPath, stri
     /// <summary>是否匹配本次导出（目标逐字一致且结果时刻不早于发起时刻，容忍少量时钟偏差）。</summary>
     public bool Matches(string targetPath, DateTimeOffset startedAt) =>
         TargetPath == targetPath
-        && DateTimeOffset.TryParse(At, System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.RoundtripKind, out var at)
+        && DateTimeOffset.TryParse(At, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
         && at >= startedAt.AddSeconds(-5);
 }
 
-/// <summary>一次提权导出的最终事实：退出码与（可选）结果文件中的缺口说明。</summary>
-internal sealed record DiagnosticsExportLaunch(int ExitCode, string? ErrorKind, IReadOnlyList<string> Notes)
+/// <summary>一次提权导出的最终事实：退出码与（可选）结果文件中的缺口说明。
+/// <see cref="DetailsConfirmed"/> 表示缺口明细来自本次导出的匹配结果文件——false 时界面不得
+/// 谎称「无缺口」，只能引导用户查看包内 README（故事 80 的披露边界）。</summary>
+internal sealed record DiagnosticsExportLaunch(int ExitCode, string? ErrorKind, IReadOnlyList<string> Notes, bool DetailsConfirmed = true)
 {
     public bool Ok => ExitCode == 0;
 }
@@ -171,9 +173,27 @@ internal sealed class DiagnosticsExporter(
 
         if (result.Ok)
         {
-            // 故事 80：缺口与超时说明逐项在界面结果中列出（与包内 README 同源的受控字符串）。
+            // 故事 80：缺口与超时说明逐项在界面结果中列出（与包内 README 同源的受控字符串）；
+            // 结果文件未回传时不得谎称「无缺口」，只引导查看包内 README。
+            if (!result.DetailsConfirmed)
+            {
+                Set(new DiagnosticsExportState(DiagnosticsExportPhase.Succeeded,
+                    "诊断包已导出：" + target + "（缺口明细未能回传，请查看包内 README.txt 的缺失项一节）",
+                    OverviewTone.Good));
+                return;
+            }
+
             Set(new DiagnosticsExportState(DiagnosticsExportPhase.Succeeded,
                 "诊断包已导出：" + target, OverviewTone.Good, result.Notes));
+            return;
+        }
+
+        // 决策 13 / 故事 81：等待超时不等于导出失败——提权进程可能稍后完成发布，消息必须如实说明。
+        if (result.ErrorKind == "Timeout")
+        {
+            Set(new DiagnosticsExportState(DiagnosticsExportPhase.Failed,
+                "导出未能在预期时间内完成确认（Timeout）；未发现完整包。若稍后所选位置出现完整包，请以实际文件为准。",
+                OverviewTone.Problem));
             return;
         }
 

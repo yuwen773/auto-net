@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -223,7 +224,7 @@ public sealed class App : Application
             {
                 try
                 {
-                    using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    using var process = Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
                     return null;
                 }
                 catch (Exception e) { return e.GetType().Name; }
@@ -363,7 +364,8 @@ public sealed class App : Application
     /// <summary>
     /// 生产路径：发起独立提权采集并异步等待其退出（界面保持普通权限且可操作，故事 81）。
     /// 结果文件匹配本次导出（目标逐字一致 + 时刻晚于发起）时补充缺口明细；不匹配或缺失时
-    /// 只按退出码判定。等待上限三分钟：超时按受控 Timeout 呈现，不杀死提权进程。
+    /// 标记明细未确认（界面只引导查看包内 README，不谎称无缺口）。等待上限三分钟：超时按
+    /// 受控 Timeout 呈现（不杀死提权进程——若其稍后完成发布，以实际文件为准）。
     /// </summary>
     private static async Task<DiagnosticsExportLaunch?> LaunchDiagnosticsExportAsync(string target)
     {
@@ -377,12 +379,13 @@ public sealed class App : Application
         }
         catch (OperationCanceledException)
         {
-            return new DiagnosticsExportLaunch(int.MinValue, "Timeout", []);
+            return new DiagnosticsExportLaunch(int.MinValue, "Timeout", [], DetailsConfirmed: false);
         }
 
         var outcome = DiagnosticsExportOutcome.TryRead(DiagnosticsExportJob.ProductionResultPath);
         var matching = outcome is { } read && read.Matches(target, startedAt) ? read : null;
-        return new DiagnosticsExportLaunch(process.ExitCode, matching?.ErrorKind, matching?.Notes ?? []);
+        return new DiagnosticsExportLaunch(process.ExitCode, matching?.ErrorKind, matching?.Notes ?? [],
+            DetailsConfirmed: matching is not null);
     }
 
     private static void StartNotice(IClassicDesktopStyleApplicationLifetime desktop, string heading, string body, double width = 440)

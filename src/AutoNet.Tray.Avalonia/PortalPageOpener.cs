@@ -1,3 +1,4 @@
+using System.Globalization;
 using AutoNet.Core;
 
 namespace AutoNet.Tray.Avalonia;
@@ -145,7 +146,7 @@ internal sealed class PortalPageOpener
 
     private async Task<PortalOpenOutcome> EvaluateCoreAsync(DateTimeOffset notBefore, bool manual, CancellationToken cancellationToken)
     {
-        var grantKey = notBefore.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        var grantKey = notBefore.ToString("O", CultureInfo.InvariantCulture);
 
         if (!manual)
         {
