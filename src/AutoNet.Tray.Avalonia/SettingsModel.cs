@@ -51,6 +51,10 @@ internal static class SettingsModel
         "修改网卡、Wi-Fi、账号或密码会请求管理员确认；拒绝管理员授权时不修改任何设置。" +
         "保存设置或修改密码不会解除认证暂停。";
 
+    /// <summary>外观分区说明（#9 / 故事 70）：界面偏好不含秘密，按 Windows 用户隔离保存。</summary>
+    public const string AppearanceNote =
+        "选择立即生效，并保存到当前 Windows 用户的界面偏好；主题设置不包含账号、密码或其他凭据信息。";
+
     /// <summary>不可信状态下的守护网络降级文案：绝不沿用上次画面（故事 15）。</summary>
     public const string UnconfirmedNetwork = "不可确认";
 

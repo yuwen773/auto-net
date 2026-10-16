@@ -19,6 +19,7 @@ public sealed class App : Application
 {
     private readonly AppMode mode;
     private TrayHost? trayHost;
+    private ThemeController? theme;
 
     /// <summary>供 XAML 资源运行时加载器使用的无参构造；正式启动一律通过 AppHost 注入模式。</summary>
     public App() : this(new NoticeMode("AutoNet", "此入口仅用于 XAML 设计时加载。")) { }
@@ -33,6 +34,17 @@ public sealed class App : Application
         {
             // 托盘语义：窗口关闭只隐藏，进程只能在托盘“退出”时结束（故事 6、7）。
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            // 主题偏好（#9 / 故事 26、30）：任何模式（托盘、提权操作、提示窗口）在任何窗口
+            // 显示之前应用同一份用户偏好，主界面与自有操作窗口明暗一致；读取失败回退为跟随系统。
+            // UAC 提权以同一 Windows 账户运行时读到同一偏好文件；跨管理员账户提权时偏好
+            // 按账户各自隔离（故事 70 的用户隔离语义），一致性作为人工验收项披露。
+            // QA 模式下偏好文件重定向到证据目录，绝不读写本机真实用户偏好。
+            theme = ThemeController.LoadAndApply(mode switch
+            {
+                TrayMode tray => tray.Qa,
+                ElevatedMode elevated => elevated.Qa,
+                _ => QaEnvironment.Inactive
+            });
             switch (mode)
             {
                 case TrayMode tray:
@@ -187,11 +199,19 @@ public sealed class App : Application
         var actions = new OverviewActions(pipe.RefreshAsync, launcher);
         // 设置修改入口（#8）走同一条提权路径；设置页 QA 模式下替换为受控记录（不弹 UAC）。
         Action modifySettings = tray.Qa.Mode == QaMode.Settings ? QaSettings.RecordModify : LaunchSettingsEditor;
+        // 主题（#9 / 故事 27–29）：设置页外观分区直接读写偏好并当场应用（不走状态投影，
+        // 轮询重建不打断选择）；跟随模式下响应系统主题变化，手动选择保持优先。
+        // 订阅挂在长驻的托盘进程；提权/提示窗口是短生命周期进程，跟随语义由框架对
+        // Default 变体的平台跟随覆盖（故事 29 的真实系统切换验证为人工项）。
+        if (Application.Current?.PlatformSettings is { } platformSettings)
+            platformSettings.ColorValuesChanged += (_, _) => theme!.OnSystemThemeChanged();
+        Func<ThemePreference> themeProvider = () => theme!.Current;
+        Action<ThemePreference> themeSelected = preference => _ = theme!.Select(preference);
         // 日志页复制与目录打开在 QA 模式下替换为受控空操作：不触碰用户剪贴板、不启动资源管理器。
         // 复制文本经 QA 报告的 CopyText 逐字核验；目录入口存在性由截图核验（真实点击为人工项）。
         Func<string, Task>? copyHandler = tray.Qa.Mode == QaMode.Logs ? _ => Task.CompletedTask : null;
         Action? folderHandler = tray.Qa.Mode == QaMode.Logs ? () => { } : null;
-        var window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings);
+        var window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings, themeProvider, themeSelected);
         trayHost = new TrayHost(session, window, shell, actions, () => desktop.Shutdown());
         desktop.Exit += (_, _) =>
         {
@@ -225,6 +245,9 @@ public sealed class App : Application
                 break;
             case QaMode.Settings:
                 QaSettings.Run(shell, window, modifySettings, tray.Qa, code => desktop.Shutdown(code));
+                break;
+            case QaMode.ThemePrefs:
+                QaThemePrefs.Run(shell, window, theme!, tray.Qa, code => desktop.Shutdown(code));
                 break;
         }
     }

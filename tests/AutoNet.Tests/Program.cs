@@ -142,6 +142,7 @@ tests = tests.Concat(UnblockRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticsPageRegression.Cases).ToArray();
 tests = tests.Concat(LogsPageRegression.Cases).ToArray();
 tests = tests.Concat(SettingsPageRegression.Cases).ToArray();
+tests = tests.Concat(ThemePreferenceRegression.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

@@ -20,7 +20,9 @@ internal enum QaMode
     /// <summary>日志页 QA：日期入口、受限范围、缺口、快速切换与脱敏复制的逐场景证据（scripts/qa-avalonia-logs.ps1 使用）。</summary>
     Logs,
     /// <summary>设置页 QA：普通界面只读投影、提权入口意图与编辑器保存规则的逐场景证据（scripts/qa-avalonia-settings.ps1 使用）。</summary>
-    Settings
+    Settings,
+    /// <summary>主题偏好 QA：默认跟随系统、手动明暗、系统变化优先级与跨重启保留的逐场景证据（scripts/qa-avalonia-theme.ps1 使用）。</summary>
+    ThemePrefs
 }
 
 /// <summary>
@@ -29,6 +31,9 @@ internal enum QaMode
 /// </summary>
 internal sealed record QaEnvironment(QaMode Mode, string Directory)
 {
+    /// <summary>未激活 QA 的环境：偏好存储等路径选择用它回落到真实用户目录。</summary>
+    public static QaEnvironment Inactive { get; } = new(QaMode.None, string.Empty);
+
     public static QaEnvironment FromProcess()
     {
         var directory = Environment.GetEnvironmentVariable("AUTONET_QA_DIR");
@@ -44,6 +49,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "diagnostics" => QaMode.Diagnostics,
             "logs" => QaMode.Logs,
             "settings" => QaMode.Settings,
+            "theme-prefs" => QaMode.ThemePrefs,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -63,6 +69,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string DiagnosticsReportPath => Path.Combine(Directory, "diagnostics.json");
     public string LogsReportPath => Path.Combine(Directory, "logs.json");
     public string SettingsReportPath => Path.Combine(Directory, "settings.json");
+    public string ThemePrefsReportPath => Path.Combine(Directory, "theme-prefs.json");
+    public string ThemePrefsResumeReportPath => Path.Combine(Directory, "theme-prefs-resume.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
 
@@ -75,6 +83,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string LogsShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string SettingsShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string ThemePrefsShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -280,4 +290,29 @@ internal sealed record QaSettingsReport(
     List<QaSettingsStep> Steps,
     List<QaSettingsAction> Actions,
     List<QaSettingsEditorStep> EditorSteps,
+    string? Error = null);
+
+/// <summary>
+/// 主题偏好一步证据（#9）：当前偏好、应用级请求变体、主窗口实际变体与操作系统变体，
+/// 以及偏好文件的文件名与全文（只含主题枚举，供脚本逐字断言无秘密）。
+/// </summary>
+internal sealed record QaThemePrefsStep(
+    string Scenario,
+    string Preference,
+    string RequestedVariant,
+    string ActualVariant,
+    string OsVariant,
+    string PrefsFile,
+    string PrefsContent,
+    string? File);
+
+internal sealed record QaThemePrefsReport(
+    string Mode,
+    string Phase,
+    string ProcessPath,
+    int ProcessId,
+    bool Administrator,
+    string MutexName,
+    string ThemeVariant,
+    List<QaThemePrefsStep> Steps,
     string? Error = null);

@@ -23,6 +23,8 @@ public partial class MainView : UserControl
     private Func<string, Task>? copyHandler;
     private Action? folderHandler;
     private Action? modifySettingsHandler;
+    private Func<ThemePreference>? themeProvider;
+    private Action<ThemePreference>? themeSelectedHandler;
     private OverviewContent? overviewShown;
     private DiagnosticsContent? diagnosticsShown;
     private LogsContent? logsShown;
@@ -41,14 +43,16 @@ public partial class MainView : UserControl
         };
     }
 
-    /// <summary>接入壳控制器、概览动作、日志页（#7）与设置修改入口（#8）并建立渲染通路。应用内只会接入一次。</summary>
+    /// <summary>接入壳控制器、概览动作、日志页（#7）、设置修改入口（#8）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
     internal void Attach(
         ShellController shell,
         OverviewActions? overviewActions = null,
         LogsPage? logs = null,
         Func<string, Task>? copy = null,
         Action? openFolder = null,
-        Action? modifySettings = null)
+        Action? modifySettings = null,
+        Func<ThemePreference>? themeProvider = null,
+        Action<ThemePreference>? themeSelected = null)
     {
         controller = shell;
         actions = overviewActions;
@@ -56,6 +60,8 @@ public partial class MainView : UserControl
         copyHandler = copy;
         folderHandler = openFolder;
         modifySettingsHandler = modifySettings;
+        this.themeProvider = themeProvider;
+        themeSelectedHandler = themeSelected;
         BuildNavigation();
         shell.SelectionChanged += page => Dispatcher.UIThread.Post(() => SyncSelection(page));
         shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
@@ -171,10 +177,15 @@ public partial class MainView : UserControl
                 break;
             case SettingsContent settings:
                 // 指纹未变化时不重建：设置页只读投影跟随状态轮询刷新，避免无谓的控件树重建。
+                // 主题选择（#9）不走状态投影：重建时从偏好提供者读取当前值，已保存的选择不会被打断。
                 if (settingsShown is { } shownSettings && shownSettings.ContentKey == settings.ContentKey) return;
                 settingsShown = settings;
                 ClearShown(except: settings);
-                pageHost.Content = SettingsView.Build(settings, () => modifySettingsHandler?.Invoke());
+                pageHost.Content = SettingsView.Build(
+                    settings,
+                    () => modifySettingsHandler?.Invoke(),
+                    themeProvider?.Invoke() ?? ThemePreference.System,
+                    preference => themeSelectedHandler?.Invoke(preference));
                 break;
             case PageScaffold scaffold:
                 ClearShown(except: null);
