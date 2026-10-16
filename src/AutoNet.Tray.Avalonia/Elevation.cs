@@ -17,14 +17,17 @@ internal static class Elevation
         new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
     /// <summary>生产入口：与既有 WinForms 托盘同语义——发起提权，拒绝 UAC 时静默返回。</summary>
-    public static void Launch(ElevatedOperationKind operation) => Launch(operation, info => Process.Start(info));
+    public static void Launch(ElevatedOperationKind operation) => Launch(operation, StartProcess);
+
+    /// <summary>生产启动委托：UseShellExecute + verb runas 已在 startInfo 上设置，直接交给系统。</summary>
+    internal static Process? StartProcess(ProcessStartInfo info) => Process.Start(info);
 
     /// <summary>
     /// 受控接缝：返回是否真正启动了提权进程。
     /// 用户在 UAC 提示上选择“否”（Win32 1223）时返回 false——保持既有语义，什么都不做：
     /// 不改设置、不改认证阻断、不碰服务，也不会有隐藏的重试。
     /// </summary>
-    internal static bool Launch(ElevatedOperationKind operation, Action<ProcessStartInfo> start)
+    internal static bool Launch(ElevatedOperationKind operation, Func<ProcessStartInfo, Process?> start)
     {
         var startInfo = new ProcessStartInfo(Environment.ProcessPath!, operation.CommandLineArgument())
         {
@@ -40,6 +43,32 @@ internal static class Elevation
         {
             // 用户在 UAC 提示上选择了“否”：保持既有语义，什么都不做。
             return false;
+        }
+    }
+
+    /// <summary>
+    /// 诊断包导出（#12 / 故事 72–74）：普通界面已选定目标路径后，以独立提权操作把
+    /// 「--export-diagnostics &lt;用户所选路径&gt;」逐字传回自身进程；提权身份只承载采集权限，
+    /// 绝不替换用户已选位置。返回提权进程句柄供界面异步等待（界面保持普通权限且可操作，
+    /// 故事 81）；用户拒绝 UAC 时返回 null（取消导出，不生成任何文件）。
+    /// </summary>
+    internal static Process? LaunchDiagnosticsExport(string targetPath, Func<ProcessStartInfo, Process?> start)
+    {
+        var startInfo = new ProcessStartInfo(Environment.ProcessPath!)
+        {
+            UseShellExecute = true,
+            Verb = "runas"
+        };
+        startInfo.ArgumentList.Add(ElevatedOperationKind.DiagnosticsExport.CommandLineArgument());
+        startInfo.ArgumentList.Add(targetPath);
+        try
+        {
+            return start(startInfo);
+        }
+        catch (Win32Exception e) when (e.NativeErrorCode == 1223)
+        {
+            // 用户在 UAC 提示上选择了“否”：取消导出，不生成任何文件（故事 74）。
+            return null;
         }
     }
 }

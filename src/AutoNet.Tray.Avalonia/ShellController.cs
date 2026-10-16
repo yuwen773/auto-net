@@ -10,11 +10,13 @@ internal sealed class ShellController : IDisposable
     private readonly StatusPipe pipe;
     private readonly PageLoadCoordinator coordinator = new();
     private readonly Func<ShellPage, CancellationToken, Task<PageContent>> load;
+    private readonly PortalPageOpener? portalOpener;
 
-    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageContent>>? load = null)
+    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageContent>>? load = null, PortalPageOpener? portalOpener = null)
     {
         this.pipe = pipe;
         this.load = load ?? ShellContent.LoadAsync;
+        this.portalOpener = portalOpener;
         pipe.Updated += OnStatusUpdated;
     }
 
@@ -74,7 +76,8 @@ internal sealed class ShellController : IDisposable
 
     private void ApplyOverview(StatusReading? reading)
     {
-        Content = OverviewModel.From(reading);
+        // 概览投影（#11）：兜底开页入口的说明随开页控制器的会话内失败状态刷新（其余为纯状态投影）。
+        Content = OverviewModel.From(reading, portalOpener?.LastFailure, portalOpener?.SaveFailurePending ?? false);
         ContentChanged?.Invoke(Content);
     }
 

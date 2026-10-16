@@ -45,6 +45,12 @@ public sealed record DiagnosticsPackageOptions
     public string? BuildId { get; init; }
     /// <summary>Upper bound for the whole live collection; each probe keeps its own shorter internal deadline.</summary>
     public TimeSpan CollectionTimeout { get; init; } = TimeSpan.FromSeconds(15);
+    /// <summary>
+    /// How the export was started, recorded verbatim in the README's 导出方式 line. Defaults to the
+    /// service CLI; the tray's elevated export names its own path so the package honestly says where
+    /// the collection ran.
+    /// </summary>
+    public string? SourceLabel { get; init; }
 }
 
 public sealed record DiagnosticsPackageResult(string Path, IReadOnlyList<string> Entries, IReadOnlyList<string> Notes);
@@ -128,27 +134,46 @@ public static class DiagnosticsPackage
         var zipPath = ResolveOutputPath(options.OutputPath, DesktopDirectory(), exportedAt);
         var parent = Path.GetDirectoryName(Path.GetFullPath(zipPath));
         if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-        // An explicit FileMode.Create stream truncates a previous package; ZipArchiveMode.Create
-        // alone refuses to overwrite an existing file.
-        using (var file = new FileStream(zipPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
-        using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+        var sourceLabel = options.SourceLabel ?? "AutoNet.Service --export-diagnostics";
+        // Safe publish (UI-MIGRATION-SPEC 决策 13 / 故事 79): the archive is written at a private
+        // temp name inside the destination directory and only then replaces the target. A failure
+        // or an accepted cancellation before publish keeps the previous package byte-identical and
+        // never leaves a half archive at the user-chosen path.
+        var temporary = Path.Combine(
+            string.IsNullOrEmpty(parent) ? "." : parent,
+            Path.GetFileNameWithoutExtension(zipPath) + ".autonet-part-" + Guid.NewGuid().ToString("N") + ".tmp");
+        try
         {
-            // README carries a BOM so Notepad never misreads the Chinese text; the JSON entries
-            // follow Storage's BOM-less convention instead.
-            WriteText(zip, "README.txt", Readme(exportedAt, buildId, entries, notes), bom: true);
-            if (snapshot is not null)
-                WriteText(zip, "settings-snapshot.json", JsonSerializer.Serialize(snapshot, PackageJson));
-            if (report is not null)
-                WriteText(zip, "net_state.json", JsonSerializer.Serialize(report, PackageJson));
-            if (portal is not null)
-                WriteText(zip, "portal_diagnostic.json", JsonSerializer.Serialize(portal, PackageJson));
-            if (statusJson is not null) WriteText(zip, "status.json", statusJson);
-            foreach (var (entryName, content) in logContents)
+            // An exclusive new temp stream cannot collide (GUID name) and cannot truncate anything.
+            using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+            using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
             {
-                var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
-                using var stream = entry.Open();
-                stream.Write(content);
+                // README carries a BOM so Notepad never misreads the Chinese text; the JSON entries
+                // follow Storage's BOM-less convention instead.
+                WriteText(zip, "README.txt", Readme(exportedAt, buildId, sourceLabel, entries, notes), bom: true);
+                if (snapshot is not null)
+                    WriteText(zip, "settings-snapshot.json", JsonSerializer.Serialize(snapshot, PackageJson));
+                if (report is not null)
+                    WriteText(zip, "net_state.json", JsonSerializer.Serialize(report, PackageJson));
+                if (portal is not null)
+                    WriteText(zip, "portal_diagnostic.json", JsonSerializer.Serialize(portal, PackageJson));
+                if (statusJson is not null) WriteText(zip, "status.json", statusJson);
+                foreach (var (entryName, content) in logContents)
+                {
+                    var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
+                    using var stream = entry.Open();
+                    stream.Write(content);
+                }
             }
+
+            // Once the archive is complete it is published even if cancellation arrived meanwhile:
+            // pretending a finished export was cancelled would hide a good package (决策 13).
+            File.Move(temporary, zipPath, overwrite: true);
+        }
+        catch
+        {
+            TryDelete(temporary);
+            throw;
         }
         return new(zipPath, entries, notes);
     }
@@ -189,7 +214,7 @@ public static class DiagnosticsPackage
             ? Path.Combine(trimmed, Path.GetFileName(fallback)) : trimmed;
     }
 
-    internal static string Readme(DateTimeOffset exportedAt, string buildId, IReadOnlyList<string> entries, IReadOnlyList<string> notes)
+    internal static string Readme(DateTimeOffset exportedAt, string buildId, string sourceLabel, IReadOnlyList<string> entries, IReadOnlyList<string> notes)
     {
         var text = new StringBuilder();
         text.AppendLine("AutoNet 诊断包");
@@ -197,7 +222,7 @@ public static class DiagnosticsPackage
         text.AppendLine();
         text.AppendLine("导出时间：" + exportedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture) + "（本机时间）");
         text.AppendLine("程序构建：" + buildId);
-        text.AppendLine("导出方式：AutoNet.Service --export-diagnostics（只读；未修改网络、未加载凭据、未清除认证阻断）");
+        text.AppendLine("导出方式：" + sourceLabel + "（只读；未修改网络、未加载凭据、未清除认证阻断）");
         text.AppendLine();
         text.AppendLine("内容清单");
         text.AppendLine("--------");
@@ -316,6 +341,13 @@ public static class DiagnosticsPackage
     {
         var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         return string.IsNullOrEmpty(desktop) ? AppContext.BaseDirectory : desktop;
+    }
+
+    /// <summary>Best-effort temp cleanup after a failed publish; a leftover never masks the original error.</summary>
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     private static bool IsStorageFailure(Exception e) => e is IOException or UnauthorizedAccessException or System.Security.SecurityException;

@@ -19,7 +19,8 @@ internal static class OverviewView
         bool technicalExpanded,
         Action<bool> technicalExpandedChanged,
         Action<RecoveryIntent> recoveryRequested,
-        Action unblockRequested)
+        Action unblockRequested,
+        Action portalOpenRequested)
     {
         var page = new StackPanel { Spacing = 14, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
         page.Children.Add(new StackPanel
@@ -38,8 +39,54 @@ internal static class OverviewView
             }
         });
         page.Children.Add(StatusCard(content, technicalExpanded, technicalExpandedChanged, unblockRequested));
+        if (content.PortalOpen.Visible) page.Children.Add(PortalOpenCard(content.PortalOpen, portalOpenRequested));
         page.Children.Add(ProgressCard(content, recoveryRequested));
         return page;
+    }
+
+    /// <summary>
+    /// 浏览器兜底开页卡（#11 / 故事 61–69）：独立于认证暂停事实呈现；说明逐字来自投影，
+    /// 按钮发起手动开页（自动开页由控制器按授予规则驱动，不经本卡）。
+    /// </summary>
+    private static Control PortalOpenCard(PortalOpenEntryState entry, Action portalOpenRequested)
+    {
+        var body = new StackPanel { Spacing = 8 };
+        body.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                ShellTheming.Glyph(ShellIcons.AuthColumnGlyph(OverviewAuthKind.Suspended), entry.Tone, 20),
+                ShellTheming.Themed(
+                    new TextBlock
+                    {
+                        Text = "需要浏览器认证",
+                        FontSize = 15,
+                        FontWeight = FontWeight.SemiBold,
+                        VerticalAlignment = VerticalAlignment.Center
+                    },
+                    TextBlock.ForegroundProperty, ShellTheming.ToneKey(entry.Tone))
+            }
+        });
+        body.Children.Add(new TextBlock
+        {
+            Text = entry.Note,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12.5,
+            LineHeight = 19,
+            Opacity = 0.9
+        });
+        var button = new Button
+        {
+            Content = entry.Label,
+            IsEnabled = entry.Enabled,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+        button.Click += (_, _) => portalOpenRequested();
+        body.Children.Add(button);
+        return ShellTheming.Card(body);
     }
 
     /// <summary>状态卡：主状态与认证事实分列（在线与认证暂停并存），下一步紧跟状态，技术详情按需展开。</summary>

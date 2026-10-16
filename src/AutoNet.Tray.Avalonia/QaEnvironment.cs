@@ -24,7 +24,11 @@ internal enum QaMode
     /// <summary>主题偏好 QA：默认跟随系统、手动明暗、系统变化优先级与跨重启保留的逐场景证据（scripts/qa-avalonia-theme.ps1 使用）。</summary>
     ThemePrefs,
     /// <summary>关键通知 QA：一次提醒、不重播、未知码降级与消费记录持久化的逐场景证据（scripts/qa-avalonia-notifications.ps1 使用）。</summary>
-    Notifications
+    Notifications,
+    /// <summary>浏览器兜底开页 QA：首次立即、授予去重、跨重启冷却与受控失败的逐场景证据（scripts/qa-avalonia-portal-open.ps1 使用）。</summary>
+    PortalOpen,
+    /// <summary>诊断包导出 QA：普通界面选路径、提权交接与结果显示的逐场景证据（scripts/qa-avalonia-export.ps1 使用）。</summary>
+    ExportDiagnostics
 }
 
 /// <summary>
@@ -53,6 +57,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "settings" => QaMode.Settings,
             "theme-prefs" => QaMode.ThemePrefs,
             "notifications" => QaMode.Notifications,
+            "portal-open" => QaMode.PortalOpen,
+            "export-diagnostics" => QaMode.ExportDiagnostics,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -76,6 +82,12 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string ThemePrefsResumeReportPath => Path.Combine(Directory, "theme-prefs-resume.json");
     public string NotificationsReportPath => Path.Combine(Directory, "notifications.json");
     public string NotificationsResumeReportPath => Path.Combine(Directory, "notifications-resume.json");
+    public string PortalOpenReportPath => Path.Combine(Directory, "portal-open.json");
+    public string PortalOpenResumeReportPath => Path.Combine(Directory, "portal-open-resume.json");
+    public string ExportReportPath => Path.Combine(Directory, "export.json");
+    public string ExportElevatedReportPath => Path.Combine(Directory, "export-elevated.json");
+    public string ExportResultPath => Path.Combine(Directory, "export-result.json");
+    public string ParseErrorReportPath => Path.Combine(Directory, "parse-error.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
 
@@ -90,6 +102,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string SettingsShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string ThemePrefsShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string PortalOpenShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>

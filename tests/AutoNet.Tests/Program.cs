@@ -144,6 +144,8 @@ tests = tests.Concat(LogsPageRegression.Cases).ToArray();
 tests = tests.Concat(SettingsPageRegression.Cases).ToArray();
 tests = tests.Concat(ThemePreferenceRegression.Cases).ToArray();
 tests = tests.Concat(NotificationRouterRegression.Cases).ToArray();
+tests = tests.Concat(PortalOpenRegression.Cases).ToArray();
+tests = tests.Concat(DiagnosticsExporterRegression.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

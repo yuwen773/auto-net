@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
 namespace AutoNet.Tray.Avalonia;
@@ -11,7 +12,7 @@ internal abstract record AppMode;
 
 internal sealed record TrayMode(StartupRequest Request, QaEnvironment Qa) : AppMode;
 
-internal sealed record ElevatedMode(ElevatedOperationKind Operation, QaEnvironment Qa) : AppMode;
+internal sealed record ElevatedMode(ElevatedOperationKind Operation, QaEnvironment Qa, string? ExportTargetPath = null) : AppMode;
 
 internal sealed record NoticeMode(string Heading, string Body) : AppMode;
 
@@ -94,6 +95,19 @@ public sealed class App : Application
             }
 
             StartSettingsEditor(desktop);
+            return;
+        }
+
+        if (elevated.Operation is ElevatedOperationKind.DiagnosticsExport)
+        {
+            // 只有 export 模式才走隔离夹具：其他 QA 模式走到这里仍按生产语义执行。
+            if (elevated.Qa.Mode == QaMode.ExportDiagnostics)
+            {
+                QaExport.RunElevated(elevated, elevated.Qa, code => desktop.Shutdown(code));
+                return;
+            }
+
+            StartDiagnosticsExport(desktop, elevated);
             return;
         }
 
@@ -184,14 +198,41 @@ public sealed class App : Application
         });
     }
 
+    /// <summary>
+    /// 管理员诊断包导出（#12 / T13 / 故事 73、75–77）：提权进程按普通界面逐字传来的目标路径
+    /// 执行只读采集并写共享结果文件；退出码把最终结果带回界面（0 成功 / 3 失败），窗口无 UI。
+    /// </summary>
+    private static void StartDiagnosticsExport(IClassicDesktopStyleApplicationLifetime desktop, ElevatedMode elevated)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var code = DiagnosticsExportJob.Run(elevated.ExportTargetPath, DiagnosticsExportJob.ProductionResultPath);
+            desktop.Shutdown(code);
+        });
+    }
+
     private void StartTrayMode(IClassicDesktopStyleApplicationLifetime desktop, TrayMode tray)
     {
         var session = new TraySession();
         var pipe = new StatusPipe(StatusPipe.ResolveStatusPath());
+        // 浏览器兜底开页（#11 / 故事 61–69）：消费记录按 Windows 用户持久化（QA 重定向证据目录）。
+        // 浏览器启动经默认 shell 只带固定门户根地址；QA 模式替换为受控记录器，不弹真实浏览器。
+        Func<string, string?> browserLaunch = tray.Qa.Mode == QaMode.PortalOpen
+            ? QaPortal.RecordLaunch
+            : url =>
+            {
+                try
+                {
+                    using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    return null;
+                }
+                catch (Exception e) { return e.GetType().Name; }
+            };
+        var portalOpener = new PortalPageOpener(PortalOpenStore.Create(tray.Qa), pipe.RefreshAsync, browserLaunch);
         // 日志页（#7）：读取既有日志目录；QA 夹具模式只在 logs 模式下重定向到证据目录内的夹具。
         var logsPage = LogsPage.Production(tray.Qa);
         var shell = new ShellController(pipe, (page, token) =>
-            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token));
+            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
         logsPage.Updated += content => shell.ApplyExternal(content);
         // 概览 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
@@ -211,7 +252,24 @@ public sealed class App : Application
         // 复制文本经 QA 报告的 CopyText 逐字核验；目录入口存在性由截图核验（真实点击为人工项）。
         Func<string, Task>? copyHandler = tray.Qa.Mode == QaMode.Logs ? _ => Task.CompletedTask : null;
         Action? folderHandler = tray.Qa.Mode == QaMode.Logs ? () => { } : null;
-        var window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings, themeProvider, themeSelected);
+        // 诊断包导出（#12 / 故事 71–74、81）：普通界面状态机驱动——保存对话框与提权启动
+        // 都以委托注入；export-diagnostics QA 模式替换为受控夹具（不弹对话框、不弹 UAC）。
+        MainWindow? window = null;
+        Func<Task<string?>> pickTarget;
+        Func<string, Task<DiagnosticsExportLaunch?>> exportLaunch;
+        if (tray.Qa.Mode == QaMode.ExportDiagnostics)
+        {
+            pickTarget = QaExport.PickAsync;
+            exportLaunch = QaExport.LaunchAsync;
+        }
+        else
+        {
+            pickTarget = () => PickDiagnosticTargetAsync(window);
+            exportLaunch = LaunchDiagnosticsExportAsync;
+        }
+        var diagnosticsExporter = new DiagnosticsExporter(pickTarget, exportLaunch);
+        window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings,
+            portalOpen: () => _ = portalOpener.OpenManuallyAsync(), themeProvider, themeSelected, diagnosticsExporter);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
@@ -227,6 +285,10 @@ public sealed class App : Application
             notifier = new TrayBalloonNotifier(trayHost.TrayIcon!);
             pipe.Updated += notifications.Observe;
         }
+        // 自动开页由状态读取驱动（#11）；portal-open QA 模式不订阅管道——由 QaPortal 手工驱动，
+        // 时序完全确定（与通知 QA 同一约定）。手动开页只经概览页按钮。
+        if (tray.Qa.Mode != QaMode.PortalOpen)
+            pipe.Updated += reading => _ = portalOpener.EvaluateAsync(reading);
         desktop.Exit += (_, _) =>
         {
             trayHost.Dispose();
@@ -266,11 +328,62 @@ public sealed class App : Application
             case QaMode.Notifications:
                 QaNotifications.Run(shell, window, notifications, qaPresented!, tray.Qa, code => desktop.Shutdown(code));
                 break;
+            case QaMode.PortalOpen:
+                QaPortal.Run(shell, window, pipe, portalOpener, tray.Qa, code => desktop.Shutdown(code));
+                break;
+            case QaMode.ExportDiagnostics:
+                QaExport.Run(shell, window, diagnosticsExporter, tray.Qa, code => desktop.Shutdown(code));
+                break;
         }
     }
 
     /// <summary>生产路径：设置修改入口发起独立提权操作（--settings）；拒绝 UAC 时什么都不发生（故事 43）。</summary>
     private static void LaunchSettingsEditor() => Elevation.Launch(ElevatedOperationKind.Settings);
+
+    /// <summary>
+    /// 生产路径：诊断包导出的保存位置选择（故事 72、78）。默认当前用户桌面 + 默认文件名；
+    /// 同名覆盖由系统对话框原生确认；取消返回 null（调用方据此取消导出，不发起提权）。
+    /// </summary>
+    private static async Task<string?> PickDiagnosticTargetAsync(MainWindow? window)
+    {
+        if (window is null) return null;
+        var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var options = new FilePickerSaveOptions
+        {
+            Title = "保存诊断包",
+            SuggestedFileName = "autonet-diagnostics-" + DateTimeOffset.Now.ToLocalTime().ToString("yyyyMMdd-HHmmss") + ".zip",
+            ShowOverwritePrompt = true
+        };
+        if (Directory.Exists(desktopPath))
+            options.SuggestedStartLocation = await window.StorageProvider.TryGetFolderFromPathAsync(new Uri(desktopPath));
+        var file = await window.StorageProvider.SaveFilePickerAsync(options);
+        return file?.Path.LocalPath;
+    }
+
+    /// <summary>
+    /// 生产路径：发起独立提权采集并异步等待其退出（界面保持普通权限且可操作，故事 81）。
+    /// 结果文件匹配本次导出（目标逐字一致 + 时刻晚于发起）时补充缺口明细；不匹配或缺失时
+    /// 只按退出码判定。等待上限三分钟：超时按受控 Timeout 呈现，不杀死提权进程。
+    /// </summary>
+    private static async Task<DiagnosticsExportLaunch?> LaunchDiagnosticsExportAsync(string target)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        var process = Elevation.LaunchDiagnosticsExport(target, Elevation.StartProcess);
+        if (process is null) return null; // 拒绝 UAC：取消导出（故事 74）
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return new DiagnosticsExportLaunch(int.MinValue, "Timeout", []);
+        }
+
+        var outcome = DiagnosticsExportOutcome.TryRead(DiagnosticsExportJob.ProductionResultPath);
+        var matching = outcome is { } read && read.Matches(target, startedAt) ? read : null;
+        return new DiagnosticsExportLaunch(process.ExitCode, matching?.ErrorKind, matching?.Notes ?? []);
+    }
 
     private static void StartNotice(IClassicDesktopStyleApplicationLifetime desktop, string heading, string body, double width = 440)
     {

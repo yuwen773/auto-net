@@ -59,7 +59,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     // same cycle already tells the user authentication is paused, so the generic pause
     // announcement in Publish must not supersede it.
     private bool notifiedThisCycle;
-    private static readonly TimeSpan BrowserFallbackCooldown = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan BrowserFallbackCooldown = RecoveryPolicy.BrowserFallbackOpenCooldown;
 
     private DateTimeOffset PolicyNow => clockOrigin + clock.GetElapsedTime(clockStart);
 

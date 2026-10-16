@@ -23,6 +23,9 @@ public partial class MainView : UserControl
     private Func<string, Task>? copyHandler;
     private Action? folderHandler;
     private Action? modifySettingsHandler;
+    private Action? portalOpenHandler;
+    private DiagnosticsExporter? diagnosticsExporter;
+    private DiagnosticsExportState? exportStateShown;
     private Func<ThemePreference>? themeProvider;
     private Action<ThemePreference>? themeSelectedHandler;
     private OverviewContent? overviewShown;
@@ -43,7 +46,7 @@ public partial class MainView : UserControl
         };
     }
 
-    /// <summary>接入壳控制器、概览动作、日志页（#7）、设置修改入口（#8）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
+    /// <summary>接入壳控制器、概览动作、日志页（#7）、设置修改入口（#8）、兜底开页（#11）、诊断包导出（#12）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
     internal void Attach(
         ShellController shell,
         OverviewActions? overviewActions = null,
@@ -51,8 +54,10 @@ public partial class MainView : UserControl
         Func<string, Task>? copy = null,
         Action? openFolder = null,
         Action? modifySettings = null,
+        Action? portalOpen = null,
         Func<ThemePreference>? themeProvider = null,
-        Action<ThemePreference>? themeSelected = null)
+        Action<ThemePreference>? themeSelected = null,
+        DiagnosticsExporter? export = null)
     {
         controller = shell;
         actions = overviewActions;
@@ -60,8 +65,23 @@ public partial class MainView : UserControl
         copyHandler = copy;
         folderHandler = openFolder;
         modifySettingsHandler = modifySettings;
+        portalOpenHandler = portalOpen;
         this.themeProvider = themeProvider;
         themeSelectedHandler = themeSelected;
+        diagnosticsExporter = export;
+        if (export is { } exporter)
+        {
+            // 导出状态在流程任务线程上推进：调度回界面线程后，若诊断页正在显示就立即重绘
+            // （内容指纹未变但导出卡需要刷新）。
+            exporter.StateChanged += () => Dispatcher.UIThread.Post(() =>
+            {
+                if (controller?.SelectedPage == ShellPage.Diagnostics && controller.Content is { } content)
+                {
+                    diagnosticsShown = null;
+                    RenderContent(content);
+                }
+            });
+        }
         BuildNavigation();
         shell.SelectionChanged += page => Dispatcher.UIThread.Post(() => SyncSelection(page));
         shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
@@ -152,14 +172,27 @@ public partial class MainView : UserControl
                     technicalExpanded,
                     expanded => technicalExpanded = expanded,
                     intent => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestRecoveryChangeAsync(intent)),
-                    () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestUnblockAsync()));
+                    () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestUnblockAsync()),
+                    () => portalOpenHandler?.Invoke());
                 break;
             case DiagnosticsContent diagnostics:
-                // 指纹未变化时不重建：诊断页无动作、无展开状态，但避免轮询期的无谓控件树重建。
-                if (diagnosticsShown is { } shownDiagnostics && shownDiagnostics.ContentKey == diagnostics.ContentKey) return;
+                // 指纹未变化且导出状态未推进时不重建：诊断页避免轮询期的无谓控件树重建；
+                // 导出卡（#12）由状态机推进（StateChanged 已单独触发重绘），这里按引用比对。
+                var exportState = diagnosticsExporter?.State;
+                if (diagnosticsShown is { } shownDiagnostics
+                    && shownDiagnostics.ContentKey == diagnostics.ContentKey
+                    && ReferenceEquals(exportStateShown, exportState)) return;
+                exportStateShown = exportState;
                 diagnosticsShown = diagnostics;
                 ClearShown(except: diagnostics);
-                pageHost.Content = DiagnosticsView.Build(diagnostics);
+                pageHost.Content = DiagnosticsView.Build(
+                    diagnostics,
+                    exportState,
+                    () => RunActionSafelyAsync(() =>
+                    {
+                        if (diagnosticsExporter is { } exporter) _ = exporter.RunAsync();
+                        return Task.FromResult(true);
+                    }));
                 break;
             case LogsContent logs:
                 // 指纹未变化时不重建：日志页交互（日期、筛选、选中行）都会改变指纹，重建即换内容。

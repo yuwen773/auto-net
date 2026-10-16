@@ -9,7 +9,8 @@ internal static class AppHost
 {
     public static int RunTray(StartupRequest request, QaEnvironment qa) => Run(new TrayMode(request, qa));
 
-    public static int RunElevated(ElevatedOperationKind operation, QaEnvironment qa) => Run(new ElevatedMode(operation, qa));
+    public static int RunElevated(StartupRequest request, QaEnvironment qa) =>
+        Run(new ElevatedMode(request.ElevatedOperation!.Value, qa, request.ExportTargetPath));
 
     public static void RunNotice(string heading, string body) => Run(new NoticeMode(heading, body));
 

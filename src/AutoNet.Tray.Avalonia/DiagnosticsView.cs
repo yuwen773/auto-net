@@ -8,11 +8,12 @@ namespace AutoNet.Tray.Avalonia;
 /// <summary>
 /// 网络诊断页视觉构建（迁移工单 #6）：把 <see cref="DiagnosticsContent"/> 渲染为 Fluent 卡片式界面。
 /// 五类诊断、认证信号与受控认证分类各成卡片；每行文字、图标与语义色同时呈现；
-/// 只读边界声明固定在页脚。本类只负责构建；页面没有动作，交互面为零（故事 23）。
+/// 只读边界声明固定在页脚。诊断包导出卡（#12）独立于只读证据呈现：发起入口、进度与
+/// 最终结果（成功/取消/失败 + 缺口明细）都在本卡内，页面其余部分保持零交互（故事 23）。
 /// </summary>
 internal static class DiagnosticsView
 {
-    public static Control Build(DiagnosticsContent content)
+    public static Control Build(DiagnosticsContent content, DiagnosticsExportState? export = null, Action? exportRequested = null)
     {
         var page = new StackPanel { Spacing = 14, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
         page.Children.Add(new StackPanel
@@ -33,6 +34,7 @@ internal static class DiagnosticsView
         page.Children.Add(RowCard("五类诊断", content.Categories));
         page.Children.Add(RowCard("认证信号", content.Signals));
         page.Children.Add(RowCard("认证证据", content.Attempts));
+        if (export is { } exportState) page.Children.Add(ExportCard(exportState, exportRequested));
         page.Children.Add(ShellTheming.Themed(
             new TextBlock
             {
@@ -44,6 +46,55 @@ internal static class DiagnosticsView
             },
             TextBlock.ForegroundProperty, "TextMuted"));
         return page;
+    }
+
+    /// <summary>
+    /// 诊断包导出卡（#12 / 故事 71–74、78、80、81）：入口按钮（进行中禁用）、受控进度/结果文案
+    /// 与缺口明细逐行呈现。卡片不改变页面其余部分的只读边界；提权语义由流程状态机承载。
+    /// </summary>
+    private static Control ExportCard(DiagnosticsExportState state, Action? exportRequested)
+    {
+        var body = new StackPanel { Spacing = 8 };
+        body.Children.Add(new TextBlock { Text = "诊断包导出", FontSize = 15, FontWeight = FontWeight.SemiBold });
+        body.Children.Add(ShellTheming.Themed(
+            new TextBlock
+            {
+                Text = state.Message,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12.5,
+                LineHeight = 19,
+                Opacity = 0.9
+            },
+            TextBlock.ForegroundProperty, ShellTheming.ToneKey(state.Tone)));
+        if (state.NotesList.Count > 0)
+        {
+            var notes = new StackPanel { Spacing = 3 };
+            notes.Children.Add(ShellTheming.Themed(
+                new TextBlock { Text = "缺口与超时说明（同时写入包内 README.txt）", FontSize = 11.5 },
+                TextBlock.ForegroundProperty, "TextMuted"));
+            foreach (var note in state.NotesList)
+                notes.Children.Add(ShellTheming.Themed(
+                    new TextBlock
+                    {
+                        Text = "- " + note,
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 11.5,
+                        LineHeight = 17
+                    },
+                    TextBlock.ForegroundProperty, "TextMuted"));
+            body.Children.Add(notes);
+        }
+
+        var button = new Button
+        {
+            Content = "导出诊断包…",
+            IsEnabled = !state.Running && exportRequested is not null,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+        if (exportRequested is not null) button.Click += (_, _) => exportRequested();
+        body.Children.Add(button);
+        return ShellTheming.Card(body);
     }
 
     /// <summary>一个证据分区：标题 + 若干「类别 / 值 + 边界说明」行；不可信状态同样保持分列结构。</summary>

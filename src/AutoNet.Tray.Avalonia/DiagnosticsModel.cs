@@ -38,9 +38,9 @@ internal sealed record DiagnosticsContent : PageContent
 /// </summary>
 internal static class DiagnosticsModel
 {
-    /// <summary>只读边界声明（故事 23）：页面脚注逐字呈现。</summary>
+    /// <summary>只读边界声明（故事 23）：页面脚注逐字呈现；诊断包导出（#12）为独立提权操作，不改变证据只读性。</summary>
     public const string ReadOnlyNotice =
-        "本页只读：仅展示后台服务的检测证据，不发起检测、不提交凭据、不触发认证或断线。";
+        "本页证据只读：仅展示后台服务的检测证据，不发起检测、不提交凭据、不触发认证或断线。诊断包导出是单独的管理员操作，按所选位置只读采集，不改变本页证据。";
 
     /// <summary>不可信状态的统一降级说明。</summary>
     private const string UnconfirmedNote = "状态不可确认；等待下一次有效检测。";

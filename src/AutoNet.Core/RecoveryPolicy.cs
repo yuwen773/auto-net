@@ -33,6 +33,20 @@ public sealed class RecoveryPolicy
     public const int FastRetryWindowSeconds = 15;
     public const int BackoffCeilingSeconds = 60;
 
+    /// <summary>
+    /// Browser-fallback open cadence (ADR-0008), shared by the service grant stamp and the tray's
+    /// own local cooldown so the two sides cannot drift apart. The tray's first open is immediate;
+    /// this span gates only later automatic opens (a re-granted episode still waits it out).
+    /// </summary>
+    public static readonly TimeSpan BrowserFallbackOpenCooldown = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// The only page the tray may open for the browser fallback (ADR-0008): the fixed portal root.
+    /// Opens are validated against <see cref="Settings.IsSupportedPortal"/> before launch, so a
+    /// future drift here fails closed instead of navigating anywhere else.
+    /// </summary>
+    public const string FallbackPortalPageUrl = "https://login.csust.edu.cn/";
+
     private ActionKind lastAction;
     private DateTimeOffset? stalledSince;
     private DateTimeOffset? onlineSince;

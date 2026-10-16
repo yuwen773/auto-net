@@ -53,6 +53,18 @@ internal sealed record RecoverySwitchState(string State, string Label, bool Enab
 internal sealed record UnblockEntryState(bool Visible, bool Enabled, string Label);
 
 /// <summary>
+/// 浏览器兜底开页入口的显示状态（#11 / 故事 61–69）：可见时独立成卡，说明逐字受控——
+/// 默认声明「只开根页、无凭据」边界；自动开页失败或消费记录保存失败时改为对应受控提示，
+/// 手动入口在两种失败下都保持可用（故事 69）。不可信状态一律隐藏（不依据陈旧信息提供入口）。
+/// </summary>
+internal sealed record PortalOpenEntryState(bool Visible, string Label, string Note, OverviewTone Tone)
+{
+    public bool Enabled => Visible;
+
+    public static readonly PortalOpenEntryState Hidden = new(false, "打开门户页面…", "", OverviewTone.Neutral);
+}
+
+/// <summary>
 /// 概览页内容投影（迁移工单 #4）：把一次状态读取映射为“当前网络状态 / 应用正在做什么 / 下一步操作”，
 /// 不依赖 UI 类型，可直接受控测试。缺失、过期、损坏或不可信状态一律降级为“不可确认”并禁用
 /// 依赖可信状态的动作，绝不沿用上一次画面。完整诊断项在网络诊断页，本页只保留受控技术详情。
@@ -79,6 +91,9 @@ internal sealed record OverviewContent : PageContent
     public IReadOnlyList<OverviewRow> Progress { get; init; } = [];
     public RecoverySwitchState Recovery { get; init; } = OverviewModel.UnconfirmedRecovery;
     public UnblockEntryState Unblock { get; init; } = OverviewModel.HiddenUnblock;
+
+    /// <summary>浏览器兜底开页入口（#11）：仅在可信且存在有效授予时可见。</summary>
+    public PortalOpenEntryState PortalOpen { get; init; } = PortalOpenEntryState.Hidden;
 
     /// <summary>渲染指纹：全部可见字段的稳定拼接；不变时视图跳过重建（不打断展开状态与焦点）。</summary>
     public string ContentKey { get; init; } = "";
@@ -143,8 +158,10 @@ internal static class OverviewModel
         return Unblock(true, reading.Snapshot);
     }
 
-    /// <summary>把一次状态读取投影为概览页内容；<paramref name="reading"/> 为 null 表示尚未取得状态。</summary>
-    public static OverviewContent From(StatusReading? reading)
+    /// <summary>把一次状态读取投影为概览页内容；<paramref name="reading"/> 为 null 表示尚未取得状态。
+    /// <paramref name="portalFailure"/> 与 <paramref name="portalSaveFailure"/> 来自开页控制器的会话内
+    /// 状态（#11）：仅影响兜底入口的说明文案，不影响入口可用性。</summary>
+    public static OverviewContent From(StatusReading? reading, PortalOpenFailure? portalFailure = null, bool portalSaveFailure = false)
     {
         var display = reading?.Display ?? NetworkDisplayMap.Map(null, null);
         var trusted = reading?.Trusted == true;
@@ -169,9 +186,26 @@ internal static class OverviewModel
             Progress = progress,
             Chips = chips,
             Recovery = RecoverySwitch(reading),
-            Unblock = Unblock(trusted, snapshot)
+            Unblock = Unblock(trusted, snapshot),
+            PortalOpen = PortalEntry(trusted, snapshot, portalFailure, portalSaveFailure)
         };
         return content with { ContentKey = Fingerprint(content) };
+    }
+
+    /// <summary>
+    /// 兜底开页入口（#11 / 故事 61–69）：只在可信且快照同时携带授予标志与授予时间戳时可见；
+    /// 上次自动开页失败或消费记录保存失败时说明切换为对应受控提示（绝不显示异常文本或状态原文）。
+    /// </summary>
+    public static PortalOpenEntryState PortalEntry(bool trusted, StatusSnapshot? snapshot, PortalOpenFailure? failure, bool saveFailure)
+    {
+        if (!trusted || snapshot is not { BrowserFallbackRequested: true, BrowserFallbackNotBefore: not null })
+            return PortalOpenEntryState.Hidden;
+        const string label = "打开门户页面…";
+        if (failure is { } openFailure)
+            return new(true, label, "上次自动开页未成功（" + openFailure.ErrorKind + "）；可点击下方按钮再次手动打开。", OverviewTone.Warning);
+        if (saveFailure)
+            return new(true, label, "开页记录暂时无法保存，已暂停自动开页；可手动打开门户页面。", OverviewTone.Attention);
+        return new(true, label, "需要使用浏览器完成校园网认证；只打开固定允许的门户根地址，不填表、不携带凭据。", OverviewTone.Attention);
     }
 
     private static OverviewAuthColumn AuthColumn(StatusSnapshot snapshot)
@@ -246,6 +280,6 @@ internal static class OverviewModel
         content.Primary, content.Tone,
         string.Join("\u001e", content.Chips.Select(chip => chip.Text + ":" + chip.Tone)),
         string.Join("\u001e", content.Progress.Select(row => row.Caption + ":" + row.Value + ":" + row.Note)),
-        content.Recovery, content.Unblock
+        content.Recovery, content.Unblock, content.PortalOpen
     });
 }

@@ -23,6 +23,19 @@ internal static class Program
         }
         catch (ArgumentException e)
         {
+            if (QaEnvironment.FromProcess() is { Active: true } qaEnv)
+            {
+                // QA：参数错误不弹窗口（脚本无法关闭），只落证据并按既有契约返回 2。
+                QaReports.Write(qaEnv.ParseErrorReportPath, new
+                {
+                    phase = "parse-error",
+                    message = e.Message,
+                    arguments = args,
+                    at = QaReports.Timestamp()
+                });
+                return 2;
+            }
+
             AppHost.RunNotice("参数无效", e.Message);
             return 2;
         }
@@ -47,11 +60,11 @@ internal static class Program
                 });
             }
 
-            return AppHost.RunElevated(decision.Operation!.Value, qa);
+            return AppHost.RunElevated(request, qa);
         }
 
         if (decision.Kind is StartupActionKind.RequestElevation)
-            return RequestElevation(decision.Operation!.Value, qa);
+            return RequestElevation(decision.Operation!.Value, qa, request.ExportTargetPath);
 
         using var instance = SingleInstance.Acquire(MutexName);
         if (!instance.Acquired)
@@ -79,7 +92,7 @@ internal static class Program
         return AppHost.RunTray(request, qa);
     }
 
-    private static int RequestElevation(ElevatedOperationKind operation, QaEnvironment qa)
+    private static int RequestElevation(ElevatedOperationKind operation, QaEnvironment qa, string? exportTargetPath = null)
     {
         if (qa.Active)
         {
@@ -88,12 +101,20 @@ internal static class Program
             {
                 phase = "elevation-requested",
                 operation = operation.CommandLineArgument(),
+                exportTargetPath,
                 processId = Environment.ProcessId,
                 processPath = Environment.ProcessPath,
                 commandLineArgs = Environment.GetCommandLineArgs().Skip(1),
                 at = QaReports.Timestamp()
             });
             return 4;
+        }
+
+        // 手工命令行触发的导出（非管理员）：原样把用户所选路径带进提权重启（#12 契约不变）。
+        if (operation == ElevatedOperationKind.DiagnosticsExport && !string.IsNullOrWhiteSpace(exportTargetPath))
+        {
+            Elevation.LaunchDiagnosticsExport(exportTargetPath, Elevation.StartProcess);
+            return 0;
         }
 
         Elevation.Launch(operation);

@@ -22,6 +22,15 @@ internal static class AvaloniaPrototypeRegression
             foreach (var operation in Enum.GetValues<ElevatedOperationKind>())
             {
                 var argument = operation.CommandLineArgument();
+                // #12：导出操作按契约携带用户所选目标路径，单独的参数名不构成完整启动请求。
+                if (operation == ElevatedOperationKind.DiagnosticsExport)
+                {
+                    var withTarget = StartupRequest.Parse([argument, @"C:\pkg\diag.zip"]);
+                    Require(withTarget.ElevatedOperation == operation && withTarget.ExportTargetPath == @"C:\pkg\diag.zip",
+                        "导出操作应携带目标路径：" + argument);
+                    continue;
+                }
+
                 Require(StartupRequest.Parse([argument]).ElevatedOperation == operation,
                     "参数往返失败：" + argument);
             }
@@ -30,6 +39,7 @@ internal static class AvaloniaPrototypeRegression
             Require(ElevatedOperationKind.EnableRecovery.CommandLineArgument() == "--enable-recovery");
             Require(ElevatedOperationKind.DisableRecovery.CommandLineArgument() == "--disable-recovery");
             Require(ElevatedOperationKind.UnblockAuthentication.CommandLineArgument() == "--unblock-auth");
+            Require(ElevatedOperationKind.DiagnosticsExport.CommandLineArgument() == "--export-diagnostics");
 
             foreach (var args in new[]
             {

@@ -53,6 +53,31 @@
 - 全量回归 **278/280**：新增主题回归 10 项全绿；2 项失败全部为既有机器相关基线项（诊断包环境依赖确定性失败 + 托盘加固随机受害者，baseline `79ccc02` 同样复现，另一项托盘加固用例本轮通过）；Release 构建零警告、零错误。
 - 未覆盖（分别验收）：真实系统明暗切换下的跟随验证（人工，QA 不修改系统主题）、真实 UAC 提权窗口（设置/解除确认）的明暗一致性——同账户提权读到同一偏好文件由构造保证，跨管理员账户提权时偏好按账户各自隔离（故事 70 的用户隔离语义）——（人工，需单独授权）、主题单选钮物理点击的视觉确认（人工）、真实安装/回退（#15/#16）。
 
+## Avalonia 浏览器兜底开页（2026-10-16，工程 + 真机受控证据，未安装未部署）
+
+- 对应迁移工单 #11《浏览器兜底开页：首次立即、去重与冷却》，验收矩阵行 T11、T12（故事 61–70，[ADR-0008](adr/0008-browser-fallback-first-open.md)）。实现落点 `src/AutoNet.Tray.Avalonia/`（`PortalPageOpener` 开页控制器 + `PortalOpenStore` 用户级消费记录 + 概览页兜底开页卡；自动开页由状态管道更新驱动、`pipe.Updated` 订阅即评估，手动开页经概览页按钮）；QA 入口 `scripts/qa-avalonia-portal-open.ps1`（两阶段：select + resume），证据 `artifacts/validation/ui-avalonia-portal-open/`。
+- 首次授予立即开页（故事 61–63）：快照同时携带 `BrowserFallbackRequested` 与 `BrowserFallbackNotBefore` 即视为有效授予，首次自动开页不等待 10 分钟冷却；浏览器启动只收到固定门户根地址 `https://login.csust.edu.cn/`（`RecoveryPolicy.FallbackPortalPageUrl`，开页前再经 `Settings.IsSupportedPortal` 复核，故事 62），启动参数只有 URL——不填表、不携带凭据（故事 63，QA 启动记录器逐字核验 4 次启动 URL 全部一致）。
+- 同一授予只开一次（故事 64）：授予键 = `BrowserFallbackNotBefore` 圆整形式（服务每段戳一次的稳定时间戳；status.json 无故障 ID，不承诺识别跨服务重启的同一业务故障）；消费记录持久化 `%LOCALAPPDATA%\AutoNet\portal-open-consumption.json`，QA 两阶段证明跨托盘重启去重。
+- 冷却跨授予、跨重启（故事 65、决策 11）：本地 10 分钟冷却按「最近开页时刻（自动或手动）」计算并持久化，服务重启换发的新授予同样先被拦下；`now < LastOpenAt`（时钟回拨形态）视为冷却未满足——时间异常不得成为提前开页的理由。
+- 到期不循环（故事 67）：控制器无定时器，只被状态读取驱动；已消费授予在冷却过期后依然不开（QA resume 阶段播种 `now-11min` 后评估仍为 AlreadyConsumed）。
+- 手动开页计入消费与冷却（故事 66）：概览页按钮重验可信状态后直接开页（不受去重与冷却限制），同时把当前授予写入消费记录并刷新最近开页时刻；请求消失（联网恢复后服务撤旗的表现形态）时手动入口返回「不可执行」。
+- 失效与不可信不开页（故事 68）：开页前以状态管道重读核对——重读不可信、请求消失或授予时间戳被换发即放弃；失效读取不污染消费记录。
+- 启动失败受控（故事 69）：消费记录先落盘且必须成功（决策 11：无法安全保存时不自动开页，`SaveFailurePending` 驱动概览降级文案），浏览器启动失败只记录异常类型名（`PortalOpenFailure`，绝不回显异常文本），授予已消费故轮询不会再次启动；概览卡说明切换为「上次自动开页未成功（类型）；可再次手动打开」，手动重试始终可用。
+- 记录独立与无秘密（故事 70）：开页消费与通知消费是两个文件（`portal-open-consumption.json` / `notification-consumption.json`），载荷只含授予键与时刻；QA 脚本以指纹核验本机真实用户记录与 ProgramData 受限存储逐字节未变，报告隐私扫描零命中。
+- 全量回归 **311/314**（新增开页回归 10 项 + 导出回归 8 项 + 诊断包安全发布 2 项全绿；3 项失败全部为既有基线项：诊断包环境依赖确定性失败 + 托盘加固负载性随机失败，隔离重跑通过）；Release 构建零警告、零错误；两个 QA 阶段（select + resume）全绿。
+- 未覆盖（分别验收）：真实浏览器打开门户根页与人工认证（人工，QA 用受控记录器替代浏览器启动）；真实系统时钟异常注入（受控场景以播种 LastOpenAt 模拟）；真实安装/回退（#15/#16）。
+
+## Avalonia 诊断包导出（2026-10-16，工程 + 真机受控证据，未安装未部署）
+
+- 对应迁移工单 #12《诊断包导出：普通界面流程与提权交接》，验收矩阵行 T13（故事 71–81，决策 12、13）。实现落点：Core `DiagnosticsPackage` 补齐安全发布（决策 13：zip 先写目标目录内 GUID 临时名、完成后 `File.Move` 原子替换——失败或取消不损坏旧包、不交付半包，归档已完成则如实报告成功）；托盘侧 `DiagnosticsExporter`（普通界面状态机）+ `DiagnosticsExportJob`（提权采集任务）+ 诊断页「诊断包导出」卡；QA 入口 `scripts/qa-avalonia-export.ps1`，证据 `artifacts/validation/ui-avalonia-export/`。
+- 普通界面选路径（故事 72、78）：保存对话框默认当前用户桌面 + 默认文件名 `autonet-diagnostics-yyyyMMdd-HHmmss.zip`，同名覆盖由系统对话框原生确认（`ShowOverwritePrompt`）；取消保存即取消导出——不发起提权、不生成任何文件（故事 74）。
+- 独立提权交接（故事 73、决策 12）：选定路径后经 `Elevation.LaunchDiagnosticsExport` 以 UAC 重启自身并逐字传递 `--export-diagnostics <用户所选路径>`；提权身份只承载采集权限，绝不替换用户已选位置；拒绝 UAC 即取消（不生成任何文件）。
+- 提权只读采集（故事 75–77）：提权进程复用 Core `DiagnosticsPackage`（六类内容、近三天日志、既有脱敏模型），README 的「导出方式」行如实标注界面导出来源；采集不加载凭据、不修改网络、不清除认证阻断。
+- 结果回传与呈现（故事 80、81）：提权进程把受控结果（成功/失败 + 缺口说明，与 README 同源的受控字符串）写入共享结果文件 `ProgramData\AutoNet\export-result.json`（目标路径 + 时刻双重核对防旧结果冒充）并按退出码收场（0 成功 / 3 失败 / 2 参数缺失）；主界面异步等待进程退出（上限 3 分钟，超时呈现受控 Timeout），期间界面可操作；诊断页导出卡呈现最终结果与缺口明细（缺失项/采集超时逐项列出）。
+- QA 证据：界面侧七场景（取消保存 / 拒绝 UAC / 成功 / 缺口明细 / 失败 / 选择异常 / 启动异常）+ 提权侧成功与失败（退出码与结果文件契约、QA 隔离不产生真实包）+ 参数缺失（退出码 2 + parse-error 证据）；本机真实存储与后台服务全程指纹未变。
+- 全量回归同上节；QA 脚本（含发布、两阶段、提权侧、参数契约）全绿。
+- 未覆盖（分别验收）：真实系统保存对话框与同名覆盖确认（人工）；真实 UAC 提权窗口与跨管理员账户提权时结果文件可读性（结果文件按 ProgramData\AutoNet 既有共享目录 ACL 继承——人工，需单独授权）；真实只读采集的 ZIP 内容由离线回归覆盖（`DiagnosticsPackageRegression` 12 项）；真实安装/回退（#15/#16）。
+
 ## 探测语义、门户改版检测与浏览器兜底标志（2026-10-15，仅离线验证，未部署）
 
 - 按「UI 单独开 PR、当前先不管 UI」的边界，本轮只做 Core/Service 管路，托盘消费端留给 UI PR。契约见 [ADR-0005](adr/0005-portal-layout-detection.md)、[ADR-0006](adr/0006-probe-semantics.md) 与 [ADR-0002](adr/0002-notification-and-fallback-plumbing.md)，术语见根目录 [CONTEXT.md](../CONTEXT.md)。

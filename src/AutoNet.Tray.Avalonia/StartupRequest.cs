@@ -6,11 +6,13 @@ internal enum ElevatedOperationKind
     Settings,
     EnableRecovery,
     DisableRecovery,
-    UnblockAuthentication
+    UnblockAuthentication,
+    /// <summary>诊断包导出（#12）：提权进程按既有参数携带的用户所选目标路径执行只读采集。</summary>
+    DiagnosticsExport
 }
 
 /// <summary>解析后的启动请求。只解释参数语义，不接触 UI、互斥或进程。</summary>
-internal sealed record StartupRequest(bool StartHidden, ElevatedOperationKind? ElevatedOperation)
+internal sealed record StartupRequest(bool StartHidden, ElevatedOperationKind? ElevatedOperation, string? ExportTargetPath = null)
 {
     public static StartupRequest Parse(string[] args)
     {
@@ -23,8 +25,20 @@ internal sealed record StartupRequest(bool StartHidden, ElevatedOperationKind? E
         if (enable) operations.Add(ElevatedOperationKind.EnableRecovery);
         if (disable) operations.Add(ElevatedOperationKind.DisableRecovery);
         if (args.Contains("--unblock-auth")) operations.Add(ElevatedOperationKind.UnblockAuthentication);
+        // #12：--export-diagnostics <保存路径>——提权采集目标在普通界面选定后逐字传递，
+        // 提权身份不得替换用户已选位置（UI-MIGRATION-SPEC 决策 12）。
+        string? exportTarget = null;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] != "--export-diagnostics") continue;
+            if (exportTarget is not null) throw new ArgumentException("--export-diagnostics 只能出现一次。");
+            if (i + 1 >= args.Length) throw new ArgumentException("使用 --export-diagnostics 时必须提供保存路径。");
+            exportTarget = args[++i];
+        }
+
+        if (exportTarget is not null) operations.Add(ElevatedOperationKind.DiagnosticsExport);
         if (operations.Count > 1) throw new ArgumentException("同一次启动只允许一个管理员操作。");
-        return new StartupRequest(args.Contains("--tray"), operations.Count == 1 ? operations[0] : null);
+        return new StartupRequest(args.Contains("--tray"), operations.Count == 1 ? operations[0] : null, exportTarget);
     }
 }
 
@@ -37,6 +51,7 @@ internal static class ElevatedOperations
         ElevatedOperationKind.EnableRecovery => "--enable-recovery",
         ElevatedOperationKind.DisableRecovery => "--disable-recovery",
         ElevatedOperationKind.UnblockAuthentication => "--unblock-auth",
+        ElevatedOperationKind.DiagnosticsExport => "--export-diagnostics",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 
@@ -46,6 +61,7 @@ internal static class ElevatedOperations
         ElevatedOperationKind.EnableRecovery => "开启自动恢复",
         ElevatedOperationKind.DisableRecovery => "关闭自动恢复",
         ElevatedOperationKind.UnblockAuthentication => "解除认证暂停",
+        ElevatedOperationKind.DiagnosticsExport => "导出诊断包",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 }

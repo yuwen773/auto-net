@@ -267,6 +267,64 @@ internal static class DiagnosticsPackageRegression
                 Require(!File.Exists(output), "取消后不得留下半包");
             });
             return Task.CompletedTask;
+        }),
+        ("诊断包：取消后旧包逐字节保留且无临时残留", () =>
+        {
+            WithTemp(directory =>
+            {
+                var output = Path.Combine(directory, "pkg.zip");
+                const string oldBytes = "previous evidence that must survive";
+                File.WriteAllText(output, oldBytes);
+                var settings = new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST" };
+                using var canceled = new System.Threading.CancellationTokenSource();
+                canceled.Cancel();
+                try
+                {
+                    DiagnosticsPackage.ExportAsync(new DiagnosticsPackageOptions
+                    {
+                        OutputPath = output, LoadSettings = () => settings,
+                        Collect = (_, token) => throw new OperationCanceledException(token)
+                    }, canceled.Token).GetAwaiter().GetResult();
+                    throw new Exception("取消被吞且产出了包");
+                }
+                catch (OperationCanceledException) { }
+                Require(File.ReadAllText(output) == oldBytes, "取消后旧包内容发生变化");
+                Require(Directory.GetFiles(directory, "*.tmp").Length == 0, "取消后留下临时文件");
+            });
+            return Task.CompletedTask;
+        }),
+        ("诊断包：发布失败保留旧包字节且不交付半包", () =>
+        {
+            WithTemp(directory =>
+            {
+                var output = Path.Combine(directory, "pkg.zip");
+                const string oldBytes = "previous evidence that must survive";
+                File.WriteAllText(output, oldBytes);
+                var logs = Path.Combine(directory, "logs");
+                Directory.CreateDirectory(logs);
+                File.WriteAllText(Path.Combine(logs, "autonet-2026-10-15.jsonl"), "{\"schemaVersion\":2}\n");
+                var settings = new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST" };
+                // 目标被独占句柄占用 → 最终发布（File.Move 覆盖）必然失败：这是“导出失败”的受控模拟。
+                // Windows 对被占用目标的覆盖返回拒绝访问或共享冲突，两者都按发布失败处理。
+                using var exclusive = new FileStream(output, FileMode.Open, FileAccess.Read, FileShare.None);
+                try
+                {
+                    DiagnosticsPackage.ExportAsync(new DiagnosticsPackageOptions
+                    {
+                        OutputPath = output, LogDirectory = logs,
+                        StatusPath = Path.Combine(directory, "missing-status.json"),
+                        LoadSettings = () => settings, Profiles = () => Array.Empty<WifiProfile>(),
+                        Collect = (_, _) => Task.FromResult(new LiveDiagnostics(null, null)),
+                        ExportedAt = FixtureNow, BuildId = "test-build-1"
+                    }, default).GetAwaiter().GetResult();
+                    throw new Exception("发布失败被吞且谎报成功");
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                exclusive.Dispose();
+                Require(File.ReadAllText(output) == oldBytes, "发布失败后旧包内容发生变化");
+                Require(Directory.GetFiles(directory, "*.tmp").Length == 0, "发布失败后留下临时文件");
+            });
+            return Task.CompletedTask;
         })
     ];
 
