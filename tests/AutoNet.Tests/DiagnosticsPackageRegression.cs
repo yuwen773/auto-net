@@ -325,6 +325,109 @@ internal static class DiagnosticsPackageRegression
                 Require(Directory.GetFiles(directory, "*.tmp").Length == 0, "发布失败后留下临时文件");
             });
             return Task.CompletedTask;
+        }),
+        ("诊断包：隐私契约——脏输入下全条目不含凭据、Cookie、Token、原始响应与真实MAC", () =>
+        {
+            WithTemp(directory =>
+            {
+                // 最坏情况输入：配置名带中文、代理与 UU 地址携带 Token 参数、门户证据只有
+                // MAC 存在性表示；日志保留 schemaVersion 2 的布尔契约字段名（真实记录形态）。
+                var logs = Path.Combine(directory, "logs");
+                Directory.CreateDirectory(logs);
+                File.WriteAllText(Path.Combine(logs, "autonet-2026-10-15.jsonl"),
+                    "{\"schemaVersion\":2,\"action\":\"认证\",\"hasCredentials\":false,\"credentialRequestStarted\":false}\n");
+                var statusPath = Path.Combine(directory, "status.json");
+                File.WriteAllText(statusPath, "{\"State\":\"在线但认证暂停\",\"UpdatedAt\":\"2026-10-15T04:44:00Z\"}");
+                var settings = new Settings
+                {
+                    InterfaceId = "00000000-0000-0000-0000-000000000004", WifiProfile = "CSUST-教工",
+                    ProxyUrl = "http://127.0.0.1:7897", UuEndpoint = "https://uu.example/real-endpoint?token=secret-token-value"
+                };
+                var report = new NetworkDiagnosticReport
+                {
+                    WifiConnected = true, WifiState = "Ready", InterfaceIndex = 7, WifiIpv4 = "10.20.30.40",
+                    DnsServers = ["10.1.1.1"], DirectOnline = true, Portal = "LoggedIn",
+                    Route = new RouteSelection("Wifi", 7, "110.242.68.3"),
+                    SocketBinding = "生产客户端使用指定 Wi-Fi 接口和源 IPv4；不等于物理出口证明"
+                };
+                var portal = new PortalAttempt(LoginResult.Accepted, PortalStage.Status, PortalFailure.None, 200)
+                {
+                    ObservedState = PortalState.LoggedIn,
+                    Evidence = new PortalEvidence { StatusAddress = "Valid", ResponseShape = "Object", ResponseContentType = "Javascript", ResponseCharacters = 42, MacToken = "Present" }
+                };
+                var result = DiagnosticsPackage.ExportAsync(new DiagnosticsPackageOptions
+                {
+                    OutputPath = Path.Combine(directory, "pkg.zip"), LogDirectory = logs, StatusPath = statusPath,
+                    LoadSettings = () => settings,
+                    Collect = (_, _) => Task.FromResult(new LiveDiagnostics(report, portal)),
+                    ExportedAt = FixtureNow, BuildId = "test-build-1"
+                }, default).GetAwaiter().GetResult();
+                Require(result.Entries.Count == 6, "脏输入不应改变六类内容合同");
+                using var zip = ZipFile.OpenRead(result.Path);
+                foreach (var entry in zip.Entries)
+                {
+                    using var reader = new StreamReader(entry.Open());
+                    var content = reader.ReadToEnd();
+                    Require(!MacShape.IsMatch(content), "包内出现 MAC 值形态：" + entry.FullName);
+                    Require(!CredentialShape.IsMatch(content), "包内出现凭据值形态：" + entry.FullName);
+                    Require(!content.Contains("secret-token-value", StringComparison.Ordinal), "包内出现 Token 值：" + entry.FullName);
+                    Require(!content.Contains("7897", StringComparison.Ordinal) && !content.Contains("uu.example", StringComparison.Ordinal),
+                        "包内出现代理或 UU 检测地址：" + entry.FullName);
+                    Require(!content.Contains("<html", StringComparison.OrdinalIgnoreCase) && !content.Contains("<script", StringComparison.OrdinalIgnoreCase),
+                        "包内出现原始门户响应形态：" + entry.FullName);
+                    Require(!content.Contains("token=", StringComparison.OrdinalIgnoreCase),
+                        "包内出现带 Token 参数的 URL：" + entry.FullName);
+                }
+                // MAC 只允许以存在性表示出现在门户证据里（T15 的 MAC 掩码证明点）。
+                var portalJson = new StreamReader(zip.GetEntry("portal_diagnostic.json")!.Open()).ReadToEnd();
+                Require(portalJson.Contains("\"MacToken\": \"Present\"", StringComparison.Ordinal), "门户证据应以存在性表示 MAC");
+                // README 的隐私说明按契约点名 Cookie/Token/MAC：扫描必须用值形态而非裸关键词。
+                var readme = new StreamReader(zip.GetEntry("README.txt")!.Open()).ReadToEnd();
+                Require(readme.Contains("Cookie", StringComparison.Ordinal) && readme.Contains("Token", StringComparison.Ordinal)
+                    && readme.Contains("MAC", StringComparison.Ordinal), "README 应保留隐私契约声明");
+            });
+            return Task.CompletedTask;
+        }),
+        ("诊断包：完成与取消竞争——取消已来不及仍成功交付完整包", () =>
+        {
+            WithTemp(directory =>
+            {
+                var output = Path.Combine(directory, "pkg.zip");
+                File.WriteAllText(output, "previous evidence that must be replaced");
+                var logs = Path.Combine(directory, "logs");
+                Directory.CreateDirectory(logs);
+                File.WriteAllText(Path.Combine(logs, "autonet-2026-10-15.jsonl"), "{\"schemaVersion\":2,\"action\":\"today\"}\n");
+                var statusPath = Path.Combine(directory, "status.json");
+                File.WriteAllText(statusPath, "{\"State\":\"校园网在线\",\"UpdatedAt\":\"2026-10-15T04:44:00Z\"}");
+                var settings = new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST" };
+                using var cts = new System.Threading.CancellationTokenSource();
+                // 决策 13 / 故事 81：采集已完成、取消才到达——导出应准确报告成功并交付完整包，
+                // 不伪报取消，也不留下半包或临时文件。
+                var result = DiagnosticsPackage.ExportAsync(new DiagnosticsPackageOptions
+                {
+                    OutputPath = output, LogDirectory = logs, StatusPath = statusPath,
+                    LoadSettings = () => settings, Profiles = () => Array.Empty<WifiProfile>(),
+                    Collect = (_, token) =>
+                    {
+                        cts.Cancel();
+                        return Task.FromResult(new LiveDiagnostics(
+                            new NetworkDiagnosticReport { WifiConnected = true, WifiState = "Ready", DirectOnline = true },
+                            new PortalAttempt(LoginResult.Accepted, PortalStage.Status, PortalFailure.None, 200)));
+                    },
+                    ExportedAt = FixtureNow, BuildId = "test-build-1"
+                }, cts.Token).GetAwaiter().GetResult();
+                Require(result.Notes.Count == 0, "竞争完成不应产生缺口说明");
+                Require(result.Entries.SequenceEqual(new[]
+                {
+                    "README.txt", "settings-snapshot.json", "net_state.json", "portal_diagnostic.json", "status.json",
+                    "logs/autonet-2026-10-15.jsonl"
+                }), "取消已来不及时应完整交付六类内容");
+                Require(File.ReadAllText(output) != "previous evidence that must be replaced", "旧包应被完整新包替换");
+                using var zip = ZipFile.OpenRead(output);
+                Require(zip.Entries.Count == 6, "发布后的包应为完整六类内容");
+                Require(Directory.GetFiles(directory, "*.tmp").Length == 0, "竞争完成后留下临时文件");
+            });
+            return Task.CompletedTask;
         })
     ];
 

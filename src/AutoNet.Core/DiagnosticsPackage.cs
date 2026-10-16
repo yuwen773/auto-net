@@ -260,9 +260,17 @@ public static class DiagnosticsPackage
 
     private static Settings? LoadUsableSettings(DiagnosticsPackageOptions options, List<string> notes)
     {
-        Settings? settings = null;
-        try { settings = options.LoadSettings?.Invoke() ?? Storage.LoadSettings(); }
-        catch (Exception e) when (IsStorageFailure(e) || e is JsonException) { notes.Add("已保存设置读取失败（" + e.GetType().Name + "）；未加载凭据。"); }
+        // A provided loader that returns null is a controlled "no settings" signal and must not
+        // fall back to real storage: QA and offline runs use it to isolate the machine, and a
+        // fallback would write the real interface and profile names into the exported package
+        // (privacy contract, story 77). Only an absent loader reads the production store.
+        Settings? settings;
+        try { settings = options.LoadSettings is { } load ? load() : Storage.LoadSettings(); }
+        catch (Exception e) when (IsStorageFailure(e) || e is JsonException)
+        {
+            settings = null;
+            notes.Add("已保存设置读取失败（" + e.GetType().Name + "）；未加载凭据。");
+        }
         if (settings is not null)
         {
             try { settings.Validate(); return settings; }

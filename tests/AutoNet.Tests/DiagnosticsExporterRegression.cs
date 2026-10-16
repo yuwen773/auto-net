@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text.RegularExpressions;
 using AutoNet.Core;
 using AutoNet.Tray.Avalonia;
 
@@ -6,6 +7,10 @@ internal static class DiagnosticsExporterRegression
 {
     private static readonly DateTimeOffset Base = new(2026, 10, 16, 10, 0, 0, TimeSpan.Zero);
     private const string FixtureTarget = "C:\\Users\\fixture\\Desktop\\autonet-diagnostics.zip";
+    // 与 DiagnosticsPackageRegression 同源的值形态扫描器：T15 对结果文件与缺口说明复用同一契约。
+    private static readonly Regex PrivacyMacShape = new("[0-9a-fA-F]{2}([:-][0-9a-fA-F]{2}){5}", RegexOptions.None);
+    private static readonly Regex PrivacyCredentialShape =
+        new(@"user_password\s*=|user_account\s*=|password\s*=|phpsessid\s*=|set-cookie|cookie\s*[:=]", RegexOptions.IgnoreCase);
 
     /// <summary>导出流程夹具：可编排的选择/启动委托 + 状态收集。</summary>
     private sealed class Flow
@@ -227,6 +232,42 @@ internal static class DiagnosticsExporterRegression
                 // 参数缺失：退出码 2，不产包。
                 var missing = DiagnosticsExportJob.Run("  ", Path.Combine(root, "missing-result.json"));
                 Require(missing == 2, "空目标应返回退出码 2");
+            }
+            finally { Directory.Delete(root, true); }
+            return Task.CompletedTask;
+        }),
+        ("导出：结果文件与缺口说明遵守隐私契约——脏输入零泄漏（故事77、T15）", () =>
+        {
+            var root = Directory.CreateTempSubdirectory("AutoNet-exportpriv-").FullName;
+            try
+            {
+                // 无设置、无状态、无日志的离线导出：Notes 为最丰富的受控缺口词表输出，
+                // 结果文件是界面侧「结果」呈现的全部来源——逐字段扫描敏感形态。
+                var target = Path.Combine(root, "pkg.zip");
+                var resultPath = Path.Combine(root, "export-result.json");
+                var code = DiagnosticsExportJob.Run(target, resultPath, options => options with
+                {
+                    LogDirectory = Path.Combine(root, "no-logs"),
+                    StatusPath = Path.Combine(root, "missing-status.json"),
+                    LoadSettings = () => null,
+                    Profiles = () => [],
+                    Collect = (_, _) => Task.FromResult(new AutoNet.Core.LiveDiagnostics(null, null)),
+                    ExportedAt = Base
+                });
+                Require(code == 0, "离线导出应成功");
+                var outcome = DiagnosticsExportOutcome.TryRead(resultPath);
+                if (outcome is not { } ok || !ok.Ok) throw new Exception("结果文件应记录成功");
+                Require(ok.Notes.Count >= 2, "缺口说明应逐项存在");
+                foreach (var note in ok.Notes)
+                    Require(!PrivacyMacShape.IsMatch(note) && !PrivacyCredentialShape.IsMatch(note), "缺口说明携带敏感形态：" + note);
+                // 结果文件原文（含 TargetPath 与 ErrorKind 字段）整体扫描；受控错误类型只允许类型名。
+                var raw = File.ReadAllText(resultPath);
+                Require(!PrivacyMacShape.IsMatch(raw) && !PrivacyCredentialShape.IsMatch(raw), "结果文件出现 MAC 或凭据形态");
+                Require(!raw.Contains("secret-token-value", StringComparison.Ordinal) && !raw.Contains("user_password", StringComparison.OrdinalIgnoreCase),
+                    "结果文件出现 Token 或凭据参数形态");
+                // LoadSettings 返回 null 是受控「无设置」信号：绝不回退读真实存储（隐私边界）。
+                Require(ok.Notes.Any(n => n.Contains("未找到可用设置", StringComparison.Ordinal)),
+                    "受控无设置应产生回退说明而非读取真实存储");
             }
             finally { Directory.Delete(root, true); }
             return Task.CompletedTask;
