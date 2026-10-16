@@ -52,8 +52,9 @@ public sealed class App : Application
 
     /// <summary>
     /// 管理员操作（#4 起）：恢复开关按明确目标改写已保存设置；解除认证暂停（#5）走
-    /// 确认 → 只读复核 → 修订核对 → 持久审计后解除的完整安全流程；设置（#8）仍为受控占位。
-    /// 成功保持既有“静默成功”语义（结果经状态管道回到界面），需要说明的结果显示受控提示。
+    /// 确认 → 只读复核 → 修订核对 → 持久审计后解除的完整安全流程；设置（#8）打开管理员编辑窗口，
+    /// 保存按既有规则写入凭据与设置并在窗口内确认，取消不写入，保存不清认证阻断。
+    /// 需要说明的结果显示受控提示（只披露异常类型，绝不回显异常文本）。
     /// </summary>
     private static void StartElevated(IClassicDesktopStyleApplicationLifetime desktop, ElevatedMode elevated)
     {
@@ -68,6 +69,19 @@ public sealed class App : Application
             }
 
             StartUnblock(desktop);
+            return;
+        }
+
+        if (elevated.Operation is ElevatedOperationKind.Settings)
+        {
+            // 只有 settings 模式才走隔离夹具：其他 QA 模式走到这里仍按生产语义执行。
+            if (elevated.Qa.Mode == QaMode.Settings)
+            {
+                QaSettings.RunEditor(elevated.Qa, code => desktop.Shutdown(code));
+                return;
+            }
+
+            StartSettingsEditor(desktop);
             return;
         }
 
@@ -96,6 +110,35 @@ public sealed class App : Application
         // 受控占位：入口已成立（不被普通互斥锁拦截），具体页面随后续工单提供。
         StartNotice(desktop, elevated.Operation.DisplayName() + "（迁移中）",
             "该操作将在界面迁移完成后通过新的页面提供。\n当前版本不会修改任何设置、凭据或服务。");
+    }
+
+    /// <summary>
+    /// 管理员设置编辑（#8 / T07 / 故事 35–39）：提权进程内打开编辑窗口，既有受限存储语义不变。
+    /// private 目录缺失时显示安装提示（与既有 WinForms 托盘同语义）；取消或保存成功都以
+    /// 窗口关闭收尾；打开失败只披露异常类型，不修改任何配置。
+    /// </summary>
+    private static void StartSettingsEditor(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                var window = SettingsWindow.Create(ElevatedSettings.Production());
+                if (window is null)
+                {
+                    StartNotice(desktop, "AutoNet", ElevatedSettings.MissingStoreMessage);
+                    return;
+                }
+
+                window.Closed += (_, _) => desktop.Shutdown(0);
+                window.Show();
+            }
+            catch (Exception e)
+            {
+                StartNotice(desktop, "设置未完成",
+                    "设置界面无法打开：" + e.GetType().Name + "。\n当前不会修改任何设置、凭据或服务。");
+            }
+        });
     }
 
     /// <summary>
@@ -142,11 +185,13 @@ public sealed class App : Application
         // 概览 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
         Action<ElevatedOperationKind> launcher = tray.Qa.Mode == QaMode.Overview ? QaOverview.RecordLaunch : Elevation.Launch;
         var actions = new OverviewActions(pipe.RefreshAsync, launcher);
+        // 设置修改入口（#8）走同一条提权路径；设置页 QA 模式下替换为受控记录（不弹 UAC）。
+        Action modifySettings = tray.Qa.Mode == QaMode.Settings ? QaSettings.RecordModify : LaunchSettingsEditor;
         // 日志页复制与目录打开在 QA 模式下替换为受控空操作：不触碰用户剪贴板、不启动资源管理器。
         // 复制文本经 QA 报告的 CopyText 逐字核验；目录入口存在性由截图核验（真实点击为人工项）。
         Func<string, Task>? copyHandler = tray.Qa.Mode == QaMode.Logs ? _ => Task.CompletedTask : null;
         Action? folderHandler = tray.Qa.Mode == QaMode.Logs ? () => { } : null;
-        var window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler);
+        var window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings);
         trayHost = new TrayHost(session, window, shell, actions, () => desktop.Shutdown());
         desktop.Exit += (_, _) =>
         {
@@ -178,8 +223,14 @@ public sealed class App : Application
             case QaMode.Logs:
                 QaLogs.Run(shell, logsPage, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
+            case QaMode.Settings:
+                QaSettings.Run(shell, window, modifySettings, tray.Qa, code => desktop.Shutdown(code));
+                break;
         }
     }
+
+    /// <summary>生产路径：设置修改入口发起独立提权操作（--settings）；拒绝 UAC 时什么都不发生（故事 43）。</summary>
+    private static void LaunchSettingsEditor() => Elevation.Launch(ElevatedOperationKind.Settings);
 
     private static void StartNotice(IClassicDesktopStyleApplicationLifetime desktop, string heading, string body, double width = 440)
     {

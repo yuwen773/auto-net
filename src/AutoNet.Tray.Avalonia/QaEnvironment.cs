@@ -18,7 +18,9 @@ internal enum QaMode
     /// <summary>网络诊断页 QA：五类诊断、信号分列与只读边界的逐场景证据（scripts/qa-avalonia-diagnostics.ps1 使用）。</summary>
     Diagnostics,
     /// <summary>日志页 QA：日期入口、受限范围、缺口、快速切换与脱敏复制的逐场景证据（scripts/qa-avalonia-logs.ps1 使用）。</summary>
-    Logs
+    Logs,
+    /// <summary>设置页 QA：普通界面只读投影、提权入口意图与编辑器保存规则的逐场景证据（scripts/qa-avalonia-settings.ps1 使用）。</summary>
+    Settings
 }
 
 /// <summary>
@@ -41,6 +43,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "unblock" => QaMode.Unblock,
             "diagnostics" => QaMode.Diagnostics,
             "logs" => QaMode.Logs,
+            "settings" => QaMode.Settings,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -59,6 +62,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string UnblockReportPath => Path.Combine(Directory, "unblock.json");
     public string DiagnosticsReportPath => Path.Combine(Directory, "diagnostics.json");
     public string LogsReportPath => Path.Combine(Directory, "logs.json");
+    public string SettingsReportPath => Path.Combine(Directory, "settings.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
 
@@ -69,6 +73,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string DiagnosticsShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string LogsShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string SettingsShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -229,4 +235,49 @@ internal sealed record QaUnblockReport(
     string ThemeVariant,
     string FixtureRoot,
     List<QaUnblockStep> Steps,
+    string? Error = null);
+
+/// <summary>
+/// 设置页一步证据（#8 普通界面侧）：状态可信度、只读事实行与修改入口标签——
+/// 普通界面不读取受限配置、不显示凭据（故事 34、36 的呈现侧）。
+/// </summary>
+internal sealed record QaSettingsStep(
+    string State,
+    bool Trusted,
+    string RecoveryState,
+    string GuardedNetwork,
+    string PortalLine,
+    string ModifyLabel,
+    string? File);
+
+/// <summary>一次修改入口驱动：预期命令与实际记录的命令（QA 模式只记录，不弹 UAC）。</summary>
+internal sealed record QaSettingsAction(string Context, string Expected, bool Launched, string? Command);
+
+/// <summary>
+/// 设置编辑器一步证据（#8 提权侧）：场景结果、settings.json / credentials.dpapi 的落盘事实、
+/// 凭据密文不含明文、认证暂停标记逐字节保持（故事 39）。只记录布尔事实与受控消息，
+/// 不把凭据内容或密码带出本机。
+/// </summary>
+internal sealed record QaSettingsEditorStep(
+    string Scenario,
+    string Outcome,
+    string Message,
+    bool SettingsWritten,
+    bool CredentialsWritten,
+    bool CredentialsCreated,
+    bool CredentialPlaintextFree,
+    bool BlockUntouched,
+    string? File);
+
+internal sealed record QaSettingsReport(
+    string Mode,
+    bool Fixture,
+    string ProcessPath,
+    int ProcessId,
+    bool Administrator,
+    string MutexName,
+    string ThemeVariant,
+    List<QaSettingsStep> Steps,
+    List<QaSettingsAction> Actions,
+    List<QaSettingsEditorStep> EditorSteps,
     string? Error = null);

@@ -22,9 +22,11 @@ public partial class MainView : UserControl
     private LogsPage? logsPage;
     private Func<string, Task>? copyHandler;
     private Action? folderHandler;
+    private Action? modifySettingsHandler;
     private OverviewContent? overviewShown;
     private DiagnosticsContent? diagnosticsShown;
     private LogsContent? logsShown;
+    private SettingsContent? settingsShown;
     private bool technicalExpanded;
     private bool syncingSelection;
 
@@ -39,19 +41,21 @@ public partial class MainView : UserControl
         };
     }
 
-    /// <summary>接入壳控制器、概览动作与日志页（#7）并建立渲染通路。应用内只会接入一次。</summary>
+    /// <summary>接入壳控制器、概览动作、日志页（#7）与设置修改入口（#8）并建立渲染通路。应用内只会接入一次。</summary>
     internal void Attach(
         ShellController shell,
         OverviewActions? overviewActions = null,
         LogsPage? logs = null,
         Func<string, Task>? copy = null,
-        Action? openFolder = null)
+        Action? openFolder = null,
+        Action? modifySettings = null)
     {
         controller = shell;
         actions = overviewActions;
         logsPage = logs;
         copyHandler = copy;
         folderHandler = openFolder;
+        modifySettingsHandler = modifySettings;
         BuildNavigation();
         shell.SelectionChanged += page => Dispatcher.UIThread.Post(() => SyncSelection(page));
         shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
@@ -165,6 +169,13 @@ public partial class MainView : UserControl
                     () => RunFolderRequested(),
                     index => logsPage?.SelectRow(index));
                 break;
+            case SettingsContent settings:
+                // 指纹未变化时不重建：设置页只读投影跟随状态轮询刷新，避免无谓的控件树重建。
+                if (settingsShown is { } shownSettings && shownSettings.ContentKey == settings.ContentKey) return;
+                settingsShown = settings;
+                ClearShown(except: settings);
+                pageHost.Content = SettingsView.Build(settings, () => modifySettingsHandler?.Invoke());
+                break;
             case PageScaffold scaffold:
                 ClearShown(except: null);
                 pageHost.Content = ScaffoldView(scaffold);
@@ -178,6 +189,7 @@ public partial class MainView : UserControl
         if (!ReferenceEquals(except, overviewShown)) overviewShown = null;
         if (!ReferenceEquals(except, diagnosticsShown)) diagnosticsShown = null;
         if (!ReferenceEquals(except, logsShown)) logsShown = null;
+        if (!ReferenceEquals(except, settingsShown)) settingsShown = null;
     }
 
     private async Task<bool> SelectDateAsync(string? date)
