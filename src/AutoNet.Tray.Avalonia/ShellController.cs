@@ -2,7 +2,7 @@ namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 壳控制器：把导航选择、页面内容代次守卫与状态管道接到一起；不依赖 UI 类型，便于受控测试。
-/// 概览页内容按状态投影同步重建（#4）；其余页面经 <see cref="PageLoadCoordinator"/> 异步加载（后续工单）。
+/// 概览与诊断页内容按状态投影同步重建（#4、#6）；其余页面经 <see cref="PageLoadCoordinator"/> 异步加载（后续工单）。
 /// 事件在触发线程上回调（状态事件来自读取线程，UI 侧负责调度到界面线程）。
 /// </summary>
 internal sealed class ShellController : IDisposable
@@ -50,6 +50,13 @@ internal sealed class ShellController : IDisposable
             return Task.CompletedTask;
         }
 
+        if (page == ShellPage.Diagnostics)
+        {
+            // 诊断页同样由状态投影（#6）：纯函数、无 I/O、无动作；同步应用，状态更新时跟随重建。
+            ApplyDiagnostics(pipe.Current);
+            return Task.CompletedTask;
+        }
+
         return coordinator.NavigateAsync(page, load, ApplyContent, ApplyFailure);
     }
 
@@ -60,6 +67,12 @@ internal sealed class ShellController : IDisposable
     private void ApplyOverview(StatusReading? reading)
     {
         Content = OverviewModel.From(reading);
+        ContentChanged?.Invoke(Content);
+    }
+
+    private void ApplyDiagnostics(StatusReading? reading)
+    {
+        Content = DiagnosticsModel.From(reading);
         ContentChanged?.Invoke(Content);
     }
 
@@ -84,8 +97,9 @@ internal sealed class ShellController : IDisposable
     private void OnStatusUpdated(StatusReading reading)
     {
         StatusChanged?.Invoke(reading);
-        // 概览页跟随状态更新重建；其他页面不被状态更新改写。
+        // 概览与诊断页跟随状态更新重建（两者都是纯投影）；其他页面不被状态更新改写。
         if (SelectedPage == ShellPage.Overview) ApplyOverview(reading);
+        else if (SelectedPage == ShellPage.Diagnostics) ApplyDiagnostics(reading);
     }
 
     public void Dispose()

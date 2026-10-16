@@ -19,6 +19,7 @@ public partial class MainView : UserControl
     private ShellController? controller;
     private OverviewActions? actions;
     private OverviewContent? overviewShown;
+    private DiagnosticsContent? diagnosticsShown;
     private bool technicalExpanded;
     private bool syncingSelection;
 
@@ -122,6 +123,7 @@ public partial class MainView : UserControl
                 // 指纹未变化时不重建：轮询刷新不打断技术详情展开状态与键盘焦点。
                 if (overviewShown is { } shown && shown.ContentKey == overview.ContentKey) return;
                 overviewShown = overview;
+                diagnosticsShown = null;
                 pageHost.Content = OverviewView.Build(
                     overview,
                     technicalExpanded,
@@ -129,8 +131,16 @@ public partial class MainView : UserControl
                     intent => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestRecoveryChangeAsync(intent)),
                     () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestUnblockAsync()));
                 break;
+            case DiagnosticsContent diagnostics:
+                // 指纹未变化时不重建：诊断页无动作、无展开状态，但避免轮询期的无谓控件树重建。
+                if (diagnosticsShown is { } shownDiagnostics && shownDiagnostics.ContentKey == diagnostics.ContentKey) return;
+                diagnosticsShown = diagnostics;
+                overviewShown = null;
+                pageHost.Content = DiagnosticsView.Build(diagnostics);
+                break;
             case PageScaffold scaffold:
                 overviewShown = null;
+                diagnosticsShown = null;
                 pageHost.Content = ScaffoldView(scaffold);
                 break;
         }

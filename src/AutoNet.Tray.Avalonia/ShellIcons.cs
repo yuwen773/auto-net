@@ -52,4 +52,14 @@ internal static class ShellIcons
         OverviewAuthKind.Unconfirmable => QuestionCircle,
         _ => DotCircle
     };
+
+    /// <summary>诊断行字形（#6）：按语义分类复用状态字形；形状、颜色与文字同时呈现。</summary>
+    public static string ToneGlyph(OverviewTone tone) => tone switch
+    {
+        OverviewTone.Good => CheckCircle,
+        OverviewTone.Warning => TriangleExclamation,
+        OverviewTone.Problem => CrossCircle,
+        OverviewTone.Attention => QuestionCircle,
+        _ => DotCircle
+    };
 }

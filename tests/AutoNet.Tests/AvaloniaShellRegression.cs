@@ -221,16 +221,24 @@ internal static class AvaloniaShellRegression
                 await controller.SelectAsync(ShellPage.Logs);
                 Require(applied.SequenceEqual([ShellPage.Logs]) && controller.Content!.Page == ShellPage.Logs, "页面内容未应用");
 
+                // 诊断页（#6）由状态投影同步应用，不经异步加载接缝：即使接缝被占用，内容也立即生效。
                 pendingLengthPage = ShellPage.Diagnostics;
-                var slow = controller.SelectAsync(ShellPage.Diagnostics);
+                await controller.RefreshStatusAsync();
+                await controller.SelectAsync(ShellPage.Diagnostics);
                 Require(controller.SelectedPage == ShellPage.Diagnostics && selected[^1] == ShellPage.Diagnostics, "选择未立即生效");
+                Require(controller.Content is DiagnosticsContent { Trusted: true }, "诊断页内容未按状态同步应用");
                 pendingLengthPage = null;
-                await controller.SelectAsync(ShellPage.Settings);
-                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Settings]), "新页面内容未应用");
-                hold.SetResult(new PageScaffold(ShellPage.Diagnostics, "网络诊断", "旧内容", "旧内容"));
+
+                pendingLengthPage = ShellPage.Settings;
+                var slow = controller.SelectAsync(ShellPage.Settings);
+                Require(controller.SelectedPage == ShellPage.Settings && selected[^1] == ShellPage.Settings, "选择未立即生效");
+                pendingLengthPage = null;
+                await controller.SelectAsync(ShellPage.Logs);
+                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Diagnostics, ShellPage.Logs]), "新页面内容未应用");
+                hold.SetResult(new PageScaffold(ShellPage.Settings, "设置", "旧内容", "旧内容"));
                 await slow;
-                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Settings]), "旧页面内容覆写了当前页");
-                Require(controller.Content!.Page == ShellPage.Settings, "当前内容与选择不一致");
+                Require(applied.SequenceEqual([ShellPage.Logs, ShellPage.Diagnostics, ShellPage.Logs]), "旧页面内容覆写了当前页");
+                Require(controller.Content!.Page == ShellPage.Logs, "当前内容与选择不一致");
 
                 StatusReading? latest = null;
                 controller.StatusChanged += reading => latest = reading;

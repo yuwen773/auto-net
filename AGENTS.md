@@ -5,9 +5,9 @@
 - `src/AutoNet.Core/`: recovery policy, Dr.COM authentication, Wi-Fi access, network probes, and credential storage.
 - `src/AutoNet.Service/`: Windows service, monitoring loop, and AC power wake requests.
 - `src/AutoNet.Tray/`: WinForms status window, settings, and tray controls.
-- `src/AutoNet.Tray.Avalonia/`: Avalonia UI application under migration (tray, lifecycle, single instance, elevation routing, shell navigation and status pipeline, overview page with explicit recovery-switch/unblock actions, and the full unblock flow — confirm, read-only recheck, revision check, durably audited release); it replaces the WinForms tray only at the candidate-package stage.
+- `src/AutoNet.Tray.Avalonia/`: Avalonia UI application under migration (tray, lifecycle, single instance, elevation routing, shell navigation and status pipeline, overview page with explicit recovery-switch/unblock actions, the full unblock flow — confirm, read-only recheck, revision check, durably audited release — and the read-only five-category diagnostics page); it replaces the WinForms tray only at the candidate-package stage.
 - `tests/AutoNet.Tests/`: executable regression suite and simulated HTTP responses.
-- `scripts/`: build, packaging, installation, uninstallation, and QA evidence (see `scripts/qa-avalonia-prototype.ps1` for the #2 compatibility gate, `scripts/qa-avalonia-shell.ps1` for the shell suite, `scripts/qa-avalonia-overview.ps1` for the overview state matrix and action-intent records, and `scripts/qa-avalonia-unblock.ps1` for the unblock sequence and side-effect evidence).
+- `scripts/`: build, packaging, installation, uninstallation, and QA evidence (see `scripts/qa-avalonia-prototype.ps1` for the #2 compatibility gate, `scripts/qa-avalonia-shell.ps1` for the shell suite, `scripts/qa-avalonia-overview.ps1` for the overview state matrix and action-intent records, `scripts/qa-avalonia-unblock.ps1` for the unblock sequence and side-effect evidence, and `scripts/qa-avalonia-diagnostics.ps1` for the diagnostics five-category matrix and read-only boundary evidence).
 - `CONTEXT.md`: domain glossary shared by code, logs, and docs. `docs/adr/`: architecture decision records.
 - `docs/VALIDATION.md`: verified behavior and remaining manual acceptance checks. `docs/UI-COMPAT-PROTOTYPE.md`: the Avalonia compatibility go/no-go record.
 

@@ -139,6 +139,7 @@ tests = tests.Concat(AvaloniaPrototypeRegression.Cases).ToArray();
 tests = tests.Concat(AvaloniaShellRegression.Cases).ToArray();
 tests = tests.Concat(OverviewRegression.Cases).ToArray();
 tests = tests.Concat(UnblockRegression.Cases).ToArray();
+tests = tests.Concat(DiagnosticsPageRegression.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

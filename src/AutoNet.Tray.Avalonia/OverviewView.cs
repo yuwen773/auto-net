@@ -4,7 +4,6 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using AutoNet.Core;
-using ShapePath = Avalonia.Controls.Shapes.Path;
 
 namespace AutoNet.Tray.Avalonia;
 
@@ -57,7 +56,7 @@ internal static class OverviewView
         {
             var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
             var network = NetworkColumn(content);
-            var divider = Themed(new Border { Width = 1, Margin = new Thickness(18, 2, 18, 2) }, Border.BackgroundProperty, "ShellBorder");
+            var divider = ShellTheming.Themed(new Border { Width = 1, Margin = new Thickness(18, 2, 18, 2) }, Border.BackgroundProperty, "ShellBorder");
             var auth = AuthColumn(content, unblockRequested);
             Grid.SetColumn(network, 0);
             Grid.SetColumn(divider, 1);
@@ -101,7 +100,7 @@ internal static class OverviewView
             body.Children.Add(chips);
         }
 
-        return Card(body);
+        return ShellTheming.Card(body);
     }
 
     private static Control NetworkColumn(OverviewContent content)
@@ -113,8 +112,8 @@ internal static class OverviewView
             Spacing = 10,
             Children =
             {
-                Glyph(ShellIcons.StatusGlyph(content.Primary), content.Tone, 30),
-                Themed(
+                ShellTheming.Glyph(ShellIcons.StatusGlyph(content.Primary), content.Tone, 30),
+                ShellTheming.Themed(
                     new TextBlock
                     {
                         Text = content.StatusTitle,
@@ -122,7 +121,7 @@ internal static class OverviewView
                         FontWeight = FontWeight.SemiBold,
                         VerticalAlignment = VerticalAlignment.Center
                     },
-                    TextBlock.ForegroundProperty, ToneKey(content.Tone))
+                    TextBlock.ForegroundProperty, ShellTheming.ToneKey(content.Tone))
             }
         });
         column.Children.Add(new TextBlock
@@ -146,8 +145,8 @@ internal static class OverviewView
             Spacing = 8,
             Children =
             {
-                Glyph(ShellIcons.AuthColumnGlyph(content.Auth.Kind), content.Auth.Tone, 22),
-                Themed(
+                ShellTheming.Glyph(ShellIcons.AuthColumnGlyph(content.Auth.Kind), content.Auth.Tone, 22),
+                ShellTheming.Themed(
                     new TextBlock
                     {
                         Text = content.Auth.Title,
@@ -155,7 +154,7 @@ internal static class OverviewView
                         FontWeight = FontWeight.SemiBold,
                         VerticalAlignment = VerticalAlignment.Center
                     },
-                    TextBlock.ForegroundProperty, ToneKey(content.Auth.Tone))
+                    TextBlock.ForegroundProperty, ShellTheming.ToneKey(content.Auth.Tone))
             }
         });
         column.Children.Add(new TextBlock
@@ -226,27 +225,15 @@ internal static class OverviewView
             body.Children.Add(line);
         }
 
-        return Card(body);
+        return ShellTheming.Card(body);
     }
 
     private static TextBlock SectionHeader(string text) =>
         new() { Text = text, FontSize = 15, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 2) };
 
-    private static TextBlock Muted(string text, double size) => Themed(
+    private static TextBlock Muted(string text, double size) => ShellTheming.Themed(
         new TextBlock { Text = text, FontSize = size, TextWrapping = TextWrapping.Wrap, LineHeight = size + 6 },
         TextBlock.ForegroundProperty, "TextMuted");
-
-    private static Control Glyph(string data, OverviewTone tone, double size) => Themed(
-        new ShapePath
-        {
-            Data = Geometry.Parse(data),
-            Width = size,
-            Height = size,
-            Stretch = Stretch.Uniform,
-            StrokeThickness = 1.6,
-            VerticalAlignment = VerticalAlignment.Center
-        },
-        Shape.StrokeProperty, ToneKey(tone));
 
     private static Control ChipView(OverviewChip chip)
     {
@@ -255,31 +242,8 @@ internal static class OverviewView
             CornerRadius = new CornerRadius(10),
             Padding = new Thickness(9, 3, 9, 3),
             Margin = new Thickness(0, 0, 6, 4),
-            Child = Themed(new TextBlock { Text = chip.Text, FontSize = 11.5 }, TextBlock.ForegroundProperty, ToneKey(chip.Tone))
+            Child = ShellTheming.Themed(new TextBlock { Text = chip.Text, FontSize = 11.5 }, TextBlock.ForegroundProperty, ShellTheming.ToneKey(chip.Tone))
         };
-        return Themed(border, Border.BackgroundProperty, ToneKey(chip.Tone) + "Surface");
+        return ShellTheming.Themed(border, Border.BackgroundProperty, ShellTheming.ToneKey(chip.Tone) + "Surface");
     }
-
-    private static Control Card(Control content)
-    {
-        var border = new Border
-        {
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(18, 16),
-            BorderThickness = new Thickness(1),
-            Child = content
-        };
-        border.Bind(Border.BackgroundProperty, border.GetResourceObservable("CardBackground"));
-        border.Bind(Border.BorderBrushProperty, border.GetResourceObservable("CardBorder"));
-        return border;
-    }
-
-    // 资源颜色通过 observable 绑定：明暗主题切换时无需重建控件树。
-    private static T Themed<T>(T control, AvaloniaProperty property, string key) where T : Control
-    {
-        control.Bind(property, control.GetResourceObservable(key));
-        return control;
-    }
-
-    private static string ToneKey(OverviewTone tone) => "Tone" + tone;
 }

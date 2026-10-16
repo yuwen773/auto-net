@@ -14,7 +14,9 @@ internal enum QaMode
     /// <summary>概览页 QA：状态矩阵投影与动作意图记录（scripts/qa-avalonia-overview.ps1 使用）。</summary>
     Overview,
     /// <summary>解除认证暂停 QA：确认/复核/修订核对/审计的逐场景序列证据（scripts/qa-avalonia-unblock.ps1 使用）。</summary>
-    Unblock
+    Unblock,
+    /// <summary>网络诊断页 QA：五类诊断、信号分列与只读边界的逐场景证据（scripts/qa-avalonia-diagnostics.ps1 使用）。</summary>
+    Diagnostics
 }
 
 /// <summary>
@@ -35,6 +37,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "shell" => QaMode.Shell,
             "overview" => QaMode.Overview,
             "unblock" => QaMode.Unblock,
+            "diagnostics" => QaMode.Diagnostics,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -51,12 +54,15 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string ShellReportPath => Path.Combine(Directory, "shell.json");
     public string OverviewReportPath => Path.Combine(Directory, "overview.json");
     public string UnblockReportPath => Path.Combine(Directory, "unblock.json");
+    public string DiagnosticsReportPath => Path.Combine(Directory, "diagnostics.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string OverviewShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string UnblockShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string DiagnosticsShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -127,6 +133,32 @@ internal sealed record QaOverviewReport(
     string ThemeVariant,
     List<QaOverviewStep> Steps,
     List<QaOverviewAction> Actions,
+    string? Error = null);
+
+/// <summary>
+/// 网络诊断页一步证据：五类分列的类别名与值、认证信号标题与受控认证分类（用户实际看到的内容）。
+/// 只记录受控词表内的文本与虚构夹具事实，不含凭据、Cookie、URL 或原始门户响应。
+/// </summary>
+internal sealed record QaDiagnosticsStep(
+    string State,
+    bool Trusted,
+    List<string> Captions,
+    List<string> Values,
+    List<string> SignalCaptions,
+    string AttemptSummary,
+    string PersistentState,
+    string? File);
+
+internal sealed record QaDiagnosticsReport(
+    string Mode,
+    bool Fixture,
+    string ProcessPath,
+    int ProcessId,
+    bool Administrator,
+    string MutexName,
+    string ThemeVariant,
+    string ReadOnlyNotice,
+    List<QaDiagnosticsStep> Steps,
     string? Error = null);
 
 /// <summary>

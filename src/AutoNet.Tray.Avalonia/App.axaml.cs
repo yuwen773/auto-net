@@ -162,6 +162,9 @@ public sealed class App : Application
             case QaMode.Overview:
                 QaOverview.Run(shell, actions, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
+            case QaMode.Diagnostics:
+                QaDiagnostics.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
+                break;
         }
     }
 
