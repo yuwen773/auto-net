@@ -84,6 +84,17 @@ internal sealed class ShellController : IDisposable
         ContentChanged?.Invoke(content);
     }
 
+    /// <summary>
+    /// 页内交互更新的内容应用（#7 日志页等）：与导航内容走同一守卫——页面已切走时结果丢弃，
+    /// 旧任务不覆写当前页（故事 16、50）。
+    /// </summary>
+    internal void ApplyExternal(PageContent content)
+    {
+        if (SelectedPage != content.Page) return;
+        Content = content;
+        ContentChanged?.Invoke(content);
+    }
+
     private void ApplyFailure(ShellPage page, Exception exception)
     {
         if (SelectedPage != page) return;

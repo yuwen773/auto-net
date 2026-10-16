@@ -16,7 +16,9 @@ internal enum QaMode
     /// <summary>解除认证暂停 QA：确认/复核/修订核对/审计的逐场景序列证据（scripts/qa-avalonia-unblock.ps1 使用）。</summary>
     Unblock,
     /// <summary>网络诊断页 QA：五类诊断、信号分列与只读边界的逐场景证据（scripts/qa-avalonia-diagnostics.ps1 使用）。</summary>
-    Diagnostics
+    Diagnostics,
+    /// <summary>日志页 QA：日期入口、受限范围、缺口、快速切换与脱敏复制的逐场景证据（scripts/qa-avalonia-logs.ps1 使用）。</summary>
+    Logs
 }
 
 /// <summary>
@@ -38,6 +40,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "overview" => QaMode.Overview,
             "unblock" => QaMode.Unblock,
             "diagnostics" => QaMode.Diagnostics,
+            "logs" => QaMode.Logs,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -55,6 +58,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string OverviewReportPath => Path.Combine(Directory, "overview.json");
     public string UnblockReportPath => Path.Combine(Directory, "unblock.json");
     public string DiagnosticsReportPath => Path.Combine(Directory, "diagnostics.json");
+    public string LogsReportPath => Path.Combine(Directory, "logs.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
 
@@ -63,6 +67,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string UnblockShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string DiagnosticsShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string LogsShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -159,6 +165,37 @@ internal sealed record QaDiagnosticsReport(
     string ThemeVariant,
     string ReadOnlyNotice,
     List<QaDiagnosticsStep> Steps,
+    string? Error = null);
+
+/// <summary>
+/// 日志页一步证据：日期入口数、选中日期、行数、范围/缺口/失败说明、首行事件、详情首行与复制可用性。
+/// 夹具模式额外记录脱敏复制文本（供脚本隐私扫描）；实况模式不记录详情或复制文本，只记录计数与说明，
+/// 不把真实日志内容带出本机（隐私契约与诊断页一致）。
+/// </summary>
+internal sealed record QaLogsStep(
+    string Scenario,
+    int Dates,
+    string? SelectedDate,
+    int Rows,
+    string ScopeNote,
+    string GapNote,
+    string FailureNote,
+    string FirstRow,
+    string DetailHeading,
+    bool CopyAvailable,
+    string? CopyText,
+    string? File);
+
+internal sealed record QaLogsReport(
+    string Mode,
+    bool Fixture,
+    string ProcessPath,
+    int ProcessId,
+    bool Administrator,
+    string MutexName,
+    string ThemeVariant,
+    string ScopeRule,
+    List<QaLogsStep> Steps,
     string? Error = null);
 
 /// <summary>

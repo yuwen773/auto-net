@@ -133,16 +133,26 @@ public sealed class App : Application
     {
         var session = new TraySession();
         var pipe = new StatusPipe(StatusPipe.ResolveStatusPath());
-        var shell = new ShellController(pipe);
+        // 日志页（#7）：读取既有日志目录；QA 夹具模式只在 logs 模式下重定向到证据目录内的夹具。
+        var logsPage = LogsPage.Production(tray.Qa);
+        var shell = new ShellController(pipe, (page, token) =>
+            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token));
+        // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
+        logsPage.Updated += content => shell.ApplyExternal(content);
         // 概览 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
         Action<ElevatedOperationKind> launcher = tray.Qa.Mode == QaMode.Overview ? QaOverview.RecordLaunch : Elevation.Launch;
         var actions = new OverviewActions(pipe.RefreshAsync, launcher);
-        var window = new MainWindow(session, shell, actions);
+        // 日志页复制与目录打开在 QA 模式下替换为受控空操作：不触碰用户剪贴板、不启动资源管理器。
+        // 复制文本经 QA 报告的 CopyText 逐字核验；目录入口存在性由截图核验（真实点击为人工项）。
+        Func<string, Task>? copyHandler = tray.Qa.Mode == QaMode.Logs ? _ => Task.CompletedTask : null;
+        Action? folderHandler = tray.Qa.Mode == QaMode.Logs ? () => { } : null;
+        var window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler);
         trayHost = new TrayHost(session, window, shell, actions, () => desktop.Shutdown());
         desktop.Exit += (_, _) =>
         {
             trayHost.Dispose();
             shell.Dispose();
+            logsPage.Dispose();
         };
         shell.Start();
 
@@ -164,6 +174,9 @@ public sealed class App : Application
                 break;
             case QaMode.Diagnostics:
                 QaDiagnostics.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
+                break;
+            case QaMode.Logs:
+                QaLogs.Run(shell, logsPage, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
         }
     }

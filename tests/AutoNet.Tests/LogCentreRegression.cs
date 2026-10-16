@@ -121,6 +121,68 @@ internal static class LogCentreRegression
             Require(records[0].Action == "恢复联网" && records[1].Action == "重连校园 Wi-Fi");
             return Task.CompletedTask;
         }),
+        ("日志尾部读取：详细解析披露跳过数且与既有解析同口径", () =>
+        {
+            var lines = new[]
+            {
+                "{\"time\":\"2026-10-10T00:00:00Z\",\"action\":\"恢复联网\",\"detail\":\"\"}",
+                "{not json",
+                "{\"time\":\"2026-10-10T00:00:01Z\"}",
+                "{\"time\":\"2026-10-10T00:00:02Z\",\"action\":\"重连校园 Wi-Fi\",\"detail\":\"\"}",
+                "{\"time\":\"2026-10-10T00:00:03Z\",\"action\":\"恢复联网\",\"detail\":null}"
+            };
+            var parsed = LogTailReader.ParseDetailed(lines);
+            Require(parsed.Records.Count == 2, $"详细解析应保留 2 条，实际 {parsed.Records.Count}");
+            Require(parsed.Skipped == 3, $"详细解析应跳过 3 条，实际 {parsed.Skipped}");
+            Require(parsed.Records.SequenceEqual(LogTailReader.Parse(lines)), "详细解析与既有解析记录不一致");
+            return Task.CompletedTask;
+        }),
+        ("日志尾部读取：详细读取披露记录范围与是否覆盖全部记录", () =>
+        {
+            var entries = Enumerable.Range(0, 500)
+                .Select(i => new ActivityLog { Time = new DateTimeOffset(2026, 10, 10, 0, 0, 0, TimeSpan.Zero).AddSeconds(i), Action = "重连校园 Wi-Fi" })
+                .ToArray();
+            var large = WriteTemp(entries);
+            var small = WriteTemp(entries.Take(5).ToArray());
+            try
+            {
+                var bounded = LogTailReader.ReadDetailed(large, 300);
+                Require(bounded.Records.Count == 300 && !bounded.Complete, "触达上限的读取不得声明覆盖全部记录");
+                Require(bounded.Records.SequenceEqual(LogTailReader.Read(large, 300)), "详细读取与既有读取记录不一致");
+                // 500 条都远小于窗口大小，文件本身没有损坏行。
+                Require(bounded.Skipped == 0, "未损坏的文件不得报告跳过数");
+
+                var complete = LogTailReader.ReadDetailed(small, 300);
+                Require(complete.Records.Count == 5 && complete.Complete && complete.Skipped == 0, "未触达上限的读取应声明覆盖全部记录");
+
+                // 触达字节窗口上限（而非条数上限）同样视为不完整：更早的记录不在窗口内。
+                var bulky = Path.Combine(Path.GetTempPath(), $"autonet-tail-{Guid.NewGuid():N}.jsonl");
+                var padded = JsonSerializer.Serialize(new ActivityLog { Time = DateTimeOffset.UtcNow, Action = "重连校园 Wi-Fi", Detail = new string('x', 400) }) + "\n";
+                File.WriteAllText(bulky, string.Concat(Enumerable.Repeat(padded, 20_000)));
+                try
+                {
+                    var windowed = LogTailReader.ReadDetailed(bulky, DefaultLargeCap());
+                    Require(!windowed.Complete, "字节窗口截断的读取不得声明覆盖全部记录");
+                }
+                finally { File.Delete(bulky); }
+
+                // 回归：窗口翻倍越过文件头时起点必须钳到 0（文件在 128KB–256KB 区间且窗口内
+                // 可解析记录不足上限时，负偏移 Seek 会抛“参数错误”）。
+                var midsize = Path.Combine(Path.GetTempPath(), $"autonet-tail-{Guid.NewGuid():N}.jsonl");
+                var midLine = JsonSerializer.Serialize(new ActivityLog { Time = DateTimeOffset.UtcNow, Action = "重连校园 Wi-Fi", Detail = new string('x', 300) }) + "\n";
+                File.WriteAllText(midsize, string.Concat(Enumerable.Repeat(midLine, 500)));   // ~190KB：越过初始窗口，但窗口内可解析记录不足上限
+                try
+                {
+                    var clamped = LogTailReader.ReadDetailed(midsize, LogTailReader.DefaultMaxRecords);
+                    Require(clamped.Records.Count > 0, "窗口翻倍后的读取不得失败");
+                    Require(!clamped.Complete, "窗口未覆盖文件头时不得声明覆盖全部记录");
+                }
+                finally { File.Delete(midsize); }
+            }
+            finally { File.Delete(large); File.Delete(small); }
+            return Task.CompletedTask;
+            static int DefaultLargeCap() => LogTailReader.DefaultMaxRecords * 4;   // 20k 条 × ~500B 远超 4MB 窗口
+        }),
         ("日志尾部读取：读取量受限不会随文件大小增长", () =>
         {
             var line = JsonSerializer.Serialize(new ActivityLog { Time = DateTimeOffset.UtcNow, Action = "重连校园 Wi-Fi", Detail = new string('x', 400) }) + "\n";

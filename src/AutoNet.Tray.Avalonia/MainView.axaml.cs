@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Data;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -18,8 +19,12 @@ public partial class MainView : UserControl
 {
     private ShellController? controller;
     private OverviewActions? actions;
+    private LogsPage? logsPage;
+    private Func<string, Task>? copyHandler;
+    private Action? folderHandler;
     private OverviewContent? overviewShown;
     private DiagnosticsContent? diagnosticsShown;
+    private LogsContent? logsShown;
     private bool technicalExpanded;
     private bool syncingSelection;
 
@@ -34,11 +39,19 @@ public partial class MainView : UserControl
         };
     }
 
-    /// <summary>接入壳控制器与概览动作并建立渲染通路。应用内只会接入一次。</summary>
-    internal void Attach(ShellController shell, OverviewActions? overviewActions = null)
+    /// <summary>接入壳控制器、概览动作与日志页（#7）并建立渲染通路。应用内只会接入一次。</summary>
+    internal void Attach(
+        ShellController shell,
+        OverviewActions? overviewActions = null,
+        LogsPage? logs = null,
+        Func<string, Task>? copy = null,
+        Action? openFolder = null)
     {
         controller = shell;
         actions = overviewActions;
+        logsPage = logs;
+        copyHandler = copy;
+        folderHandler = openFolder;
         BuildNavigation();
         shell.SelectionChanged += page => Dispatcher.UIThread.Post(() => SyncSelection(page));
         shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
@@ -123,7 +136,7 @@ public partial class MainView : UserControl
                 // 指纹未变化时不重建：轮询刷新不打断技术详情展开状态与键盘焦点。
                 if (overviewShown is { } shown && shown.ContentKey == overview.ContentKey) return;
                 overviewShown = overview;
-                diagnosticsShown = null;
+                ClearShown(except: overview);
                 pageHost.Content = OverviewView.Build(
                     overview,
                     technicalExpanded,
@@ -135,15 +148,76 @@ public partial class MainView : UserControl
                 // 指纹未变化时不重建：诊断页无动作、无展开状态，但避免轮询期的无谓控件树重建。
                 if (diagnosticsShown is { } shownDiagnostics && shownDiagnostics.ContentKey == diagnostics.ContentKey) return;
                 diagnosticsShown = diagnostics;
-                overviewShown = null;
+                ClearShown(except: diagnostics);
                 pageHost.Content = DiagnosticsView.Build(diagnostics);
                 break;
+            case LogsContent logs:
+                // 指纹未变化时不重建：日志页交互（日期、筛选、选中行）都会改变指纹，重建即换内容。
+                if (logsShown is { } shownLogs && shownLogs.ContentKey == logs.ContentKey) return;
+                logsShown = logs;
+                ClearShown(except: logs);
+                pageHost.Content = LogsView.Build(
+                    logs,
+                    date => RunActionSafelyAsync(() => SelectDateAsync(date)),
+                    filter => logsPage?.SetFilter(filter),
+                    () => RunActionSafelyAsync(() => RefreshLogsAsync()),
+                    () => RunCopyRequestedAsync(),
+                    () => RunFolderRequested(),
+                    index => logsPage?.SelectRow(index));
+                break;
             case PageScaffold scaffold:
-                overviewShown = null;
-                diagnosticsShown = null;
+                ClearShown(except: null);
                 pageHost.Content = ScaffoldView(scaffold);
                 break;
         }
+    }
+
+    /// <summary>只保留当前页面的内容缓存：其余页面的指纹缓存一律清空，避免跨页误判跳过。</summary>
+    private void ClearShown(PageContent? except)
+    {
+        if (!ReferenceEquals(except, overviewShown)) overviewShown = null;
+        if (!ReferenceEquals(except, diagnosticsShown)) diagnosticsShown = null;
+        if (!ReferenceEquals(except, logsShown)) logsShown = null;
+    }
+
+    private async Task<bool> SelectDateAsync(string? date)
+    {
+        if (logsPage is null) return false;
+        await logsPage.SelectDateAsync(date);
+        return true;
+    }
+
+    private async Task<bool> RefreshLogsAsync()
+    {
+        if (logsPage is null) return false;
+        await logsPage.RefreshAsync();
+        return true;
+    }
+
+    private Task RunCopyRequestedAsync()
+    {
+        var text = logsShown?.CopyText ?? "";
+        if (text.Length == 0) return Task.CompletedTask;
+        if (copyHandler is { } handler) return handler(text);
+        return CopyToClipboardAsync(text);
+    }
+
+    private async Task CopyToClipboardAsync(string text)
+    {
+        try
+        {
+            if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(text);
+        }
+        catch (Exception)
+        {
+            // 剪贴板正忙或不可用时静默：复制动作不打断界面（与既有托盘的容错口径一致）。
+        }
+    }
+
+    private void RunFolderRequested()
+    {
+        if (folderHandler is { } handler) { handler(); return; }
+        LogsPage.OpenLogDirectory();
     }
 
     private static Control ScaffoldView(PageScaffold scaffold)

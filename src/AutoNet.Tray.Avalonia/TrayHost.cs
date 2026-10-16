@@ -84,12 +84,26 @@ internal sealed class TrayHost : IDisposable
             case TrayMenuAction.Open:
                 ShowMainWindow();
                 break;
+            case TrayMenuAction.Logs:
+                // 查看日志（#7）：与既有托盘同语义——打开界面并定位到日志页。
+                ShowMainWindow();
+                _ = SelectLogsSafelyAsync();
+                break;
             case TrayMenuAction.Settings:
                 Elevation.Launch(ElevatedOperationKind.Settings);
                 break;
             case TrayMenuAction.Exit:
                 RequestExit();
                 break;
+        }
+    }
+
+    private async Task SelectLogsSafelyAsync()
+    {
+        try { await shell.SelectAsync(ShellPage.Logs); }
+        catch (Exception)
+        {
+            // 受控：菜单点击异常不逃逸到原生菜单回调；页面内容仍有降级路径。
         }
     }
 

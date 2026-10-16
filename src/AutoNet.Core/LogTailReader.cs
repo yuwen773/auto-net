@@ -5,6 +5,16 @@ using System.Text.Json;
 namespace AutoNet.Core;
 
 /// <summary>
+/// 一次受限尾部读取的完整结果：可见记录（最新在前、按条数截断）之外，还披露
+/// 读取窗口内无法解析而跳过的记录数与列表是否覆盖当日全部记录，
+/// 供界面显式标注读取范围与缺口（迁移工单 #7 / 故事 45、49）。
+/// </summary>
+public sealed record LogTailRead(IReadOnlyList<ActivityLog> Records, int Skipped, bool Complete);
+
+/// <summary>一次解析的结果：可渲染记录与被跳过的损坏行数。</summary>
+public sealed record LogParseResult(IReadOnlyList<ActivityLog> Records, int Skipped);
+
+/// <summary>
 /// Reads only the tail of a daily JSONL log. The window is bounded regardless of file size, so a large
 /// log can never be pulled into memory in full or block the UI thread for longer than the tail itself.
 /// Deliberately free of WinForms types so every boundary case is directly testable.
@@ -19,17 +29,27 @@ public static class LogTailReader
     private const int MaxWindow = 4 * 1024 * 1024;
 
     /// <summary>Newest first.</summary>
-    public static IReadOnlyList<ActivityLog> Read(string path, int maxRecords = DefaultMaxRecords, CancellationToken cancellationToken = default)
+    public static IReadOnlyList<ActivityLog> Read(string path, int maxRecords = DefaultMaxRecords, CancellationToken cancellationToken = default) =>
+        ReadDetailed(path, maxRecords, cancellationToken).Records;
+
+    /// <summary>
+    /// 与 <see cref="Read"/> 同口径，但额外披露缺口：读取窗口内跳过的损坏记录数，
+    /// 以及列表是否覆盖当日全部记录（窗口起点不在文件头、或记录触达上限都视为不完整）。
+    /// </summary>
+    public static LogTailRead ReadDetailed(string path, int maxRecords = DefaultMaxRecords, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var length = file.Length;
         var window = Math.Min(InitialWindow, length);
         IReadOnlyList<ActivityLog> records = [];
+        var skipped = 0;
+        var coversFileStart = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var start = length - window;
+            // 窗口翻倍后可能越过文件头：起点钳到 0，否则 Seek 负偏移会抛“参数错误”。
+            var start = Math.Max(0, length - window);
             file.Seek(start, SeekOrigin.Begin);
             var buffer = new byte[length - start];
             var read = 0;
@@ -40,11 +60,15 @@ public static class LogTailReader
                 if (chunk == 0) break;
                 read += chunk;
             }
-            records = Parse(Split(buffer.AsSpan(0, read), start == 0, endsWithNewline: read > 0 && buffer[read - 1] == (byte)'\n'), cancellationToken);
+            var parsed = ParseDetailed(Split(buffer.AsSpan(0, read), start == 0, endsWithNewline: read > 0 && buffer[read - 1] == (byte)'\n'), cancellationToken);
+            records = parsed.Records;
+            skipped = parsed.Skipped;
+            coversFileStart = start == 0;
             if (records.Count >= maxRecords || window >= Math.Min(MaxWindow, length)) break;
             window = Math.Min(MaxWindow, window * 2);
         }
-        return records.TakeLast(maxRecords).Reverse().ToArray();
+
+        return new LogTailRead(records.TakeLast(maxRecords).Reverse().ToArray(), skipped, coversFileStart && records.Count < maxRecords);
     }
 
     /// <summary>
@@ -85,9 +109,14 @@ public static class LogTailReader
     }
 
     /// <summary>Deserialises whole lines, skipping any record that cannot be read rather than failing the batch.</summary>
-    public static IReadOnlyList<ActivityLog> Parse(IEnumerable<string> lines, CancellationToken cancellationToken = default)
+    public static IReadOnlyList<ActivityLog> Parse(IEnumerable<string> lines, CancellationToken cancellationToken = default) =>
+        ParseDetailed(lines, cancellationToken).Records;
+
+    /// <summary>与 <see cref="Parse"/> 同口径，但统计被跳过的损坏行数（缺口披露依据）。</summary>
+    public static LogParseResult ParseDetailed(IEnumerable<string> lines, CancellationToken cancellationToken = default)
     {
         var records = new List<ActivityLog>();
+        var skipped = 0;
         foreach (var line in lines)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -98,7 +127,7 @@ public static class LogTailReader
                 var count = Encoding.UTF8.GetBytes(line, buffer);
                 var bytes = buffer.AsSpan(0, count);
                 var reader = new Utf8JsonReader(bytes);
-                if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) continue;
+                if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) { skipped++; continue; }
                 // Defaults are for producers; missing external fields are not evidence of a complete record.
                 var timeCount = 0;
                 var actionCount = 0;
@@ -114,17 +143,18 @@ public static class LogTailReader
                     reader.Read();
                     reader.Skip();
                 }
-                if (timeCount != 1 || actionCount != 1 || detailCount != 1) continue;
+                if (timeCount != 1 || actionCount != 1 || detailCount != 1) { skipped++; continue; }
                 var entry = JsonSerializer.Deserialize<ActivityLog>(bytes, ActivityLog.Json);
                 if (IsRenderable(entry)) records.Add(entry!);
+                else skipped++;
             }
-            catch (JsonException) { }
+            catch (JsonException) { skipped++; }
             finally
             {
                 if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
             }
         }
-        return records;
+        return new LogParseResult(records, skipped);
     }
 
     private static bool IsRenderable(ActivityLog? entry)
