@@ -20,6 +20,7 @@ internal sealed class TrayHost : IDisposable
     private readonly Action<StatusReading> statusHandler;
     private NativeMenuItem? recoveryItem;
     private NativeMenuItem? unblockItem;
+    private TrayIcon? trayIcon;
 
     /// <summary>最近一次同步到菜单上的开关意图；点击时按用户看到的那一个发送，绝不重新翻转。</summary>
     private RecoveryIntent? displayedIntent;
@@ -60,7 +61,7 @@ internal sealed class TrayHost : IDisposable
             menu.Add(item);
         }
 
-        var tray = new TrayIcon
+        var tray = trayIcon = new TrayIcon
         {
             Icon = AppIcons.Load(),
             ToolTipText = "AutoNet · 校园网连接守护",
@@ -153,6 +154,9 @@ internal sealed class TrayHost : IDisposable
 
     /// <summary>与托盘菜单“打开 AutoNet”相同的动作。</summary>
     public void ShowMainWindow() => ShowWindow(window);
+
+    /// <summary>托盘图标控件（#10：气泡呈现复用同一图标，避免第二个托盘图标）。</summary>
+    public TrayIcon? TrayIcon => trayIcon;
 
     /// <summary>与托盘菜单“退出托盘（后台继续运行）”相同的动作：只结束界面进程，不触碰服务。</summary>
     public void RequestExit()

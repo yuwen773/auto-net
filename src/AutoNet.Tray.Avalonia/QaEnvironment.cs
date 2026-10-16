@@ -22,7 +22,9 @@ internal enum QaMode
     /// <summary>设置页 QA：普通界面只读投影、提权入口意图与编辑器保存规则的逐场景证据（scripts/qa-avalonia-settings.ps1 使用）。</summary>
     Settings,
     /// <summary>主题偏好 QA：默认跟随系统、手动明暗、系统变化优先级与跨重启保留的逐场景证据（scripts/qa-avalonia-theme.ps1 使用）。</summary>
-    ThemePrefs
+    ThemePrefs,
+    /// <summary>关键通知 QA：一次提醒、不重播、未知码降级与消费记录持久化的逐场景证据（scripts/qa-avalonia-notifications.ps1 使用）。</summary>
+    Notifications
 }
 
 /// <summary>
@@ -50,6 +52,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "logs" => QaMode.Logs,
             "settings" => QaMode.Settings,
             "theme-prefs" => QaMode.ThemePrefs,
+            "notifications" => QaMode.Notifications,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -71,6 +74,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string SettingsReportPath => Path.Combine(Directory, "settings.json");
     public string ThemePrefsReportPath => Path.Combine(Directory, "theme-prefs.json");
     public string ThemePrefsResumeReportPath => Path.Combine(Directory, "theme-prefs-resume.json");
+    public string NotificationsReportPath => Path.Combine(Directory, "notifications.json");
+    public string NotificationsResumeReportPath => Path.Combine(Directory, "notifications-resume.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
 

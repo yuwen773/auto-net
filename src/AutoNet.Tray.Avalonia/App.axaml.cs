@@ -212,7 +212,21 @@ public sealed class App : Application
         Func<string, Task>? copyHandler = tray.Qa.Mode == QaMode.Logs ? _ => Task.CompletedTask : null;
         Action? folderHandler = tray.Qa.Mode == QaMode.Logs ? () => { } : null;
         var window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings, themeProvider, themeSelected);
+        // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
+        // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
+        // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
+        // 确定时序；消费记录经 Create(qa) 落证据目录，不弹真实气泡、不触碰本机真实记录。
+        List<NotificationAlert>? qaPresented = tray.Qa.Mode == QaMode.Notifications ? [] : null;
+        TrayBalloonNotifier? notifier = null;
+        var notifications = new NotificationRouter(
+            NotificationConsumptionStore.Create(tray.Qa),
+            qaPresented is { } sink ? alert => { sink.Add(alert); return true; } : alert => notifier is { } balloon && balloon.Show(alert));
         trayHost = new TrayHost(session, window, shell, actions, () => desktop.Shutdown());
+        if (qaPresented is null)
+        {
+            notifier = new TrayBalloonNotifier(trayHost.TrayIcon!);
+            pipe.Updated += notifications.Observe;
+        }
         desktop.Exit += (_, _) =>
         {
             trayHost.Dispose();
@@ -248,6 +262,9 @@ public sealed class App : Application
                 break;
             case QaMode.ThemePrefs:
                 QaThemePrefs.Run(shell, window, theme!, tray.Qa, code => desktop.Shutdown(code));
+                break;
+            case QaMode.Notifications:
+                QaNotifications.Run(shell, window, notifications, qaPresented!, tray.Qa, code => desktop.Shutdown(code));
                 break;
         }
     }
