@@ -24,6 +24,9 @@ internal sealed class SettingsWindow : Window
     private readonly CheckBox awake = new() { Content = "接通电源时保持唤醒，允许屏幕关闭", IsChecked = true };
     private readonly CheckBox enabled = new() { Content = "启用自动恢复校园网", IsChecked = true };
     private readonly CheckBox disconnect = new() { Content = "允许主动断线恢复（可能中断 UU 远程）", IsChecked = true };
+    private readonly RadioButton channelAuto = new() { GroupName = "authChannel", Content = "自动：门户改版且认证耗尽时自动以内嵌通道修复" };
+    private readonly RadioButton channelManual = new() { GroupName = "authChannel", Content = "仅手动（默认）：只在诊断页点按钮时发起" };
+    private readonly RadioButton channelOff = new() { GroupName = "authChannel", Content = "关闭：不提供内嵌认证通道" };
     private readonly TextBlock result = new() { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
     private readonly Button save = new() { Content = "保存设置", MinWidth = 108 };
     private readonly Button cancel = new() { Content = "取消", MinWidth = 96, IsCancel = true };
@@ -70,6 +73,7 @@ internal sealed class SettingsWindow : Window
         form.Children.Add(enabled);
         form.Children.Add(disconnect);
         form.Children.Add(awake);
+        form.Children.Add(Field("内嵌认证通道（门户改版时的网页修复通道）", new StackPanel { Spacing = 4, Children = { channelAuto, channelManual, channelOff } }));
         layout.Children.Add(form);
 
         layout.Children.Add(new TextBlock
@@ -116,6 +120,10 @@ internal sealed class SettingsWindow : Window
         awake.IsChecked = existing?.KeepAwakeOnAc ?? true;
         enabled.IsChecked = existing?.Enabled ?? true;
         disconnect.IsChecked = existing?.AllowActiveDisconnect ?? true;
+        var channelMode = existing?.AuthChannelMode ?? AuthChannelModes.ManualOnly;
+        channelAuto.IsChecked = channelMode == AuthChannelModes.Automatic;
+        channelOff.IsChecked = channelMode == AuthChannelModes.Off;
+        channelManual.IsChecked = channelMode is not (AuthChannelModes.Automatic or AuthChannelModes.Off);
     }
 
     /// <summary>保存：收集草稿交给编辑器规则；成功即关闭（进程随后结束），失败在窗口内说明并保持打开。</summary>
@@ -129,7 +137,10 @@ internal sealed class SettingsWindow : Window
             endpoint.Text ?? "",
             enabled.IsChecked == true,
             disconnect.IsChecked == true,
-            awake.IsChecked == true);
+            awake.IsChecked == true,
+            channelAuto.IsChecked == true ? AuthChannelModes.Automatic
+                : channelOff.IsChecked == true ? AuthChannelModes.Off
+                : AuthChannelModes.ManualOnly);
         ApplySave(draft);
     }
 

@@ -29,15 +29,16 @@ internal sealed class AuthChannelLauncher
 
     public const string ResultFileName = "auth-channel-result.json";
 
-    private readonly Func<StatusSnapshot?> refresh;
+    private readonly Func<Task<StatusSnapshot?>> refresh;
     private readonly Func<string, Process?> start;
     private readonly string resultPath;
     private DateTimeOffset? consumedGrant;
     private DateTimeOffset? launchedAt;
     private string? lastConclusion;
+    private StatusSnapshot? lastReading;
 
     public AuthChannelLauncher(
-        Func<StatusSnapshot?> refresh,
+        Func<Task<StatusSnapshot?>> refresh,
         Func<string, Process?> start)
     {
         this.refresh = refresh;
@@ -50,6 +51,16 @@ internal sealed class AuthChannelLauncher
 
     public string ResultPath => resultPath;
 
+    /// <summary>诊断页手动入口（无参）：使用最近一次管道快照；无快照视为状态不可信。</summary>
+    public ObserveOutcome LaunchManually()
+    {
+        if (lastReading is not { } reading) return ObserveOutcome.UntrustedState;
+        return LaunchManually(reading);
+    }
+
+    /// <summary>诊断页投影：模式/信号/最近结论。</summary>
+    public AuthChannelLaunchState Describe() => Describe(lastReading);
+
     /// <summary>诊断页手动入口（ManualOnly/Automatic 可达）：信号存在即允许，Off 拒绝。</summary>
     public ObserveOutcome LaunchManually(StatusSnapshot reading)
     {
@@ -58,17 +69,24 @@ internal sealed class AuthChannelLauncher
         return Launch(reading);
     }
 
-    /// <summary>管道观察入口：顺带回读上次结果，再处理自动授予。</summary>
-    public async Task<ObserveOutcome> ObserveAsync(StatusSnapshot reading)
+    /// <summary>管道观察入口：缓存快照（诊断页投影用）、顺带回读上次结果，再处理自动授予。</summary>
+    public async Task<ObserveOutcome> ObserveAsync(StatusSnapshot? reading)
     {
+        lastReading = reading;
+        if (reading is null) { ConsumeResult(new StatusSnapshot()); return ObserveOutcome.NoGrant; }
         ConsumeResult(reading);
         if (!reading.AuthChannelRequested || reading.AuthChannelNotBefore is not { } grant) return ObserveOutcome.NoGrant;
         if (consumedGrant == grant) { TryConsumeResultFile(); return ObserveOutcome.AlreadyConsumed; }
         // 发起前重验：快照不可信、请求消失或授予时间戳已变 → 不发起（故事 68 同型）。
-        var fresh = refresh();
+        var fresh = await refresh();
         if (fresh?.AuthChannelRequested != true || fresh.AuthChannelNotBefore != grant) return ObserveOutcome.UntrustedState;
         var outcome = Launch(reading);
-        if (outcome == ObserveOutcome.Launched) consumedGrant = grant;
+        if (outcome == ObserveOutcome.Launched || outcome == ObserveOutcome.UacDeclined)
+        {
+            // UAC 拒绝同样视为本授予已消费：用户此刻不要通道，绝不在同一授予上反复弹 UAC。
+            consumedGrant = grant;
+            if (outcome == ObserveOutcome.UacDeclined) launchedAt = null;
+        }
         return outcome;
     }
 
@@ -79,7 +97,6 @@ internal sealed class AuthChannelLauncher
         Requested: reading?.AuthChannelRequested ?? false,
         LastConclusion: lastConclusion,
         Busy: launchedAt is not null && lastConclusion is null);
-
     private ObserveOutcome Launch(StatusSnapshot reading)
     {
         if (reading.AuthChannelMode == AuthChannelModes.Off) return ObserveOutcome.ModeOff;
@@ -89,8 +106,7 @@ internal sealed class AuthChannelLauncher
         var process = start(resultPath);
         if (process is null)
         {
-            // UAC 拒绝 = 用户此刻不要通道；授予按已消费处理，不重试。
-            launchedAt = null;
+            // UAC 拒绝 = 用户此刻不要通道；消费标记由调用方置位（同授予不重试）。
             return ObserveOutcome.UacDeclined;
         }
         return ObserveOutcome.Launched;

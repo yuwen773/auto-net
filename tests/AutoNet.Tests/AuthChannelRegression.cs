@@ -121,7 +121,88 @@ internal static class AuthChannelRegression
                 new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST", AuthChannelMode = "" }), "空模式未拒绝");
             Require(AuthChannelModes.IsKnown(AuthChannelModes.Automatic) && !AuthChannelModes.IsKnown("Always"), "IsKnown 语义不符");
         })),
+        ("内嵌通道回归：发起器消费授予并逐字转写提权命令，同授予不重复发起", async () =>
+        {
+            var started = new List<string>();
+            var launcher = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(Grant()),
+                resultPath =>
+                {
+                    Require(resultPath.EndsWith("auth-channel-result.json", StringComparison.Ordinal), "结果路径不符约定：" + resultPath);
+                    started.Add(resultPath);
+                    return new System.Diagnostics.Process();
+                });
+            var first = await launcher.ObserveAsync(Grant());
+            Require(first == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.Launched, "首次授予应发起");
+            Require(started.Count == 1, "首次授予应恰好启动一次");
+            var second = await launcher.ObserveAsync(Grant());
+            Require(second == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.AlreadyConsumed && started.Count == 1,
+                "同一授予不得重复发起");
+        }),
+        ("内嵌通道回归：UAC 拒绝即不再发起、请求消失即不发起、无信号路径零动作", async () =>
+        {
+            var declined = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(Grant()),
+                _ => null);
+            var outcome = await declined.ObserveAsync(Grant());
+            Require(outcome == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.UacDeclined, "UAC 拒绝应返回取消语义");
+            var again = await declined.ObserveAsync(Grant());
+            Require(again == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.AlreadyConsumed, "拒绝后不得自动重试");
+            var quiet = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(Grant() with { AuthChannelRequested = false }),
+                _ => throw new InvalidOperationException("无授予不应发起"));
+            Require(await quiet.ObserveAsync(Grant() with { AuthChannelRequested = false })
+                == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.NoGrant, "无授予不得发起");
+            Require(await quiet.ObserveAsync(Grant() with { AuthChannelNotBefore = DateTimeOffset.UtcNow.AddHours(1) })
+                == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.UntrustedState, "授予时间戳变化不得发起（发起前重验）");
+        }),
+        ("内嵌通道回归：结果文件回读双核对且结论经映射进入投影", async () =>
+        {
+            var dir = Directory.CreateTempSubdirectory("autonet-launcher-reg");
+            try
+            {
+                var resultPath = Path.Combine(dir.FullName, "auth-channel-result.json");
+                var launchAt = DateTimeOffset.UtcNow.AddSeconds(-3);
+                AutoNet.Tray.Avalonia.AuthChannelLauncher? launcher = null;
+                launcher = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                    () => Task.FromResult<StatusSnapshot?>(Grant()),
+                    path =>
+                    {
+                        File.WriteAllText(path, Form("LoggedIn", DateTimeOffset.UtcNow, "submit-once"));
+                        return new System.Diagnostics.Process();
+                    });
+                // 发起：ObserveAsync 内部以「当前时刻」记发起——回执时刻晚于它即可通过双核对。
+                var outcome = await launcher.ObserveAsync(Grant());
+                Require(outcome == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.Launched, "回执用例应成功发起");
+                var after = await launcher.ObserveAsync(Grant());
+                Require(after == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.AlreadyConsumed, "回读轮不应重复发起");
+                Require(launcher.Describe().LastConclusion == LoginResult.Accepted.ToString(),
+                    "LoggedIn 应映射为 Accepted 进入投影：" + launcher.Describe().LastConclusion);
+                Require(!File.Exists(resultPath) || !File.ReadAllText(resultPath).Contains("LoggedIn"), "已消费的结果文件应被清理");
+            }
+            finally { dir.Delete(recursive: true); }
+        }),
+        ("内嵌通道回归：关闭态手动与自动一律拒绝", () => Sync(() =>
+        {
+            var offReading = Grant() with { AuthChannelMode = AuthChannelModes.Off };
+            var launcher = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(offReading),
+                _ => throw new InvalidOperationException("关闭态不应发起"));
+            Require(launcher.LaunchManually(offReading) == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.ModeOff,
+                "关闭态手动入口应拒绝");
+            var outcome = launcher.ObserveAsync(offReading).GetAwaiter().GetResult();
+            Require(outcome == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.ModeOff,
+                "关闭态即使出现异常授予，托盘兜底也应拒绝发起");
+        })),
     ];
+
+    private static StatusSnapshot Grant() => new()
+    {
+        AuthChannelRequested = true,
+        AuthChannelNotBefore = new DateTimeOffset(2026, 10, 17, 12, 0, 0, TimeSpan.Zero),
+        AuthChannelMode = AuthChannelModes.Automatic,
+        PortalLayoutSuspected = true
+    };
 
     private static string Form(string conclusion, DateTimeOffset at, string detail) =>
         "{\"conclusion\":\"" + conclusion + "\",\"detectedAt\":\"" + at.ToString("o") + "\",\"detail\":\""

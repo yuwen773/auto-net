@@ -274,12 +274,20 @@ public sealed class App : Application
             exportLaunch = LaunchDiagnosticsExportAsync;
         }
         var diagnosticsExporter = new DiagnosticsExporter(pickTarget, exportLaunch);
+        // 内嵌认证通道（工单 #24 / ADR-0009）：发起器消费服务置位的授予并经 UAC 提权
+        // 启动辅助进程（辅助进程自读机器级凭据）。可访问性 QA 模式把启动替换为受控
+        // 记录器（只记意图不弹 UAC），且不订阅管道（不消费任何真实授予）。
+        var authChannelStart = tray.Qa.Mode == QaMode.Accessibility
+            ? QaAuthChannel.RecordLaunch
+            : (Func<string, Process?>)(resultPath => Elevation.LaunchAuthChannel(resultPath, Elevation.StartProcess));
+        var authChannelLauncher = new AuthChannelLauncher(
+            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart);
         // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
         Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility
             ? QaAccessibility.RecordPortalOpen
             : () => _ = portalOpener.OpenManuallyAsync();
         window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings,
-            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter);
+            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannelLauncher);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
@@ -300,6 +308,9 @@ public sealed class App : Application
         // 手动开页只经概览页按钮。
         if (tray.Qa.Mode is not (QaMode.PortalOpen or QaMode.Accessibility))
             pipe.Updated += reading => _ = portalOpener.EvaluateAsync(reading);
+        // 通道授予消费（工单 #24）：同一批 QA 模式不订阅（可访问性记录器不消费真实授予）。
+        if (tray.Qa.Mode is not (QaMode.PortalOpen or QaMode.Accessibility))
+            pipe.Updated += reading => _ = authChannelLauncher.ObserveAsync(reading.Snapshot);
         desktop.Exit += (_, _) =>
         {
             trayHost.Dispose();

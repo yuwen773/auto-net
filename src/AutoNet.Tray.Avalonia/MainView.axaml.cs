@@ -25,6 +25,7 @@ public partial class MainView : UserControl
     private Action? modifySettingsHandler;
     private Action? portalOpenHandler;
     private DiagnosticsExporter? diagnosticsExporter;
+    private AuthChannelLauncher? authChannelLauncher;
     private DiagnosticsExportState? exportStateShown;
     private Func<ThemePreference>? themeProvider;
     private Action<ThemePreference>? themeSelectedHandler;
@@ -57,7 +58,8 @@ public partial class MainView : UserControl
         Action? portalOpen = null,
         Func<ThemePreference>? themeProvider = null,
         Action<ThemePreference>? themeSelected = null,
-        DiagnosticsExporter? export = null)
+        DiagnosticsExporter? export = null,
+        AuthChannelLauncher? authChannel = null)
     {
         controller = shell;
         actions = overviewActions;
@@ -68,6 +70,7 @@ public partial class MainView : UserControl
         portalOpenHandler = portalOpen;
         this.themeProvider = themeProvider;
         themeSelectedHandler = themeSelected;
+        authChannelLauncher = authChannel;
         diagnosticsExporter = export;
         if (export is { } exporter)
         {
@@ -195,7 +198,15 @@ public partial class MainView : UserControl
                     {
                         if (diagnosticsExporter is { } exporter) _ = exporter.RunAsync();
                         return Task.FromResult(true);
-                    }));
+                    }),
+                    authChannelLauncher?.Describe(),
+                    authChannelLauncher is { } channel
+                        ? () => RunActionSafelyAsync(() =>
+                        {
+                            _ = channel.LaunchManually();
+                            return Task.FromResult(true);
+                        })
+                        : null);
                 break;
             case LogsContent logs:
                 // 指纹未变化时不重建：日志页交互（日期、筛选、选中行）都会改变指纹，重建即换内容。

@@ -1,3 +1,4 @@
+using AutoNet.Core;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -13,7 +14,7 @@ namespace AutoNet.Tray.Avalonia;
 /// </summary>
 internal static class DiagnosticsView
 {
-    public static Control Build(DiagnosticsContent content, DiagnosticsExportState? export = null, Action? exportRequested = null)
+    public static Control Build(DiagnosticsContent content, DiagnosticsExportState? export = null, Action? exportRequested = null, AuthChannelLaunchState? authChannel = null, Action? channelLaunch = null)
     {
         var page = new StackPanel { Spacing = 14, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
         page.Children.Add(new StackPanel
@@ -35,6 +36,7 @@ internal static class DiagnosticsView
         page.Children.Add(RowCard("认证信号", content.Signals));
         page.Children.Add(RowCard("认证证据", content.Attempts));
         if (export is { } exportState) page.Children.Add(ExportCard(exportState, exportRequested));
+        if (authChannel is { } channelState) page.Children.Add(AuthChannelCard(channelState, channelLaunch));
         page.Children.Add(ShellTheming.Themed(
             new TextBlock
             {
@@ -99,6 +101,40 @@ internal static class DiagnosticsView
     }
 
     /// <summary>一个证据分区：标题 + 若干「类别 / 值 + 边界说明」行；不可信状态同样保持分列结构。</summary>
+    /// <summary>
+    /// 内嵌认证通道卡（工单 #24 / ADR-0009）：只读投影（模式、结构信号、最近结论）+
+    /// 明确动作按钮。按钮仅在结构信号存在且模式非关闭时可用；点击前重验由
+    /// <see cref="AuthChannelLauncher.LaunchManually"/> 承担，这里只发起意图。
+    /// </summary>
+    private static Control AuthChannelCard(AuthChannelLaunchState state, Action? channelLaunch)
+    {
+        var body = new StackPanel { Spacing = 8 };
+        body.Children.Add(new TextBlock { Text = "内嵌认证通道", FontSize = 15, FontWeight = FontWeight.SemiBold });
+        body.Children.Add(new TextBlock
+        {
+            Text = "门户改版导致协议认证失效时，以内嵌浏览器加载真实门户页自动填写并提交；加密与提交仍由学校页面完成。",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8
+        });
+        body.Children.Add(new TextBlock
+        {
+            Text = $"模式：{state.Mode}｜门户结构信号：{(state.SignalPresent ? "存在" : "无")}"
+                + (state.LastConclusion is { } conclusion ? $"｜最近结论：{conclusion}" : ""),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap
+        });
+        var button = new Button
+        {
+            Content = "发起内嵌认证修复",
+            MinWidth = 148,
+            IsEnabled = state.SignalPresent && state.Mode != AuthChannelModes.Off && !state.Busy
+        };
+        button.Click += (_, _) => channelLaunch?.Invoke();
+        body.Children.Add(button);
+        return ShellTheming.Card(body);
+    }
+
     private static Control RowCard(string header, IReadOnlyList<DiagnosticsRow> rows)
     {
         var body = new StackPanel { Spacing = 10 };

@@ -34,7 +34,8 @@ internal sealed record SettingsDraft(
     string UuEndpoint,
     bool Enabled,
     bool AllowActiveDisconnect,
-    bool KeepAwakeOnAc);
+    bool KeepAwakeOnAc,
+    string AuthChannelMode = AuthChannelModes.ManualOnly);
 
 /// <summary>
 /// 管理员设置编辑（迁移工单 #8 / T07 / 故事 35–39）：与既有 WinForms 设置表单同语义。
@@ -94,7 +95,8 @@ internal sealed class ElevatedSettings(
             AllowActiveDisconnect = draft.AllowActiveDisconnect,
             KeepAwakeOnAc = draft.KeepAwakeOnAc,
             ProxyUrl = draft.ProxyUrl.Trim(),
-            UuEndpoint = draft.UuEndpoint.Trim()
+            UuEndpoint = draft.UuEndpoint.Trim(),
+            AuthChannelMode = draft.AuthChannelMode
         };
 
         try
