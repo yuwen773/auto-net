@@ -24,8 +24,8 @@ try {
     if ($Publish) {
         # T18（故事 85）：候选包必须与唯一提交一一对应。脏树或未跟踪源文件发布的包无法追溯，
         # 直接拒绝而不是把不可追溯的包交给审阅者。
-        $dirty = & git status --porcelain
-        if ($dirty) { throw "候选包要求干净工作树（故事 85 可追溯）：$($dirty -join '; ')" }
+        $statusLines = & git status --porcelain
+        if ($statusLines) { throw "候选包要求干净工作树（故事 85 可追溯）：$($statusLines -join '; ')" }
         $bundle = Join-Path $repo 'artifacts/AutoNet-win-x64'
         # The previous bundle is scratch, not a rollback asset — the installed program and
         # git history are. Shipping leftover files (an old nested package with stale
@@ -39,8 +39,10 @@ try {
         )
         foreach ($target in $publishTargets) {
             $output = Join-Path $bundle $target.Output
-            $identityArg = if ($target.Identity) { '-p:AutoNetPublishIdentity=true' } else { $null }
-            & $sdk publish "src/$($target.Project)/$($target.Project).csproj" -c Release -r win-x64 --self-contained true -o $output -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true $identityArg --nologo
+            # 空数组 splatting 在所有 PowerShell 7.x 版本都不传参；$null 实参在 7.0 会绑定为空串。
+            $identityArg = @()
+            if ($target.Identity) { $identityArg = @('-p:AutoNetPublishIdentity=true') }
+            & $sdk publish "src/$($target.Project)/$($target.Project).csproj" -c Release -r win-x64 --self-contained true -o $output -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true @identityArg --nologo
             if ($LASTEXITCODE -ne 0) { throw "Publish $($target.Project) failed." }
         }
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1'), (Join-Path $PSScriptRoot 'uninstall.ps1'), (Join-Path $PSScriptRoot 'Install.cmd'), (Join-Path $repo 'README.md') -Destination $bundle -Force
@@ -61,7 +63,7 @@ try {
             "构建时刻（UTC）：$([DateTimeOffset]::UtcNow.ToString('o'))"
             "SDK：$sdkVersion"
             "回归结果：$(Get-Content -LiteralPath (Join-Path $evidence 'tests.txt') -Tail 1)（退出码 $testExit；完整输出见 tests.txt，元数据见 build.json）"
-            '完整性：SHA256SUMS.txt 覆盖包内全部文件（含本文件）'
+            '完整性：SHA256SUMS.txt 覆盖包内全部文件（清单不含其自身；BUILD-ID.txt 在列）'
             ''
             '预览边界：本包仅用于预览新界面——直接运行 tray\AutoNet.Tray.exe，不安装、不替换已'
             '安装程序、不停止现有服务，已安装版本不受影响。覆盖安装（Install.cmd / install.ps1）'

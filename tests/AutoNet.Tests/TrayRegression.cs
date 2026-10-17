@@ -177,7 +177,7 @@ internal static class TrayRegression
             var afterChanges = Resources();
             Require(afterChanges.Gdi <= baseline.Gdi + 8, "切换标志后 GDI 未释放");
             Evidence("resources.json", new { baseline, samples, afterChanges, fixedRefreshes = 50_000, fullRefreshes = 500, transitions = 1000 });
-        }, 300)),
+        }, StressRefreshTimeoutSeconds)),
         ("托盘加固：空值、未来、过期状态在标题服务诊断区域一致降级", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
@@ -310,6 +310,9 @@ internal static class TrayRegression
         Enabled = true, State = "校园网在线", Direct = "外网可达", Wifi = "已连接",
         Portal = "未查询（外网检查已通过）", Tunnel = "系统路径可达，出口未核验", Uu = "未核验"
     };
+
+    /// <summary>五万次压测的预算：孤立基线约 41 秒，须容纳满套件负载波动（其余 UI 用例用默认 60 秒）。</summary>
+    internal const int StressRefreshTimeoutSeconds = 300;
 
     internal static Task RunStaAsync(Action test, int timeoutSeconds = 60)
     {
