@@ -31,3 +31,27 @@ jobs:
             artifacts/validation/
             artifacts/AutoNet-win-x64/
           if-no-files-found: warn
+
+  # 工单 #20（ADR-0010）：一次性 runner 上的真装冒烟矩阵（runner 自带管理员，install.ps1 提权分支直接执行）。
+  # ⚠️ 该脚本绝不能在本机运行——会覆盖安装本机 AutoNet。
+  install-smoke:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.401'
+      - name: Build and publish bundle
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1 -Publish
+      - name: Install / reinstall / uninstall smoke matrix
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/qa-install-smoke.ps1
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-smoke
+          path: artifacts/validation/qa-install-smoke/
+          if-no-files-found: warn
