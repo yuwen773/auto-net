@@ -88,6 +88,7 @@ internal static class DiagnosticsPackageRegression
                 var settings = new Settings
                 {
                     InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST",
+                    PortalOrigin = "https://login.csust.edu.cn",
                     ProxyUrl = "http://127.0.0.1:7897", UuEndpoint = "https://uu.example/real-endpoint"
                 };
                 var report = new NetworkDiagnosticReport
@@ -344,7 +345,8 @@ internal static class DiagnosticsPackageRegression
                 var settings = new Settings
                 {
                     InterfaceId = "00000000-0000-0000-0000-000000000004", WifiProfile = "CSUST-教工",
-                    ProxyUrl = "http://127.0.0.1:7897", UuEndpoint = "https://uu.example/real-endpoint?token=secret-token-value"
+                    PortalOrigin = "https://login.csust.edu.cn",
+                    ProxyUrl = "http://127.0.0.1:7897", UuEndpoint = "https://uu.example/real-endpoint"
                 };
                 var report = new NetworkDiagnosticReport
                 {
