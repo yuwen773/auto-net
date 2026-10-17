@@ -60,6 +60,7 @@ Assert ($svc.PathName -eq ('"' + (Join-Path $env:ProgramFiles 'AutoNet\service\A
 $runKey = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name AutoNet -ErrorAction SilentlyContinue).AutoNet
 Assert ($runKey -eq ('"' + (Join-Path $env:ProgramFiles 'AutoNet\tray\AutoNet.Tray.exe') + '" --tray')) '自启 Run 键契约'
 Assert (Test-Path (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'AutoNet.lnk')) '开始菜单快捷方式'
+Assert (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'AutoNet\authchannel\AutoNet.AuthChannel.exe')) '通道辅助进程布局（工单 #26）'
 
 $acl = Get-Acl 'C:\ProgramData\AutoNet\private'
 Assert (-not ($acl.Access | Where-Object { $_.IdentityReference -like '*Users*' })) 'private 无 Users 条目'

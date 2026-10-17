@@ -53,10 +53,10 @@ try {
     $data = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'AutoNet'
     $serviceExe = Join-Path $destination 'service/AutoNet.Service.exe'
     $trayExe = Join-Path $destination 'tray/AutoNet.Tray.exe'
-    foreach ($part in @('service/AutoNet.Service.exe', 'tray/AutoNet.Tray.exe')) {
+    foreach ($part in @('service/AutoNet.Service.exe', 'tray/AutoNet.Tray.exe', 'authchannel/AutoNet.AuthChannel.exe')) {
         if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $part))) { throw 'Use install.ps1 from the published bundle, not the source scripts directory.' }
     }
-    foreach ($path in @($destination, (Join-Path $destination 'service'), (Join-Path $destination 'tray'), $data, (Join-Path $data 'private'), (Join-Path $data 'logs'))) {
+    foreach ($path in @($destination, (Join-Path $destination 'service'), (Join-Path $destination 'tray'), (Join-Path $destination 'authchannel'), $data, (Join-Path $data 'private'), (Join-Path $data 'logs'))) {
         Assert-OrdinaryDirectory $path
         if (Test-Path -LiteralPath $path) { $originalAcls[$path] = Get-Acl -LiteralPath $path }
     }
@@ -92,16 +92,18 @@ try {
     }
     Get-Process -Name AutoNet.Tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $trayExe } | Stop-Process
     # Executables run as SYSTEM, so ordinary users must never be able to replace them.
-    foreach ($path in @($destination, (Join-Path $destination 'service'), (Join-Path $destination 'tray'))) {
+    foreach ($path in @($destination, (Join-Path $destination 'service'), (Join-Path $destination 'tray'), (Join-Path $destination 'authchannel'))) {
         New-Item -ItemType Directory -Path $path -Force | Out-Null
         Set-DataAcl $path $true
     }
     foreach ($path in @($data, (Join-Path $data 'logs'))) { New-Item -ItemType Directory -Path $path -Force | Out-Null; Set-DataAcl $path $true }
     $private = Join-Path $data 'private'
     New-Item -ItemType Directory -Path $private -Force | Out-Null; Set-DataAcl $private $false
-    foreach ($part in @('service/AutoNet.Service.exe', 'tray/AutoNet.Tray.exe')) {
+    foreach ($part in @('service/AutoNet.Service.exe', 'tray/AutoNet.Tray.exe', 'authchannel/AutoNet.AuthChannel.exe')) {
         $target = Join-Path $destination $part
         if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Executable target is a reparse point.' }
+        $targetDir = Split-Path $target -Parent
+        if (-not (Test-Path -LiteralPath $targetDir)) { New-Item -ItemType Directory -Path $targetDir -Force | Out-Null; Set-DataAcl $targetDir $true }
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $part) -Destination $target -Force
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.ps1') -Destination $destination -Force

@@ -35,7 +35,10 @@ try {
         # 身份保持为 AutoNet.Tray.exe（工单 #3 安装契约），输出目录仍为 tray/，安装脚本无需改动。
         $publishTargets = @(
             @{ Project = 'AutoNet.Service'; Output = 'service'; Identity = $false },
-            @{ Project = 'AutoNet.Tray.Avalonia'; Output = 'tray'; Identity = $true }
+            @{ Project = 'AutoNet.Tray.Avalonia'; Output = 'tray'; Identity = $true },
+            # 内嵌认证通道辅助进程（工单 #26 / ADR-0009）：独立 exe，进 authchannel/ 子目录，
+            # 由托盘 UAC 逐字传参启动（Elevation.ResolveHelperExe 探测该布局）。
+            @{ Project = 'AutoNet.AuthChannel'; Output = 'authchannel'; Identity = $false }
         )
         foreach ($target in $publishTargets) {
             $output = Join-Path $bundle $target.Output
