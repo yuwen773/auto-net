@@ -25,8 +25,14 @@ $report += "=== 安装冒烟矩阵（$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')�
 $failures = 0
 
 function Assert([bool]$Condition, [string]$Name) {
+    Write-Host ("{0} {1}" -f $(if ($Condition) { 'PASS' } else { 'FAIL' }), $Name)
     script:$failures += $(if ($Condition) { 0 } else { 1 })
     $report += ('{0} {1}' -f $(if ($Condition) { 'PASS' } else { 'FAIL' }), $Name)
+}
+
+function ShowLog([string]$Tag, [string]$Path) {
+    Write-Host ("--- {0} 子进程日志 ---" -f $Tag)
+    if (Test-Path -LiteralPath $Path) { Get-Content -LiteralPath $Path | ForEach-Object { Write-Host $_ } }
 }
 
 # 1) 预置假数据（逐字节基线）
@@ -41,8 +47,11 @@ $baseline = @('settings.json', 'credentials.dpapi') | ForEach-Object {
 }
 
 # 2) 全新安装（runner 为管理员：install.ps1 提权分支直接执行）
-& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installPs1 -Quiet *> (Join-Path $env:TEMP 'smoke-install1.log')
+Write-Host '-- 阶段：全新安装 --'
+$installLog1 = Join-Path $env:TEMP 'smoke-install1.log'
+& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installPs1 -Quiet *> $installLog1
 Assert ($LASTEXITCODE -eq 0) "全新安装退出码 0（实际 $LASTEXITCODE）"
+ShowLog '全新安装' $installLog1
 
 $svc = Get-CimInstance Win32_Service -Filter "Name='AutoNet'" -ErrorAction SilentlyContinue
 Assert ($null -ne $svc -and $svc.State -eq 'Running') '服务 Running'
@@ -57,8 +66,11 @@ Assert (-not ($acl.Access | Where-Object { $_.IdentityReference -like '*Users*' 
 Assert ($acl.Owner -like '*Administrators' -and $acl.AreAccessRulesProtected) 'private 受保护且归管理员'
 
 # 3) 覆盖安装（重复安装起点）
-& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installPs1 -Quiet *> (Join-Path $env:TEMP 'smoke-install2.log')
+Write-Host '-- 阶段：覆盖安装 --'
+$installLog2 = Join-Path $env:TEMP 'smoke-install2.log'
+& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installPs1 -Quiet *> $installLog2
 Assert ($LASTEXITCODE -eq 0) "覆盖安装退出码 0（实际 $LASTEXITCODE）"
+ShowLog '覆盖安装' $installLog2
 $svc2 = Get-CimInstance Win32_Service -Filter "Name='AutoNet'"
 Assert ($svc2.State -eq 'Running') '覆盖安装后服务仍 Running'
 foreach ($f in $baseline) {
@@ -67,8 +79,11 @@ foreach ($f in $baseline) {
 }
 
 # 4) 卸载（无 -PurgeData：业务数据保留）
-& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $uninstallPs1 *> (Join-Path $env:TEMP 'smoke-uninstall.log')
+Write-Host '-- 阶段：卸载 --'
+$uninstallLog = Join-Path $env:TEMP 'smoke-uninstall.log'
+& pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $uninstallPs1 *> $uninstallLog
 Assert ($LASTEXITCODE -eq 0) "卸载退出码 0（实际 $LASTEXITCODE）"
+ShowLog '卸载' $uninstallLog
 Assert ($null -eq (Get-Service -Name AutoNet -ErrorAction SilentlyContinue)) '卸载后服务不存在'
 Assert ($null -eq (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name AutoNet -ErrorAction SilentlyContinue)) '卸载后自启键删除'
 Assert (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'AutoNet.lnk'))) '卸载后快捷方式删除'
