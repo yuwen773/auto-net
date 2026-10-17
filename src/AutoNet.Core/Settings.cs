@@ -15,6 +15,8 @@ public sealed record Settings
     public string ProxyUrl { get; init; } = "";
     // Optional real UU endpoint, not its marketing website. Empty = explicitly unverified.
     public string UuEndpoint { get; init; } = "";
+    /// <summary>内嵌认证通道模式（ADR-0009）。默认 ManualOnly：升级零行为变化，自动降级须显式开启。</summary>
+    public string AuthChannelMode { get; init; } = AuthChannelModes.ManualOnly;
 
     public void Validate()
     {
@@ -28,6 +30,8 @@ public sealed record Settings
         if (UuEndpoint != "" && (!Uri.TryCreate(UuEndpoint, UriKind.Absolute, out var uu) ||
             uu.Scheme != "https" || uu.UserInfo != "" || uu.Query != "" || uu.Fragment != ""))
             throw new ArgumentException("UU 检测地址必须是不含令牌的真实 HTTPS 服务地址。");
+        if (AuthChannelMode is not (AuthChannelModes.Automatic or AuthChannelModes.ManualOnly or AuthChannelModes.Off))
+            throw new ArgumentException("内嵌认证通道模式仅支持自动、仅手动或关闭。");
     }
 
     public static bool IsSupportedPortal(Uri portal) => portal.IsAbsoluteUri &&
@@ -37,6 +41,16 @@ public sealed record Settings
 }
 
 public sealed record Credentials(string Username, string Password);
+
+/// <summary>内嵌认证通道三态（ADR-0009）：自动降级 / 仅手动（默认）/ 关闭。</summary>
+public static class AuthChannelModes
+{
+    public const string Automatic = "Automatic";
+    public const string ManualOnly = "ManualOnly";
+    public const string Off = "Off";
+
+    public static bool IsKnown(string? mode) => mode is Automatic or ManualOnly or Off;
+}
 
 public static class Storage
 {

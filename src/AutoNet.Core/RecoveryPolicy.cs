@@ -40,6 +40,20 @@ public sealed class RecoveryPolicy
     /// </summary>
     public static readonly TimeSpan BrowserFallbackOpenCooldown = TimeSpan.FromMinutes(10);
 
+    /// <summary>内嵌认证通道与浏览器兜底共用同一冷却节奏（工单 #24 验收：冷却同源）。</summary>
+    public static readonly TimeSpan AuthChannelCooldown = BrowserFallbackOpenCooldown;
+
+    /// <summary>
+    /// 内嵌认证通道自动降级判定（工单 #24）：仅 Automatic 模式下，门户结构改版信号
+    /// 与「需要人工交互」的认证失败达到连续尝试阈值同时成立才发起；与浏览器兜底
+    /// 同源（阈值/失败形态相同），ManualOnly/Off 永不自动发起。
+    /// </summary>
+    public static bool ShouldRequestAuthChannel(string? mode, bool portalLayoutSuspected, PortalFailure blockFailure, int attempts)
+        => mode == AuthChannelModes.Automatic
+            && portalLayoutSuspected
+            && blockFailure == PortalFailure.InteractionRequired
+            && attempts >= AuthenticationAttemptCap;
+
     /// <summary>
     /// The only page the tray may open for the browser fallback (ADR-0008): the fixed portal root.
     /// Opens are validated against <see cref="Settings.IsSupportedPortal"/> before launch, so a
@@ -227,6 +241,14 @@ public sealed record StatusSnapshot
     /// and a service restart re-grants it.
     /// </summary>
     public DateTimeOffset? BrowserFallbackNotBefore { get; init; }
+    /// <summary>
+    /// ADR-0009: portal layout is suspected to have changed AND the interaction-required failure
+    /// reached the cap — the tray should launch the embedded auth channel (UAC-elevated, user
+    /// session). Only set when the configured mode is Automatic; ManualOnly/Off never set it.
+    /// </summary>
+    public bool AuthChannelRequested { get; init; }
+    /// <summary>Grant time plus the shared 10-minute cooldown, stamped once per episode like the browser fallback.</summary>
+    public DateTimeOffset? AuthChannelNotBefore { get; init; }
     /// <summary>Latest one-shot notification, or null when none was emitted; older builds omit the field.</summary>
     public StatusNotification? Notification { get; init; }
 }
@@ -240,9 +262,13 @@ public static class NotificationCodes
     public const string SubmissionUnresolved = "SubmissionUnresolved";
     public const string BrowserFallbackRequested = "BrowserFallbackRequested";
     public const string PortalLayoutChanged = "PortalLayoutChanged";
+    public const string AuthChannelStarted = "AuthChannelStarted";
+    public const string AuthChannelResult = "AuthChannelResult";
+    public const string AuthChannelNeedsHuman = "AuthChannelNeedsHuman";
 
     public static bool IsKnown(string? code) => code is InternetRecovered or AuthenticationPaused
-        or SubmissionRechecking or SubmissionUnresolved or BrowserFallbackRequested or PortalLayoutChanged;
+        or SubmissionRechecking or SubmissionUnresolved or BrowserFallbackRequested or PortalLayoutChanged
+        or AuthChannelStarted or AuthChannelResult or AuthChannelNeedsHuman;
 }
 
 /// <summary>

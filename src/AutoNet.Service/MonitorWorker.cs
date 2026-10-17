@@ -55,6 +55,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private bool browserFallbackRequested;
     private bool browserFallbackPublished;
     private DateTimeOffset browserFallbackNotBefore;
+    // ADR-0009 embedded auth channel: same evidence bar as the browser fallback plus an
+    // explicit PortalLayoutChanged signal, gated by the configured AuthChannelMode. The
+    // service only raises the flag; the tray launches the elevated helper in the user session.
+    private bool authChannelRequested;
+    private bool authChannelPublished;
+    private DateTimeOffset authChannelNotBefore;
     // One one-shot notification per cycle: a more specific event raised earlier in the
     // same cycle already tells the user authentication is paused, so the generic pause
     // announcement in Publish must not supersede it.
@@ -415,6 +421,22 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 diagnostic with { AuthenticationAttempts = authentication?.Attempts ?? 0, AuthenticationAttemptMax = RecoveryPolicy.AuthenticationAttemptCap });
         }
         if (!browserFallbackRequested) { browserFallbackPublished = false; browserFallbackNotBefore = default; }
+        // ADR-0009 embedded auth channel: same threshold and failure shape as the browser
+        // fallback plus a fresh PortalLayoutChanged signal, only in Automatic mode. The
+        // helper runs in the user session (WebView2 needs an interactive session), reads
+        // the machine-scope credentials itself and reports through its result file — the
+        // credentials never travel through status.json, and the service stays session 0.
+        authChannelRequested = RecoveryPolicy.ShouldRequestAuthChannel(
+            settings.AuthChannelMode, portalLayoutSuspected, blockFailure, authentication?.Attempts ?? 0);
+        if (authChannelRequested && !authChannelPublished)
+        {
+            authChannelPublished = true;
+            authChannelNotBefore = clock.GetUtcNow().Add(RecoveryPolicy.AuthChannelCooldown);
+            Notify(NotificationCodes.AuthChannelStarted);
+            journal.Write("AuthChannelStarted", $"门户结构疑似改版且连续自动认证失败已达 {RecoveryPolicy.AuthenticationAttemptCap} 次阈值；将在用户会话以内嵌认证通道提交凭据（页面原有加密与提交逻辑，凭据仅进入本应用隐私会话）。",
+                diagnostic with { AuthenticationAttempts = authentication?.Attempts ?? 0, AuthenticationAttemptMax = RecoveryPolicy.AuthenticationAttemptCap });
+        }
+        if (!authChannelRequested) { authChannelPublished = false; authChannelNotBefore = default; }
         if (policy.CredentialsBlocked) detail = lastAuthentication is null
             ? blockFailure == PortalFailure.BindingRejected
                 ? "网关或设备绑定被拒绝，认证及主动断线已暂停；请核实 VLAN、MAC/AC 参数后使用“解除认证暂停”，不要仅修改密码。"
@@ -842,7 +864,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     {
         PortalLayoutSuspected = portalLayoutSuspected,
         BrowserFallbackRequested = browserFallbackRequested,
-        BrowserFallbackNotBefore = browserFallbackRequested ? browserFallbackNotBefore : null
+        BrowserFallbackNotBefore = browserFallbackRequested ? browserFallbackNotBefore : null,
+        AuthChannelRequested = authChannelRequested,
+        AuthChannelNotBefore = authChannelRequested ? authChannelNotBefore : null
     };
 
     private StatusSnapshot Publish(StatusSnapshot status)

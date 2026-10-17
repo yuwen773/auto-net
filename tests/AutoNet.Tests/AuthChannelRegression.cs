@@ -92,6 +92,35 @@ internal static class AuthChannelRegression
                 Require(LogEventClassifier.Classify(entry) == LogEventCategory.Authentication, code + " 未归入认证分类");
             }
         })),
+        ("内嵌通道回归：自动降级判定四态——仅 Automatic 且结构信号与阈值同时成立", () => Sync(() =>
+        {
+            Require(RecoveryPolicy.ShouldRequestAuthChannel(AuthChannelModes.Automatic, true, PortalFailure.InteractionRequired, 3),
+                "自动模式+信号+阈值应发起");
+            Require(!RecoveryPolicy.ShouldRequestAuthChannel(AuthChannelModes.ManualOnly, true, PortalFailure.InteractionRequired, 3),
+                "仅手动模式不得自动发起");
+            Require(!RecoveryPolicy.ShouldRequestAuthChannel(AuthChannelModes.Off, true, PortalFailure.InteractionRequired, 3),
+                "关闭模式不得自动发起");
+            Require(!RecoveryPolicy.ShouldRequestAuthChannel(null, true, PortalFailure.InteractionRequired, 3),
+                "未知模式不得自动发起");
+            Require(!RecoveryPolicy.ShouldRequestAuthChannel(AuthChannelModes.Automatic, false, PortalFailure.InteractionRequired, 3),
+                "无结构信号不得发起——正常时期协议认证路径不变");
+            Require(!RecoveryPolicy.ShouldRequestAuthChannel(AuthChannelModes.Automatic, true, PortalFailure.InteractionRequired, 2),
+                "未达阈值不得发起");
+            Require(!RecoveryPolicy.ShouldRequestAuthChannel(AuthChannelModes.Automatic, true, PortalFailure.CredentialsRejected, 3),
+                "非交互要求失败形态不得发起");
+        })),
+        ("内嵌通道回归：设置三态校验——词表之外拒绝", () => Sync(() =>
+        {
+            foreach (var mode in new[] { AuthChannelModes.Automatic, AuthChannelModes.ManualOnly, AuthChannelModes.Off })
+            {
+                new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST", AuthChannelMode = mode }.Validate();
+            }
+            Require(ThrowsArgument(
+                new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST", AuthChannelMode = "Always" }), "词表外模式未拒绝");
+            Require(ThrowsArgument(
+                new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST", AuthChannelMode = "" }), "空模式未拒绝");
+            Require(AuthChannelModes.IsKnown(AuthChannelModes.Automatic) && !AuthChannelModes.IsKnown("Always"), "IsKnown 语义不符");
+        })),
     ];
 
     private static string Form(string conclusion, DateTimeOffset at, string detail) =>
@@ -103,6 +132,12 @@ internal static class AuthChannelRegression
         try { AuthChannelResultFile.Parse(json); return false; }
         catch (FormatException) { return true; }
         catch (System.Text.Json.JsonException) { return true; }
+    }
+
+    private static bool ThrowsArgument(Settings settings)
+    {
+        try { settings.Validate(); return false; }
+        catch (ArgumentException) { return true; }
     }
 
     private static void Require(bool condition, string message)
