@@ -249,6 +249,8 @@ public sealed record StatusSnapshot
     public bool AuthChannelRequested { get; init; }
     /// <summary>Grant time plus the shared 10-minute cooldown, stamped once per episode like the browser fallback.</summary>
     public DateTimeOffset? AuthChannelNotBefore { get; init; }
+    /// <summary>内嵌认证通道模式广播（诊断页只读投影用）；服务从设置读出，未知设置缺省 ManualOnly。</summary>
+    public string AuthChannelMode { get; init; } = AuthChannelModes.ManualOnly;
     /// <summary>Latest one-shot notification, or null when none was emitted; older builds omit the field.</summary>
     public StatusNotification? Notification { get; init; }
 }

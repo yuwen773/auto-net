@@ -18,7 +18,7 @@ internal sealed class AuthChannelWindow : Form
         "return { found: !!pw, ready: !!document.body }; })()";
 
     private readonly ChannelOptions _options;
-    private readonly (string Username, string Password) _credential;
+    private readonly CredentialSource _credential;
     private readonly string _sessionDir;
     private readonly string _startPath;
     private Microsoft.Web.WebView2.Core.CoreWebView2Environment? _environment;
@@ -27,7 +27,7 @@ internal sealed class AuthChannelWindow : Form
 
     public int ExitCode { get; private set; } = 1;
 
-    public AuthChannelWindow(ChannelOptions options, (string Username, string Password) credential)
+    public AuthChannelWindow(ChannelOptions options, CredentialSource credential)
     {
         _options = options;
         _credential = credential;

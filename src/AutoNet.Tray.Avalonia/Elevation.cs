@@ -71,4 +71,49 @@ internal static class Elevation
             return null;
         }
     }
+
+    /// <summary>
+    /// 内嵌认证通道（工单 #24 / ADR-0009）：UAC 逐字传参启动辅助进程。辅助进程以提权
+    /// 令牌读取机器级凭据（LocalMachine DPAPI），凭据不经托盘进程、不经命令行。
+    /// 辅助 exe 不存在（发布布局缺项）时返回 null——调用方呈现受控不可用而非崩溃。
+    /// </summary>
+    internal static Process? LaunchAuthChannel(string resultPath, Func<ProcessStartInfo, Process?> start)
+    {
+        var exe = ResolveHelperExe();
+        if (exe is null) return null;
+        var startInfo = new ProcessStartInfo(exe)
+        {
+            UseShellExecute = true,
+            Verb = "runas"
+        };
+        startInfo.ArgumentList.Add("--from-settings");
+        startInfo.ArgumentList.Add("--result");
+        startInfo.ArgumentList.Add(resultPath);
+        startInfo.ArgumentList.Add("--timeout");
+        startInfo.ArgumentList.Add("150");
+        try
+        {
+            return start(startInfo);
+        }
+        catch (Win32Exception e) when (e.NativeErrorCode == 1223)
+        {
+            return null;
+        }
+    }
+
+    internal static string? ResolveHelperExe()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        foreach (var candidate in new[]
+        {
+            Path.Combine(baseDir, "AutoNet.AuthChannel.exe"),
+            Path.Combine(baseDir, "..", "AutoNet.AuthChannel.exe"),
+            Path.Combine(baseDir, "..", "authchannel", "AutoNet.AuthChannel.exe"),
+        })
+        {
+            var full = Path.GetFullPath(candidate);
+            if (File.Exists(full)) return full;
+        }
+        return null;
+    }
 }

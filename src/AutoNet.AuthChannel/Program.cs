@@ -21,14 +21,14 @@ internal static class Program
                 return 2;
             }
 
-            var credential = CredentialSource.ReadStdin();
-            if (credential is null || string.IsNullOrEmpty(credential.Value.Username) || string.IsNullOrEmpty(credential.Value.Password))
+            var credential = options.Injected ?? CredentialInput.ReadStdin();
+            if (credential is null || string.IsNullOrEmpty(credential.Username) || string.IsNullOrEmpty(credential.Password))
             {
                 Console.Error.WriteLine("missing credential");
                 return 2;
             }
 
-            var window = new AuthChannelWindow(options, credential.Value);
+            var window = new AuthChannelWindow(options, credential);
             Application.Run(window);
             window.CleanupSession();
             return window.ExitCode;
@@ -46,12 +46,14 @@ internal sealed record ChannelOptions(
     string ResultPath,
     int TimeoutSeconds,
     string? FixtureDir,
-    string FixtureHost)
+    string FixtureHost,
+    CredentialSource? Injected = null)
 {
     public static ChannelOptions? Parse(string[] args)
     {
         string? startUrl = null, resultPath = null, fixtureDir = null, fixtureHost = "portal.fixture";
         var timeout = 90;
+        var fromSettings = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
@@ -61,18 +63,40 @@ internal sealed record ChannelOptions(
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[++i], out var t) && t is > 0 and <= 600: timeout = t; break;
                 case "--fixture-dir" when i + 1 < args.Length: fixtureDir = Path.GetFullPath(args[++i]); break;
                 case "--fixture-host" when i + 1 < args.Length: fixtureHost = args[++i]; break;
+                case "--from-settings": fromSettings = true; break;
                 default: return null;
             }
         }
+        CredentialSource? injected = null;
+        if (fromSettings)
+        {
+            // 提权令牌读取机器级凭据（LocalMachine DPAPI）：凭据只在进程内存，不经命令行。
+            var settings = Storage.LoadSettings();
+            var credentials = Storage.LoadCredentials();
+            if (settings is null || credentials is null)
+            {
+                Console.Error.WriteLine("settings-or-credentials-missing");
+                return null;
+            }
+            if (settings.AuthChannelMode == AuthChannelModes.Off)
+            {
+                Console.Error.WriteLine("mode-off");
+                return null;
+            }
+            startUrl = settings.PortalOrigin;
+            injected = new CredentialSource(credentials.Username, credentials.Password);
+        }
         if (string.IsNullOrWhiteSpace(startUrl) || string.IsNullOrWhiteSpace(resultPath)) { return null; }
         if (fixtureDir is not null && !Directory.Exists(fixtureDir)) { return null; }
-        return new ChannelOptions(startUrl, resultPath, timeout, fixtureDir, fixtureHost);
+        return new ChannelOptions(startUrl, resultPath, timeout, fixtureDir, fixtureHost, injected);
     }
 }
 
-internal static class CredentialSource
+internal sealed record CredentialSource(string Username, string Password);
+
+internal static class CredentialInput
 {
-    public static (string Username, string Password)? ReadStdin()
+    public static CredentialSource? ReadStdin()
     {
         try
         {
@@ -84,7 +108,7 @@ internal static class CredentialSource
                 ? u.GetString() : null;
             var password = doc.RootElement.TryGetProperty("Password", out var p) && p.ValueKind == JsonValueKind.String
                 ? p.GetString() : null;
-            return (username ?? string.Empty, password ?? string.Empty);
+            return (username, password) is (_, _) ? new CredentialSource(username ?? "", password ?? "") : null;
         }
         catch (JsonException)
         {
