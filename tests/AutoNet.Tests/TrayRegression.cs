@@ -177,7 +177,7 @@ internal static class TrayRegression
             var afterChanges = Resources();
             Require(afterChanges.Gdi <= baseline.Gdi + 8, "切换标志后 GDI 未释放");
             Evidence("resources.json", new { baseline, samples, afterChanges, fixedRefreshes = 50_000, fullRefreshes = 500, transitions = 1000 });
-        })),
+        }, 300)),
         ("托盘加固：空值、未来、过期状态在标题服务诊断区域一致降级", () => RunStaAsync(() =>
         {
             using var fixture = new Fixture();
@@ -311,7 +311,7 @@ internal static class TrayRegression
         Portal = "未查询（外网检查已通过）", Tunnel = "系统路径可达，出口未核验", Uu = "未核验"
     };
 
-    internal static Task RunStaAsync(Action test)
+    internal static Task RunStaAsync(Action test, int timeoutSeconds = 60)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
@@ -327,7 +327,9 @@ internal static class TrayRegression
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Require(thread.Join(TimeSpan.FromSeconds(60)), "UI 专项测试超时");
+        // 超时后线程无法安全中止（.NET 禁用 Thread.Abort），弃置线程继续跑 WinForms 会连坐
+        // 后续 UI 用例（如 "Parameter is not valid"），因此预算必须给足而非收紧。
+        Require(thread.Join(TimeSpan.FromSeconds(timeoutSeconds)), $"UI 专项测试超时（预算 {timeoutSeconds} 秒）");
         if (failure is not null) throw failure;
         return Task.CompletedTask;
     }

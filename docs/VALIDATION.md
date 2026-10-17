@@ -98,6 +98,16 @@
 - 真实 DPI 分列（T05，显式待验收）：QA 报告固定记录「待验收：真实 Windows DPI 与系统键盘/辅助技术交互另行分列验收；本报告为受控缩放与受控键盘注入证据，不以模拟值补为通过」。未验证项（人工，缺真实环境）：真实 Windows DPI 设置下（100/125/150%）四页关键状态与按钮可达、真实键盘/讲述人等辅助技术焦点与名称播报、真实系统托盘菜单视觉确认。
 - 本模式边界：不订阅自动开页（夹具只驱动投影显示）、剪贴板/目录打开/保存对话框/提权启动全部替换为受控记录，不触碰本机真实 status.json 与用户记录。
 
+## Avalonia 候选包与验收材料（2026-10-17，工程证据 + 包核验，未安装未部署）
+
+- 对应迁移工单 #15《候选包与验收材料：构建标识、回归与哈希》，验收矩阵行 T17（故事 82–84）、T18（故事 85–86）、T20 骨架（故事 89）。实现落点 `scripts/build.ps1`（发布改造）、`Directory.Build.props`（候选版本号）、`docs/UI-MIGRATION-ACCEPTANCE.md`（验收记录骨架）、`tests/AutoNet.Tests/TrayRegression.cs`（基线超时修复）。
+- **T17 门槛达成**：Release 构建零警告零错误；全量回归 324/324（含全部 Avalonia 行为回归与既有 Core/Service 回归）。两项既有机器相关基线失败在本工单收敛——`托盘加固：五万次固定标志刷新…` 由固定 60 秒预算改为该用例 300 秒（孤立基线实测 41.1 秒，满套件负载偶发越线；超时弃置的 STA 线程继续跑 WinForms 会连坐后续 UI 用例，即「空值、未来、过期状态…`Parameter is not valid`」的随机受害机制），其余 UI 用例保持 60 秒；`诊断包：缺少设置、状态与日志时仍导出并逐项说明缺口` 随工单 #13「受控无设置不回退真实存储」修复。两者在 baseline `79ccc02` 均可复现，非迁移引入。
+- **T18 构建标识与证据对应**：候选包 `artifacts/AutoNet-win-x64/` 内 `BUILD-ID.txt` 记录程序版本（取自发布托盘 exe 的 ProductVersion）、源提交、构建时刻（UTC）、SDK、回归结果与预览边界；`build.json` + `tests.txt` 同源复制进包；`SHA256SUMS.txt` 覆盖包内全部文件（含 BUILD-ID.txt 自身）。发布门槛新增干净工作树检查（`git status --porcelain` 非空即拒绝），保证候选包 ↔ 提交一一对应。程序集版本升为 `0.3.0-preview.1`（SDK 自动追加提交哈希为 `+<full-sha>`），与已发布 v0.2.1 在二进制层面明确区分；托盘发布源改为 `src/AutoNet.Tray.Avalonia` + `-p:AutoNetPublishIdentity=true`，EXE 身份仍为 `AutoNet.Tray.exe`、输出目录仍为 `tray/`（工单 #3 安装契约不变，安装脚本零改动）。
+- **预览与正式安装明确区分（故事 86）**：预览 = 直接运行包内 `tray\AutoNet.Tray.exe`，不安装、不替换已装程序、不停止现有服务；覆盖安装（`Install.cmd` / `install.ps1`）须按工单 #16 单独授权执行。该边界逐字写入包内 `BUILD-ID.txt` 与 [UI-MIGRATION-ACCEPTANCE.md](UI-MIGRATION-ACCEPTANCE.md)（后者随包分发于 `docs/`）。
+- **T20 骨架（故事 89）**：`docs/UI-MIGRATION-ACCEPTANCE.md` 按 T01–T20 建立验收记录，三态（通过/失败/未执行）× 五层（工程回归/受控桌面/真实桌面/真实安装·回退/真实网络）分列，明确「未执行不得以其他层证据或截图补为通过」；契约缺口与显式待验收项集中列出（真实 DPI、真实系统明暗、读屏、真实 UAC、真实通知气泡、真实安装/回退、真实网络性能）。
+- 候选包核验：SHA256SUMS 抽验通过、`tray/AutoNet.Tray.exe` ProductVersion 与 BUILD-ID 一致；打包全过程未运行安装脚本、未触碰服务与已安装托盘（进程与自启未变）。
+- 未执行（分别验收）：审阅者人工运行预览包确认新界面；覆盖安装与回退（工单 #16，需单独授权）；真实断网/认证失效/TUN/UU 共存与恢复性能（故事 90，独立验收）。
+
 ## 探测语义、门户改版检测与浏览器兜底标志（2026-10-15，仅离线验证，未部署）
 
 - 按「UI 单独开 PR、当前先不管 UI」的边界，本轮只做 Core/Service 管路，托盘消费端留给 UI PR。契约见 [ADR-0005](adr/0005-portal-layout-detection.md)、[ADR-0006](adr/0006-probe-semantics.md) 与 [ADR-0002](adr/0002-notification-and-fallback-plumbing.md)，术语见根目录 [CONTEXT.md](../CONTEXT.md)。

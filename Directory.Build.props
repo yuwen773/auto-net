@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <Version>0.2.1</Version>
+    <!-- 候选包阶段（工单 #15）：版本与已发布的 WinForms v0.2.1 明确区分（T18/故事 85——
+         审阅者可从 ProductVersion 立即辨认预览包；SDK 自动把提交哈希追加为 +<full-sha>）。 -->
+    <Version>0.3.0-preview.1</Version>
   </PropertyGroup>
 </Project>
