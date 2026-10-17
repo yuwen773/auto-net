@@ -16,6 +16,12 @@ jobs:
       - name: Build and run offline fixtures
         shell: pwsh
         run: pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1 -Publish
+      - name: Verify bundle integrity (工单 #19)
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/verify-bundle.ps1 -Bundle artifacts/AutoNet-win-x64 -ExpectedCommit ${{ github.sha }}
+      - name: Verify-bundle QA self-test
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/qa-verify-bundle.ps1
       - name: Upload build evidence and Windows package
         if: always()
         uses: actions/upload-artifact@v4
