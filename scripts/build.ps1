@@ -51,11 +51,11 @@ try {
             Copy-Item -LiteralPath (Join-Path $repo "docs/$doc") -Destination (Join-Path $bundle 'docs') -Force
         }
         Copy-Item -LiteralPath (Join-Path $evidence 'build.json'), (Join-Path $evidence 'tests.txt') -Destination $bundle -Force
-        # T18（故事 85/86）：构建标识与预览边界写进包内，与 build.json / tests.txt / SHA256SUMS
-        # 互相印证；程序版本取自发布产物本身，而不是独立推导。
+        # T18（故事 85/86）：构建标识与安装/预览边界写进包内，与 build.json / tests.txt /
+        # SHA256SUMS 互相印证；程序版本取自发布产物本身，而不是独立推导。
         $trayExe = Get-Item -LiteralPath (Join-Path $bundle 'tray/AutoNet.Tray.exe')
         @(
-            'AutoNet 候选包（预览）构建标识'
+            'AutoNet 发布包构建标识'
             '================================'
             ''
             "程序版本（ProductVersion）：$($trayExe.VersionInfo.ProductVersion)"
@@ -65,9 +65,10 @@ try {
             "回归结果：$(Get-Content -LiteralPath (Join-Path $evidence 'tests.txt') -Tail 1)（退出码 $testExit；完整输出见 tests.txt，元数据见 build.json）"
             '完整性：SHA256SUMS.txt 覆盖包内全部文件（清单不含其自身；BUILD-ID.txt 在列）'
             ''
-            '预览边界：本包仅用于预览新界面——直接运行 tray\AutoNet.Tray.exe，不安装、不替换已'
-            '安装程序、不停止现有服务，已安装版本不受影响。覆盖安装（Install.cmd / install.ps1）'
-            '须按迁移工单 #16 单独授权后执行，与预览状态明确区分。'
+            '使用方式：覆盖安装运行 Install.cmd / install.ps1（需管理员，脚本自带失败回滚并'
+            '保留加密设置、凭据与日志）；仅预览界面可直接运行 tray\AutoNet.Tray.exe，不安装、'
+            '不替换已安装程序、不停止现有服务。验收状态见 docs/UI-MIGRATION-ACCEPTANCE.md：'
+            '真实网络场景与人工视觉项为显式待验收项，独立于发布结论。'
         ) | Set-Content -LiteralPath (Join-Path $bundle 'BUILD-ID.txt') -Encoding utf8
         $hashes = foreach ($file in Get-ChildItem -LiteralPath $bundle -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt') {
             $hash = Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256
