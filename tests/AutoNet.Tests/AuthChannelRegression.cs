@@ -1,4 +1,5 @@
 using AutoNet.Core;
+using AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 内嵌认证通道结果契约回归（工单 #21 / ADR-0009）：
@@ -193,6 +194,72 @@ internal static class AuthChannelRegression
             var outcome = launcher.ObserveAsync(offReading).GetAwaiter().GetResult();
             Require(outcome == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.ModeOff,
                 "关闭态即使出现异常授予，托盘兜底也应拒绝发起");
+        })),
+        ("内嵌通道回归：通道无法运行即回退浏览器兜底并受控呈现，绝不静默", async () =>
+        {
+            var resultPath = Path.Combine(Path.GetTempPath(), "autonet-reg-fallback-" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                NotificationAlert? presented = null;
+                var fallbackInvoked = 0;
+                var grant = Grant() with { AuthChannelNotBefore = DateTimeOffset.UtcNow.AddMinutes(1) };
+                var launcher = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                    () => Task.FromResult<StatusSnapshot?>(grant),
+                    path =>
+                    {
+                        // 模拟通道运行失败（如 WebView2 Runtime 缺失）：失败结果文件由 Main 落盘。
+                        File.WriteAllText(path, Form("Unknown", DateTimeOffset.UtcNow, "error=WebView2RuntimeNotFoundException"));
+                        return new System.Diagnostics.Process();
+                    },
+                    alert => presented = alert,
+                    () => { fallbackInvoked++; return Task.CompletedTask; });
+                await launcher.ObserveAsync(grant);
+                var after = await launcher.ObserveAsync(grant with { });
+                Require(fallbackInvoked == 1, "失败应恰好回退浏览器兜底一次（实际 " + fallbackInvoked + "）");
+                Require(presented is { } alert && alert.Code == "AuthChannelNeedsHuman" && alert.Body.Contains("回退"),
+                    "回退必须受控呈现而非静默");
+                Require(launcher.Describe().LastConclusion == "Unknown", "失败结论应如实投影");
+            }
+            finally { try { File.Delete(resultPath); } catch { } }
+        }),
+        ("内嵌通道回归：结论呈现走受控词表且每次结果只呈现一次", async () =>
+        {
+            var presented = new List<string>();
+            var grant = Grant() with { AuthChannelNotBefore = DateTimeOffset.UtcNow.AddMinutes(2) };
+            var launcher = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(grant),
+                path =>
+                {
+                    File.WriteAllText(path, Form("NeedsHuman", DateTimeOffset.UtcNow, "reason=captcha"));
+                    return new System.Diagnostics.Process();
+                },
+                alert => presented.Add(alert.Code),
+                null);
+            await launcher.ObserveAsync(grant);
+            await launcher.ObserveAsync(grant);
+            await launcher.ObserveAsync(grant);
+            Require(presented.SequenceEqual(["AuthChannelNeedsHuman"]),
+                "需人工应呈现一次且码正确：" + string.Join(",", presented));
+        }),
+        ("内嵌通道回归：通道事件写入结构化日志且可被分类器识别", () => Sync(() =>
+        {
+            var dir = Directory.CreateTempSubdirectory("autonet-channel-log");
+            try
+            {
+                AuthChannelLogWriter.Append("AuthChannelNeedsHuman", "window-shown=true", dir.FullName);
+                AuthChannelLogWriter.Append("AuthChannelResult", "conclusion=LoggedIn", dir.FullName);
+                var log = File.ReadAllText(Path.Combine(dir.FullName, "autonet-" + DateTimeOffset.Now.ToLocalTime().ToString("yyyy-MM-dd") + ".jsonl"));
+                var lines = log.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                Require(lines.Length == 2, "两事件应各占一行");
+                foreach (var line in lines)
+                {
+                    var entry = System.Text.Json.JsonSerializer.Deserialize<ActivityLog>(line, ActivityLog.Json)!;
+                    Require(entry.SchemaVersion == 2 && entry.EventCode is "AuthChannelNeedsHuman" or "AuthChannelResult",
+                        "日志行应保留 v2 结构与事件码");
+                    Require(LogEventClassifier.Classify(entry) == LogEventCategory.Authentication, "通道事件应归认证分类");
+                }
+            }
+            finally { dir.Delete(recursive: true); }
         })),
     ];
 

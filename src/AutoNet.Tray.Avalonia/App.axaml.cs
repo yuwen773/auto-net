@@ -274,14 +274,22 @@ public sealed class App : Application
             exportLaunch = LaunchDiagnosticsExportAsync;
         }
         var diagnosticsExporter = new DiagnosticsExporter(pickTarget, exportLaunch);
-        // 内嵌认证通道（工单 #24 / ADR-0009）：发起器消费服务置位的授予并经 UAC 提权
-        // 启动辅助进程（辅助进程自读机器级凭据）。可访问性 QA 模式把启动替换为受控
-        // 记录器（只记意图不弹 UAC），且不订阅管道（不消费任何真实授予）。
+        // 内嵌认证通道（工单 #24/#25 / ADR-0009）：发起器消费服务置位的授予并经 UAC 提权
+        // 启动辅助进程（辅助进程自读机器级凭据）。结果回读经受控关键通知呈现（不静默）；
+        // 通道无法运行时回退系统浏览器兜底。可访问性 QA 模式全部替换为受控记录/空操作。
+        List<NotificationAlert>? qaPresented = tray.Qa.Mode == QaMode.Notifications ? [] : null;
+        TrayBalloonNotifier? notifier = null;
         var authChannelStart = tray.Qa.Mode == QaMode.Accessibility
             ? QaAuthChannel.RecordLaunch
             : (Func<string, Process?>)(resultPath => Elevation.LaunchAuthChannel(resultPath, Elevation.StartProcess));
+        Action<NotificationAlert>? authChannelPresent = tray.Qa.Mode == QaMode.Accessibility
+            ? null
+            : alert => { if (notifier is { } balloon) balloon.Show(alert); };
+        Func<Task>? authChannelFallback = tray.Qa.Mode == QaMode.Accessibility
+            ? null
+            : () => portalOpener.OpenManuallyAsync();
         var authChannelLauncher = new AuthChannelLauncher(
-            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart);
+            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart, authChannelPresent, authChannelFallback);
         // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
         Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility
             ? QaAccessibility.RecordPortalOpen
@@ -292,8 +300,6 @@ public sealed class App : Application
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
         // 确定时序；消费记录经 Create(qa) 落证据目录，不弹真实气泡、不触碰本机真实记录。
-        List<NotificationAlert>? qaPresented = tray.Qa.Mode == QaMode.Notifications ? [] : null;
-        TrayBalloonNotifier? notifier = null;
         var notifications = new NotificationRouter(
             NotificationConsumptionStore.Create(tray.Qa),
             qaPresented is { } sink ? alert => { sink.Add(alert); return true; } : alert => notifier is { } balloon && balloon.Show(alert));

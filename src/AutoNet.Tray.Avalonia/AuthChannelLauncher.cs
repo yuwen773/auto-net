@@ -24,6 +24,7 @@ internal sealed class AuthChannelLauncher
         AlreadyConsumed,
         UntrustedState,
         UacDeclined,
+        StartFailed,
         ResultConsumed,
     }
 
@@ -31,6 +32,8 @@ internal sealed class AuthChannelLauncher
 
     private readonly Func<Task<StatusSnapshot?>> refresh;
     private readonly Func<string, Process?> start;
+    private readonly Action<NotificationAlert>? presentAlert;
+    private readonly Func<Task>? openPortalFallback;
     private readonly string resultPath;
     private DateTimeOffset? consumedGrant;
     private DateTimeOffset? launchedAt;
@@ -39,10 +42,14 @@ internal sealed class AuthChannelLauncher
 
     public AuthChannelLauncher(
         Func<Task<StatusSnapshot?>> refresh,
-        Func<string, Process?> start)
+        Func<string, Process?> start,
+        Action<NotificationAlert>? presentAlert = null,
+        Func<Task>? openPortalFallback = null)
     {
         this.refresh = refresh;
         this.start = start;
+        this.presentAlert = presentAlert;
+        this.openPortalFallback = openPortalFallback;
         var dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoNet");
         Directory.CreateDirectory(dir);
@@ -81,11 +88,11 @@ internal sealed class AuthChannelLauncher
         var fresh = await refresh();
         if (fresh?.AuthChannelRequested != true || fresh.AuthChannelNotBefore != grant) return ObserveOutcome.UntrustedState;
         var outcome = Launch(reading);
-        if (outcome == ObserveOutcome.Launched || outcome == ObserveOutcome.UacDeclined)
+        if (outcome == ObserveOutcome.Launched || outcome == ObserveOutcome.UacDeclined || outcome == ObserveOutcome.StartFailed)
         {
-            // UAC 拒绝同样视为本授予已消费：用户此刻不要通道，绝不在同一授予上反复弹 UAC。
+            // UAC 拒绝与启动失败同样视为本授予已消费：绝不自我重试、绝不反复打扰。
             consumedGrant = grant;
-            if (outcome == ObserveOutcome.UacDeclined) launchedAt = null;
+            if (outcome != ObserveOutcome.Launched) launchedAt = null;
         }
         return outcome;
     }
@@ -103,13 +110,24 @@ internal sealed class AuthChannelLauncher
         launchedAt = DateTimeOffset.UtcNow;
         try { File.Delete(resultPath); } catch (IOException) { }
         catch (UnauthorizedAccessException) { }
-        var process = start(resultPath);
-        if (process is null)
+        try
         {
-            // UAC 拒绝 = 用户此刻不要通道；消费标记由调用方置位（同授予不重试）。
-            return ObserveOutcome.UacDeclined;
+            var process = start(resultPath);
+            if (process is null)
+            {
+                // UAC 拒绝 = 用户此刻不要通道；消费标记由调用方置位（同授予不重试）。
+                return ObserveOutcome.UacDeclined;
+            }
+            return ObserveOutcome.Launched;
         }
-        return ObserveOutcome.Launched;
+        catch (Exception ex)
+        {
+            // 进程隔离（工单 #25）：启动异常不外溢到管道事件流；受控呈现并回退浏览器兜底。
+            Present(NotificationCodes.AuthChannelNeedsHuman,
+                "内嵌认证通道启动失败（" + ex.GetType().Name + "），已回退浏览器兜底；请人工完成认证。");
+            _ = openPortalFallback?.Invoke();
+            return ObserveOutcome.StartFailed;
+        }
     }
 
     private void ConsumeResult(StatusSnapshot reading)
@@ -121,8 +139,28 @@ internal sealed class AuthChannelLauncher
         if (!AuthChannelReceipt.Validate(result, resultPath, resultPath, launchedAt.Value, out _)) return;
         lastConclusion = AuthChannelReceipt.MapToSubmissionOutcome(result.Conclusion)?.ToString()
             ?? "Unknown";
+        // 工单 #25：受控关键通知（不静默）。失败回退系统浏览器兜底；需人工呈现窗口提示。
+        if (result.Detail.Contains("error=", StringComparison.Ordinal))
+        {
+            Present(NotificationCodes.AuthChannelNeedsHuman,
+                "内嵌认证通道无法运行（" + result.Detail + "），已回退浏览器兜底；请人工完成认证。");
+            _ = openPortalFallback?.Invoke();
+        }
+        else if (result.Conclusion == AuthChannelConclusion.NeedsHuman)
+        {
+            Present(NotificationCodes.AuthChannelNeedsHuman,
+                "内嵌认证通道遇到验证码或页面限制，窗口保持门户页打开，请人工完成剩余步骤。");
+        }
+        else
+        {
+            Present(NotificationCodes.AuthChannelResult,
+                "内嵌认证通道结论：" + lastConclusion + "。");
+        }
         try { File.Delete(resultPath); } catch (IOException) { }
     }
+
+    private void Present(string code, string body) =>
+        presentAlert?.Invoke(new NotificationAlert(code, "AutoNet · 内嵌认证通道", body, Warning: true));
 
     private void TryConsumeResultFile()
     {

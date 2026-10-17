@@ -91,6 +91,8 @@ internal static class Elevation
         startInfo.ArgumentList.Add(resultPath);
         startInfo.ArgumentList.Add("--timeout");
         startInfo.ArgumentList.Add("150");
+        startInfo.ArgumentList.Add("--human-wait");
+        startInfo.ArgumentList.Add("600");
         try
         {
             return start(startInfo);

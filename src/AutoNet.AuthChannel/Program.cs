@@ -31,7 +31,19 @@ internal static class Program
             var window = new AuthChannelWindow(options, credential);
             Application.Run(window);
             window.CleanupSession();
-            return window.ExitCode;
+            var exitCode = window.ExitCode;
+            try
+            {
+                if (exitCode == 1)
+                {
+                    // 运行失败（含 WebView2 Runtime 缺失）也要落结果：托盘据此回退浏览器兜底，
+                    // 绝不静默失败（工单 #25）。
+                    AuthChannelWindow.WriteFailureResult(options.ResultPath, window.LastError);
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return exitCode;
         }
         catch (Exception ex)
         {
@@ -47,13 +59,15 @@ internal sealed record ChannelOptions(
     int TimeoutSeconds,
     string? FixtureDir,
     string FixtureHost,
-    CredentialSource? Injected = null)
+    CredentialSource? Injected = null,
+    int HumanWaitSeconds = 600)
 {
     public static ChannelOptions? Parse(string[] args)
     {
         string? startUrl = null, resultPath = null, fixtureDir = null, fixtureHost = "portal.fixture";
         var timeout = 90;
         var fromSettings = false;
+        var humanWait = 600;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
@@ -64,6 +78,7 @@ internal sealed record ChannelOptions(
                 case "--fixture-dir" when i + 1 < args.Length: fixtureDir = Path.GetFullPath(args[++i]); break;
                 case "--fixture-host" when i + 1 < args.Length: fixtureHost = args[++i]; break;
                 case "--from-settings": fromSettings = true; break;
+                case "--human-wait" when i + 1 < args.Length && int.TryParse(args[++i], out var h) && h is >= 0 and <= 3600: humanWait = h; break;
                 default: return null;
             }
         }
@@ -88,7 +103,7 @@ internal sealed record ChannelOptions(
         }
         if (string.IsNullOrWhiteSpace(startUrl) || string.IsNullOrWhiteSpace(resultPath)) { return null; }
         if (fixtureDir is not null && !Directory.Exists(fixtureDir)) { return null; }
-        return new ChannelOptions(startUrl, resultPath, timeout, fixtureDir, fixtureHost, injected);
+        return new ChannelOptions(startUrl, resultPath, timeout, fixtureDir, fixtureHost, injected, humanWait);
     }
 }
 

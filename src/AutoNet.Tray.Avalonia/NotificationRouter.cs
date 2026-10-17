@@ -165,6 +165,17 @@ internal sealed class NotificationRouter
             "AutoNet · 需要浏览器认证",
             "连续认证失败，需要使用浏览器完成校园网认证。",
             Warning: true),
+        // 内嵌认证通道（工单 #25 / ADR-0009）：本地结果呈现与浏览器兜底回退共用词表。
+        [NotificationCodes.AuthChannelNeedsHuman] = new(
+            NotificationCodes.AuthChannelNeedsHuman,
+            "AutoNet · 内嵌认证需人工",
+            "内嵌认证通道遇到验证码或页面限制，已在通道窗口保持门户页打开；请人工完成剩余步骤。",
+            Warning: true),
+        [NotificationCodes.AuthChannelResult] = new(
+            NotificationCodes.AuthChannelResult,
+            "AutoNet · 内嵌认证结果",
+            "内嵌认证通道已完成一次门户提交，结果以诊断页与通道窗口为准。",
+            Warning: false),
     };
 
     /// <summary>启动暂停提醒：与暂停词表同文案——两者描述同一事实（认证仍在暂停）。</summary>

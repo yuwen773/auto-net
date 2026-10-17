@@ -24,8 +24,12 @@ internal sealed class AuthChannelWindow : Form
     private Microsoft.Web.WebView2.Core.CoreWebView2Environment? _environment;
     private Microsoft.Web.WebView2.WinForms.WebView2? _webView;
     private readonly TaskCompletionSource _browserExited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly CancellationTokenSource _humanCancellationTokenSource = new();
 
     public int ExitCode { get; private set; } = 1;
+
+    /// <summary>最近一次运行失败的受控错误（类型名），供失败结果文件携带（工单 #25 回退链）。</summary>
+    public string LastError { get; private set; } = "";
 
     public AuthChannelWindow(ChannelOptions options, CredentialSource credential)
     {
@@ -44,6 +48,7 @@ internal sealed class AuthChannelWindow : Form
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
+        FormClosing += (_, _) => _humanCancellationTokenSource.Cancel();
         _ = RunChannelAsync();
     }
 
@@ -79,9 +84,22 @@ internal sealed class AuthChannelWindow : Form
             conclusion = AuthChannelConclusion.Unknown;
             runtimeError = "error=" + ex.GetType().Name;
             Console.Error.WriteLine(runtimeError);
+            LastError = runtimeError;
         }
         WriteResult(_options.ResultPath, conclusion,
             runtimeError.Length > 0 ? runtimeError : DetailFor(conclusion));
+        if (runtimeError.Length == 0)
+        {
+            AuthChannelLogWriter.Append("AuthChannelResult", "conclusion=" + conclusion);
+        }
+        if (conclusion == AuthChannelConclusion.NeedsHuman)
+        {
+            // 工单 #25：验证码 / 勾选拒绝 / 结构不可识别 → 窗口自动可见化，页面保持打开
+            // 等人工完成（自动提交在 NeedsHuman 判定前就已停止，每页一次提交约束不变）。
+            AuthChannelLogWriter.Append("AuthChannelNeedsHuman", "window-shown=true; auto-submit=halted");
+            BeginInvoke(ShowForHuman);
+            await HumanAssistDelayAsync();
+        }
         ExitCode = conclusion switch
         {
             AuthChannelConclusion.LoggedIn => 0,
@@ -90,6 +108,40 @@ internal sealed class AuthChannelWindow : Form
         };
         if (runtimeError.Length > 0) { ExitCode = 1; }
         BeginInvoke(Close);
+    }
+
+    private void ShowForHuman()
+    {
+        var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
+        WindowState = FormWindowState.Normal;
+        ShowInTaskbar = true;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        Location = new Point(
+            Math.Max(0, area.Left + (area.Width - Width) / 2),
+            Math.Max(0, area.Top + (area.Height - Height) / 2));
+        TopMost = true;
+        Show();
+        Activate();
+    }
+
+    /// <summary>保持门户页打开等人工完成；超时或用户关闭即退出（页面状态由学校侧会话承载）。</summary>
+    private async Task HumanAssistDelayAsync()
+    {
+        var wait = _options.HumanWaitSeconds;
+        if (wait <= 0) return;
+        try { await Task.Delay(TimeSpan.FromSeconds(wait), _humanCancellationTokenSource.Token); }
+        catch (OperationCanceledException) { /* 用户已关闭窗口 */ }
+    }
+
+    internal static void WriteFailureResult(string path, string error)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            conclusion = "Unknown",
+            detectedAt = DateTimeOffset.UtcNow.ToString("o"),
+            detail = error,
+        });
+        File.WriteAllText(path, payload, new UTF8Encoding(false));
     }
 
     private static string DetailFor(AuthChannelConclusion conclusion) => conclusion switch
@@ -135,6 +187,7 @@ internal sealed class AuthChannelWindow : Form
         core.NavigationCompleted += (_, _) => navigation.TrySetResult();
         core.Navigate(_options.StartUrl);
         await navigation.Task.WaitAsync(timeout.Token);
+        AuthChannelLogWriter.Append("AuthChannelStarted", "url=" + new Uri(_options.StartUrl).GetLeftPart(UriPartial.Path));
 
         var probe = await core.ExecuteScriptAsync(ProbeScript).WaitAsync(timeout.Token);
         if (!JsonDocument.Parse(probe).RootElement.GetProperty("found").GetBoolean())
