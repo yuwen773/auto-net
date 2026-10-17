@@ -9,7 +9,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- WebView2 包 lib_manual 的多目标引用提示（MSB3277）为包结构固有，与本项目无关。 -->
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <!-- 内嵌认证通道辅助进程（工单 #21 / ADR-0009）：凭据经 stdin JSON 传入，绝不进命令行。 -->
   </PropertyGroup>
 
