@@ -136,6 +136,7 @@ tests = tests.Concat(LogCentreRegression.Cases).ToArray();
 tests = tests.Concat(TrayRegression.Cases).ToArray();
 tests = tests.Concat(UiFreezeRegression.Cases).ToArray();
 tests = tests.Concat(AvaloniaPrototypeRegression.Cases).ToArray();
+tests = tests.Concat(AuthChannelRegression.Cases).ToArray();
 tests = tests.Concat(AvaloniaShellRegression.Cases).ToArray();
 tests = tests.Concat(OverviewRegression.Cases).ToArray();
 tests = tests.Concat(UnblockRegression.Cases).ToArray();

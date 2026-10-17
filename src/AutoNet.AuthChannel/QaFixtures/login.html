@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>夹具门户 · 登录</title>
+</head>
+<body>
+<h1>夹具认证门户</h1>
+<form id="loginForm" onsubmit="return false">
+  <input type="text" name="username" placeholder="账号">
+  <input type="password" name="password" placeholder="密码">
+  <label><input type="checkbox" name="agreement"> 我已阅读并同意上网协议</label>
+  <button type="button" id="submitBtn">登 录</button>
+  <span id="err" data-portal-error hidden>登录失败，密码错误</span>
+</form>
+<p>本页为离线测试夹具（工单 #21），不连接任何真实门户。</p>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var result = params.get('case') || 'success';
+  var box = document.querySelector('input[name=agreement]');
+  var btn = document.getElementById('submitBtn');
+  var err = document.getElementById('err');
+  if (result === 'reject') {
+    // 模拟页面强制回拨勾选：通道勾选后复查发现未勾选，须停止自动提交。
+    box.addEventListener('change', function () { if (box.checked) { box.checked = false; } });
+  }
+  btn.addEventListener('click', function () {
+    var pw = document.querySelector('input[name=password]');
+    if (!pw.value) { err.hidden = false; err.textContent = '登录失败，密码为空'; return; }
+    if (!box.checked) { err.hidden = false; err.textContent = '登录失败，请先同意协议'; return; }
+    if (result === 'success') {
+      location.href = 'https://portal.fixture/success.html';
+    } else {
+      err.hidden = false; // failure：停留本页并显示错误特征
+    }
+  });
+})();
+</script>
+</body>
+</html>

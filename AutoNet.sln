@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AutoNet.Tests", "tests\Auto
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AutoNet.Tray.Avalonia", "src\AutoNet.Tray.Avalonia\AutoNet.Tray.Avalonia.csproj", "{AED9E233-4BAC-460F-A08A-CE9F1EE15EA7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AutoNet.AuthChannel", "src\AutoNet.AuthChannel\AutoNet.AuthChannel.csproj", "{ED1F59CA-B4CF-4151-927E-67CFFCC26513}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -87,6 +89,18 @@ Global
 		{AED9E233-4BAC-460F-A08A-CE9F1EE15EA7}.Release|x64.Build.0 = Release|Any CPU
 		{AED9E233-4BAC-460F-A08A-CE9F1EE15EA7}.Release|x86.ActiveCfg = Release|Any CPU
 		{AED9E233-4BAC-460F-A08A-CE9F1EE15EA7}.Release|x86.Build.0 = Release|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Debug|x64.Build.0 = Debug|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Debug|x86.Build.0 = Debug|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Release|x64.ActiveCfg = Release|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Release|x64.Build.0 = Release|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Release|x86.ActiveCfg = Release|Any CPU
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -97,5 +111,6 @@ Global
 		{B74BE3A1-22D5-488E-992B-BA1304E70275} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{BCA6222C-85B2-4220-9B1A-A5DB3BFDC00B} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{AED9E233-4BAC-460F-A08A-CE9F1EE15EA7} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{ED1F59CA-B4CF-4151-927E-67CFFCC26513} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
