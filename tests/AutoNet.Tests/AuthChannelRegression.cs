@@ -62,6 +62,36 @@ internal static class AuthChannelRegression
             var r = AuthChannelResultFile.Parse(Form("Unknown", DateTimeOffset.UtcNow, long_));
             Require(r.Detail.Length <= 500, "Detail 未截断");
         })),
+        ("内嵌通道回归：结论映射到既有凭据提交分类且 Unknown 不伪造", () => Sync(() =>
+        {
+            Require(AuthChannelReceipt.MapToSubmissionOutcome(AuthChannelConclusion.LoggedIn) == LoginResult.Accepted, "LoggedIn 映射不符");
+            Require(AuthChannelReceipt.MapToSubmissionOutcome(AuthChannelConclusion.NotLoggedIn) == LoginResult.RejectedCredentials, "NotLoggedIn 映射不符");
+            Require(AuthChannelReceipt.MapToSubmissionOutcome(AuthChannelConclusion.NeedsHuman) == LoginResult.NeedsInteraction, "NeedsHuman 映射不符");
+            Require(AuthChannelReceipt.MapToSubmissionOutcome(AuthChannelConclusion.Unknown) is null, "Unknown 不得伪造提交结论");
+            Require(Enum.GetValues<LoginResult>().Length == 6, "凭据提交分类被增删——状态种类必须不变");
+        })),
+        ("内嵌通道回归：回执双核对拒绝路径不符与过期结果", () => Sync(() =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var result = AuthChannelResultFile.Parse(Form("LoggedIn", now, ""));
+            Require(AuthChannelReceipt.Validate(result, @"C:\x\result.json", @"C:\x\RESULT.json", now.AddMinutes(-1), out var reason1)
+                && reason1.Length == 0, "同一路径不同大小写不应拒绝");
+            Require(!AuthChannelReceipt.Validate(result, @"C:\x\other.json", @"C:\x\result.json", now.AddMinutes(-1), out var reason2)
+                && reason2 == "path-mismatch", "路径不符未被拒");
+            var stale = AuthChannelResultFile.Parse(Form("LoggedIn", now.AddMinutes(-5), ""));
+            Require(!AuthChannelReceipt.Validate(stale, @"C:\x\result.json", @"C:\x\result.json", now.AddMinutes(-1), out var reason3)
+                && reason3 == "stale-result", "过期结果未被拒");
+            Require(!AuthChannelReceipt.Validate(result, @"C:\x\result.json", @"C:\x\result.json", now.AddMinutes(5), out var reason4)
+                && reason4 == "stale-result", "时刻早于发起未被拒");
+        })),
+        ("内嵌通道回归：三事件码归入认证分类且可被日志页筛选", () => Sync(() =>
+        {
+            foreach (var code in new[] { "AuthChannelStarted", "AuthChannelResult", "AuthChannelNeedsHuman" })
+            {
+                var entry = new ActivityLog { Time = DateTimeOffset.UtcNow, EventCode = code };
+                Require(LogEventClassifier.Classify(entry) == LogEventCategory.Authentication, code + " 未归入认证分类");
+            }
+        })),
     ];
 
     private static string Form(string conclusion, DateTimeOffset at, string detail) =>
