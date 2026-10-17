@@ -26,7 +26,7 @@ $failures = 0
 
 function Assert([bool]$Condition, [string]$Name) {
     Write-Host ("{0} {1}" -f $(if ($Condition) { 'PASS' } else { 'FAIL' }), $Name)
-    script:$failures += $(if ($Condition) { 0 } else { 1 })
+    $script:failures += $(if ($Condition) { 0 } else { 1 })
     $report += ('{0} {1}' -f $(if ($Condition) { 'PASS' } else { 'FAIL' }), $Name)
 }
 
