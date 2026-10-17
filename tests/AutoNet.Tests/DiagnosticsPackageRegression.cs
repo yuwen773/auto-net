@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -56,18 +57,20 @@ internal static class DiagnosticsPackageRegression
         ("诊断包：输出路径默认桌面命名并区分目录与显式文件", () =>
         {
             var desktop = Path.Combine("desktop", "fixture");
+            // 期望名与产品同一 ToLocalTime 公式：钉格式契约而非钟点（CI runner 时区为 UTC）。
+            var expectedName = "autonet-diagnostics-" + FixtureNow.ToLocalTime().ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".zip";
             Require(DiagnosticsPackage.ResolveOutputPath(null, desktop, FixtureNow) ==
-                Path.Combine(desktop, "autonet-diagnostics-20261015-124437.zip"), "缺省路径应落桌面默认名");
+                Path.Combine(desktop, expectedName), "缺省路径应落桌面默认名");
             Require(DiagnosticsPackage.ResolveOutputPath("   ", desktop, FixtureNow) ==
-                Path.Combine(desktop, "autonet-diagnostics-20261015-124437.zip"), "空白路径应等同缺省");
+                Path.Combine(desktop, expectedName), "空白路径应等同缺省");
             var explicitFile = Path.Combine("out", "diag.zip");
             Require(DiagnosticsPackage.ResolveOutputPath(explicitFile, desktop, FixtureNow) == explicitFile, "显式文件路径应原样使用");
             WithTemp(directory =>
             {
                 Require(DiagnosticsPackage.ResolveOutputPath(directory, desktop, FixtureNow) ==
-                    Path.Combine(directory, "autonet-diagnostics-20261015-124437.zip"), "已存在目录应接收默认文件名");
+                    Path.Combine(directory, expectedName), "已存在目录应接收默认文件名");
                 Require(DiagnosticsPackage.ResolveOutputPath(directory + Path.DirectorySeparatorChar, desktop, FixtureNow) ==
-                    Path.Combine(directory, "autonet-diagnostics-20261015-124437.zip"), "目录后缀路径应接收默认文件名");
+                    Path.Combine(directory, expectedName), "目录后缀路径应接收默认文件名");
             });
             return Task.CompletedTask;
         }),
@@ -120,7 +123,7 @@ internal static class DiagnosticsPackageRegression
                 using var zip = ZipFile.OpenRead(result.Path);
                 string Text(string name) => new StreamReader(zip.GetEntry(name)!.Open()).ReadToEnd();
                 var readme = Text("README.txt");
-                Require(readme.Contains("2026-10-15 12:44:37 +08:00", StringComparison.Ordinal) && readme.Contains("test-build-1", StringComparison.Ordinal), "README 缺导出时间或构建号");
+                Require(readme.Contains(FixtureNow.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture), StringComparison.Ordinal) && readme.Contains("test-build-1", StringComparison.Ordinal), "README 缺导出时间或构建号");
                 Require(readme.Contains("net_state.json", StringComparison.Ordinal) && readme.Contains("logs/autonet-2026-10-14.jsonl", StringComparison.Ordinal), "README 内容清单不完整");
                 Require(readme.Contains("阅读指引", StringComparison.Ordinal) && readme.Contains("隐私说明", StringComparison.Ordinal), "README 缺阅读指引或隐私说明");
                 var net = JsonSerializer.Deserialize<NetworkDiagnosticReport>(Text("net_state.json"), DiagnosticsPackage.PackageJson)!;
@@ -362,7 +365,7 @@ internal static class DiagnosticsPackageRegression
                     Collect = (_, _) => Task.FromResult(new LiveDiagnostics(report, portal)),
                     ExportedAt = FixtureNow, BuildId = "test-build-1"
                 }, default).GetAwaiter().GetResult();
-                Require(result.Entries.Count == 6, "脏输入不应改变六类内容合同");
+                Require(result.Entries.Count == 6, "脏输入不应改变六类内容合同（实得 " + result.Entries.Count + "）");
                 using var zip = ZipFile.OpenRead(result.Path);
                 foreach (var entry in zip.Entries)
                 {
