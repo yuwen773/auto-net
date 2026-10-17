@@ -1,0 +1,38 @@
+name: Release on tag
+# 工单 #22（ADR-0010）：tag v* → 构建 → 完整性校验（BUILD-ID 必须对应该 tag 指向的提交）→ 打包 → 自动创建 GitHub Release（zip + SHA256SUMS.txt + BUILD-ID.txt，正文取 tag annotation）。
+# workflow_dispatch 仅用于验证构建段；不会创建 Release（见 release 步骤条件）。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.401'
+      - name: Build and run offline fixtures
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1 -Publish
+      - name: Verify bundle matches tag commit
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/verify-bundle.ps1 -Bundle artifacts/AutoNet-win-x64 -ExpectedCommit ${{ github.sha }}
+      - name: Package zip
+        shell: pwsh
+        run: Compress-Archive -Path artifacts/AutoNet-win-x64 -DestinationPath "AutoNet-win-x64-${{ github.ref_name }}.zip" -Force
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            "AutoNet-win-x64-${{ github.ref_name }}.zip#AutoNet-win-x64-${{ github.ref_name }}.zip" `
+            "artifacts/AutoNet-win-x64/SHA256SUMS.txt#SHA256SUMS.txt" `
+            "artifacts/AutoNet-win-x64/BUILD-ID.txt#BUILD-ID.txt" `
+            --notes-from-tag --title "${{ github.ref_name }}"
