@@ -139,7 +139,10 @@ public partial class MainView : UserControl
                 Spacing = 10,
                 Children = { icon, label }
             };
-            nav.Items.Add(new ListBoxItem { Tag = info.Page, Content = content, Padding = new Thickness(12, 9) });
+            // 导航项的可访问名称与页面可见名称一致（#14 / 故事 33）；图标是装饰，文本承载信息。
+            nav.Items.Add(ShellAccessibility.Named(
+                new ListBoxItem { Tag = info.Page, Content = content, Padding = new Thickness(12, 9) },
+                ShellAccessibility.NavItem(info.Page)));
         }
     }
 

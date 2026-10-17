@@ -77,13 +77,13 @@ internal static class OverviewView
             LineHeight = 19,
             Opacity = 0.9
         });
-        var button = new Button
+        var button = ShellAccessibility.Named(new Button
         {
             Content = entry.Label,
             IsEnabled = entry.Enabled,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 2, 0, 0)
-        };
+        }, ShellAccessibility.PortalOpen(entry));
         button.Click += (_, _) => portalOpenRequested();
         body.Children.Add(button);
         return ShellTheming.Card(body);
@@ -120,7 +120,7 @@ internal static class OverviewView
 
         if (content.HasTechnical)
         {
-            var expander = new Expander
+            var expander = ShellAccessibility.Named(new Expander
             {
                 Header = "技术详情",
                 IsExpanded = technicalExpanded,
@@ -131,7 +131,7 @@ internal static class OverviewView
                     FontSize = 12.5,
                     Margin = new Thickness(0, 2, 0, 2)
                 }
-            };
+            }, ShellAccessibility.TechnicalDetail);
             // 重建时保留展开状态；状态刷新不会把已展开的详情折叠回去。
             expander.PropertyChanged += (_, e) =>
             {
@@ -214,13 +214,14 @@ internal static class OverviewView
         });
         if (content.Unblock.Visible)
         {
-            var button = new Button
+            // 名称携带当前认证事实（故事 33）：内容重建即更新，不依据陈旧信息。
+            var button = ShellAccessibility.Named(new Button
             {
                 Content = content.Unblock.Label,
                 IsEnabled = content.Unblock.Enabled,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 4, 0, 0)
-            };
+            }, ShellAccessibility.Unblock(content));
             button.Click += (_, _) => unblockRequested();
             column.Children.Add(button);
         }
@@ -244,12 +245,13 @@ internal static class OverviewView
             VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(state, 1);
-        var button = new Button
+        // 名称携带当前状态与明确意图（故事 33、40）：状态变化经内容重建更新名称。
+        var button = ShellAccessibility.Named(new Button
         {
             Content = content.Recovery.Label,
             IsEnabled = content.Recovery.Enabled,
             VerticalAlignment = VerticalAlignment.Center
-        };
+        }, ShellAccessibility.RecoveryToggle(content.Recovery));
         if (content.Recovery.Intent is { } intent) button.Click += (_, _) => recoveryRequested(intent);
         Grid.SetColumn(button, 2);
         recoveryRow.Children.Add(caption);

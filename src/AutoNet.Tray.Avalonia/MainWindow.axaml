@@ -5,5 +5,8 @@
         Title="AutoNet · 校园网连接守护"
         Width="980" Height="640" MinWidth="720" MinHeight="460"
         WindowStartupLocation="CenterScreen">
-  <local:MainView x:Name="view" />
+  <!-- 视图缩放宿主（#14 / T05 受控缩放）：默认恒等变换不影响常规布局；QA 以 LayoutTransform 模拟缩放。 -->
+  <LayoutTransformControl x:Name="viewScale">
+    <local:MainView x:Name="view" />
+  </LayoutTransformControl>
 </Window>

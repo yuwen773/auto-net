@@ -236,11 +236,16 @@ public sealed class App : Application
             page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
         logsPage.Updated += content => shell.ApplyExternal(content);
-        // 概览 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
-        Action<ElevatedOperationKind> launcher = tray.Qa.Mode == QaMode.Overview ? QaOverview.RecordLaunch : Elevation.Launch;
+        // 概览/可访问性 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
+        Action<ElevatedOperationKind> launcher = tray.Qa.Mode switch
+        {
+            QaMode.Overview => QaOverview.RecordLaunch,
+            QaMode.Accessibility => QaAccessibility.RecordLaunch,
+            _ => Elevation.Launch
+        };
         var actions = new OverviewActions(pipe.RefreshAsync, launcher);
-        // 设置修改入口（#8）走同一条提权路径；设置页 QA 模式下替换为受控记录（不弹 UAC）。
-        Action modifySettings = tray.Qa.Mode == QaMode.Settings ? QaSettings.RecordModify : LaunchSettingsEditor;
+        // 设置修改入口（#8）走同一条提权路径；设置页与可访问性 QA 模式下替换为受控空操作（不弹 UAC）。
+        Action modifySettings = tray.Qa.Mode is QaMode.Settings or QaMode.Accessibility ? QaSettings.RecordModify : LaunchSettingsEditor;
         // 主题（#9 / 故事 27–29）：设置页外观分区直接读写偏好并当场应用（不走状态投影，
         // 轮询重建不打断选择）；跟随模式下响应系统主题变化，手动选择保持优先。
         // 订阅挂在长驻的托盘进程；提权/提示窗口是短生命周期进程，跟随语义由框架对
@@ -251,14 +256,14 @@ public sealed class App : Application
         Action<ThemePreference> themeSelected = preference => _ = theme!.Select(preference);
         // 日志页复制与目录打开在 QA 模式下替换为受控空操作：不触碰用户剪贴板、不启动资源管理器。
         // 复制文本经 QA 报告的 CopyText 逐字核验；目录入口存在性由截图核验（真实点击为人工项）。
-        Func<string, Task>? copyHandler = tray.Qa.Mode == QaMode.Logs ? _ => Task.CompletedTask : null;
-        Action? folderHandler = tray.Qa.Mode == QaMode.Logs ? () => { } : null;
+        Func<string, Task>? copyHandler = tray.Qa.Mode is QaMode.Logs or QaMode.Accessibility ? _ => Task.CompletedTask : null;
+        Action? folderHandler = tray.Qa.Mode is QaMode.Logs or QaMode.Accessibility ? () => { } : null;
         // 诊断包导出（#12 / 故事 71–74、81）：普通界面状态机驱动——保存对话框与提权启动
-        // 都以委托注入；export-diagnostics QA 模式替换为受控夹具（不弹对话框、不弹 UAC）。
+        // 都以委托注入；export-diagnostics 与可访问性 QA 模式替换为受控夹具（不弹对话框、不弹 UAC）。
         MainWindow? window = null;
         Func<Task<string?>> pickTarget;
         Func<string, Task<DiagnosticsExportLaunch?>> exportLaunch;
-        if (tray.Qa.Mode == QaMode.ExportDiagnostics)
+        if (tray.Qa.Mode is QaMode.ExportDiagnostics or QaMode.Accessibility)
         {
             pickTarget = QaExport.PickAsync;
             exportLaunch = QaExport.LaunchAsync;
@@ -269,8 +274,12 @@ public sealed class App : Application
             exportLaunch = LaunchDiagnosticsExportAsync;
         }
         var diagnosticsExporter = new DiagnosticsExporter(pickTarget, exportLaunch);
+        // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
+        Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility
+            ? QaAccessibility.RecordPortalOpen
+            : () => _ = portalOpener.OpenManuallyAsync();
         window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings,
-            portalOpen: () => _ = portalOpener.OpenManuallyAsync(), themeProvider, themeSelected, diagnosticsExporter);
+            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
@@ -286,9 +295,10 @@ public sealed class App : Application
             notifier = new TrayBalloonNotifier(trayHost.TrayIcon!);
             pipe.Updated += notifications.Observe;
         }
-        // 自动开页由状态读取驱动（#11）；portal-open QA 模式不订阅管道——由 QaPortal 手工驱动，
-        // 时序完全确定（与通知 QA 同一约定）。手动开页只经概览页按钮。
-        if (tray.Qa.Mode != QaMode.PortalOpen)
+        // 自动开页由状态读取驱动（#11）；portal-open 与可访问性 QA 模式不订阅管道——前者由
+        // QaPortal 手工驱动（时序完全确定），后者夹具只驱动投影显示、绝不触发真实浏览器。
+        // 手动开页只经概览页按钮。
+        if (tray.Qa.Mode is not (QaMode.PortalOpen or QaMode.Accessibility))
             pipe.Updated += reading => _ = portalOpener.EvaluateAsync(reading);
         desktop.Exit += (_, _) =>
         {
@@ -334,6 +344,9 @@ public sealed class App : Application
                 break;
             case QaMode.ExportDiagnostics:
                 QaExport.Run(shell, window, diagnosticsExporter, tray.Qa, code => desktop.Shutdown(code));
+                break;
+            case QaMode.Accessibility:
+                QaAccessibility.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
         }
     }

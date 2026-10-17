@@ -85,13 +85,14 @@ internal static class DiagnosticsView
             body.Children.Add(notes);
         }
 
-        var button = new Button
+        // 名称随导出状态更新（#14 / 故事 33）：进行中时如实反映，与禁用状态一致。
+        var button = ShellAccessibility.Named(new Button
         {
             Content = "导出诊断包…",
             IsEnabled = !state.Running && exportRequested is not null,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 2, 0, 0)
-        };
+        }, ShellAccessibility.Export(state));
         if (exportRequested is not null) button.Click += (_, _) => exportRequested();
         body.Children.Add(button);
         return ShellTheming.Card(body);

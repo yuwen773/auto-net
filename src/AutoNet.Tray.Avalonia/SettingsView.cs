@@ -82,7 +82,10 @@ internal static class SettingsView
             FontSize = 13,
             Opacity = 0.85
         });
-        var button = new Button { Content = content.ModifyLabel, MinWidth = 132, HorizontalAlignment = HorizontalAlignment.Left };
+        // 修改入口的标签随状态投影变化（不可信时为固定降级文案）；显式可访问名称与可见文本一致（#14 / 故事 33）。
+        var button = ShellAccessibility.Named(
+            new Button { Content = content.ModifyLabel, MinWidth = 132, HorizontalAlignment = HorizontalAlignment.Left },
+            content.ModifyLabel);
         button.Click += (_, _) => modifyRequested();
         modify.Children.Add(button);
         page.Children.Add(ShellTheming.Card(modify));

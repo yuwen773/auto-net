@@ -28,7 +28,9 @@ internal enum QaMode
     /// <summary>浏览器兜底开页 QA：首次立即、授予去重、跨重启冷却与受控失败的逐场景证据（scripts/qa-avalonia-portal-open.ps1 使用）。</summary>
     PortalOpen,
     /// <summary>诊断包导出 QA：普通界面选路径、提权交接与结果显示的逐场景证据（scripts/qa-avalonia-export.ps1 使用）。</summary>
-    ExportDiagnostics
+    ExportDiagnostics,
+    /// <summary>可访问性与缩放 QA：键盘导航/焦点/触发、可访问名称动态更新与受控缩放的逐项证据（scripts/qa-avalonia-accessibility.ps1 使用，迁移工单 #14）。</summary>
+    Accessibility
 }
 
 /// <summary>
@@ -59,6 +61,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "notifications" => QaMode.Notifications,
             "portal-open" => QaMode.PortalOpen,
             "export-diagnostics" => QaMode.ExportDiagnostics,
+            "accessibility" => QaMode.Accessibility,
             _ => QaMode.None
         };
         return new QaEnvironment(mode, Path.GetFullPath(directory));
@@ -87,6 +90,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string ExportReportPath => Path.Combine(Directory, "export.json");
     public string ExportElevatedReportPath => Path.Combine(Directory, "export-elevated.json");
     public string ExportResultPath => Path.Combine(Directory, "export-result.json");
+    public string AccessibilityReportPath => Path.Combine(Directory, "accessibility.json");
     public string ParseErrorReportPath => Path.Combine(Directory, "parse-error.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
@@ -104,6 +108,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string ThemePrefsShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string PortalOpenShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string AccessibilityShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -334,4 +340,39 @@ internal sealed record QaThemePrefsReport(
     string MutexName,
     string ThemeVariant,
     List<QaThemePrefsStep> Steps,
+    string? Error = null);
+
+/// <summary>可访问性一步证据（#14 / T06）：Tab 停留点的控件类型与可访问名称（先序树序）。</summary>
+internal sealed record QaAccessibilityTabStop(string Kind, string Name);
+
+internal sealed record QaPageTabStops(string Page, List<QaAccessibilityTabStop> Stops);
+
+/// <summary>可访问名称随状态证据（#14 / 故事 33）：场景与关键控件当时实际使用的名称。</summary>
+internal sealed record QaAccessibilityNames(
+    string Scenario,
+    string RecoveryName,
+    string? UnblockName,
+    string? PortalOpenName,
+    string? ExportName);
+
+/// <summary>一次键盘驱动（#14 / 故事 32）：上下文、按键、焦点是否设置、是否触发效果与记录到的结果。</summary>
+internal sealed record QaAccessibilityKeyboard(string Context, string Key, bool FocusSet, bool Triggered, string Recorded);
+
+/// <summary>一档受控缩放（#14 / T05 / 故事 31）：页面、缩放档位、可达结论与被裁切控件清单、截图文件。</summary>
+internal sealed record QaAccessibilityScale(string Page, string Scale, bool Pass, List<string> Clipped, string? File);
+
+internal sealed record QaAccessibilityReport(
+    string Mode,
+    bool Fixture,
+    string ProcessPath,
+    int ProcessId,
+    bool Administrator,
+    string MutexName,
+    string ThemeVariant,
+    List<QaPageTabStops> TabSequences,
+    List<QaAccessibilityNames> Names,
+    List<QaAccessibilityKeyboard> Keyboard,
+    List<QaAccessibilityScale> Scaling,
+    string RealDpiVerification,
+    string ScalingEvidence,
     string? Error = null);

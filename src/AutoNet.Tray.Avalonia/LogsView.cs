@@ -66,7 +66,7 @@ internal static class LogsView
 
         var dateRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         dateRow.Children.Add(Muted("日志日期", 13, VerticalAlignment.Center));
-        var dates = new ComboBox { MinWidth = 230, IsEnabled = content.Dates.Count > 0 };
+        var dates = ShellAccessibility.Named(new ComboBox { MinWidth = 230, IsEnabled = content.Dates.Count > 0 }, ShellAccessibility.LogsDates);
         foreach (var date in content.Dates) dates.Items.Add(date);
         if (content.SelectedDate is { } selected) dates.SelectedItem = selected;   // 订阅之前设置，不回传
         dates.SelectionChanged += (_, _) => dateSelected(dates.SelectedItem as string);
@@ -75,7 +75,7 @@ internal static class LogsView
 
         var filterRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         filterRow.Children.Add(Muted("筛选", 13, VerticalAlignment.Center));
-        var filters = new ComboBox { MinWidth = 150 };
+        var filters = ShellAccessibility.Named(new ComboBox { MinWidth = 150 }, ShellAccessibility.LogsFilter);
         foreach (var filter in LogsModel.Filters) filters.Items.Add(LogsModel.FilterLabel(filter));
         filters.SelectedIndex = (int)content.Filter;                               // 订阅之前设置，不回传
         filters.SelectionChanged += (_, _) =>
@@ -111,11 +111,11 @@ internal static class LogsView
         AddColumnCell(header, "说明", 2);
         body.Children.Add(header);
 
-        var list = new ListBox
+        var list = ShellAccessibility.Named(new ListBox
         {
             MaxHeight = 360,
             IsEnabled = content.Rows.Count > 0
-        };
+        }, ShellAccessibility.LogsList);
         foreach (var row in content.Rows)
         {
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("96,190,*"), Margin = new Thickness(0, 2) };
@@ -138,7 +138,7 @@ internal static class LogsView
     {
         var body = new StackPanel { Spacing = 8 };
         body.Children.Add(Header("技术诊断详情"));
-        body.Children.Add(new TextBox
+        body.Children.Add(ShellAccessibility.Named(new TextBox
         {
             Text = content.DetailText,
             IsReadOnly = true,
@@ -148,7 +148,7 @@ internal static class LogsView
             MaxHeight = 420,
             VerticalContentAlignment = VerticalAlignment.Top,
             FontSize = 12.5
-        });
+        }, ShellAccessibility.LogsDetail));
         return ShellTheming.Card(body);
     }
 

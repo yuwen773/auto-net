@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:AutoNet.Tray.Avalonia"
              x:Class="AutoNet.Tray.Avalonia.MainView">
   <Grid ColumnDefinitions="236,*" RowDefinitions="*,Auto">
     <Border Grid.Row="0" Grid.Column="0"
@@ -13,6 +14,7 @@
         </StackPanel>
         <ListBox x:Name="nav" Background="Transparent" BorderThickness="0"
                  SelectionMode="Single" Margin="8,0"
+                 AutomationProperties.Name="{x:Static local:ShellAccessibility.NavList}"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
       </DockPanel>
     </Border>
@@ -23,7 +25,8 @@
             Background="{DynamicResource ShellStripBackground}"
             BorderBrush="{DynamicResource ShellBorder}"
             BorderThickness="0,1,0,0">
-      <TextBlock x:Name="statusText" FontSize="12" Opacity="0.85" TextTrimming="CharacterEllipsis" />
+      <TextBlock x:Name="statusText" FontSize="12" Opacity="0.85" TextTrimming="CharacterEllipsis"
+                 AutomationProperties.Name="{x:Static local:ShellAccessibility.StatusStrip}" />
     </Border>
   </Grid>
 </UserControl>
