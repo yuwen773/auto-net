@@ -45,7 +45,8 @@ $createdService = $false
 $serviceTouched = $false
 $changed = $false
 $run = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
-$oldRun = Get-ItemPropertyValue -LiteralPath $run -Name AutoNet -ErrorAction SilentlyContinue
+# 全新机器上 AutoNet 键不存在：显式 try-catch 兜住（-ErrorAction SilentlyContinue 在 EAP=Stop 下不保险）。
+$oldRun = try { (Get-ItemProperty -LiteralPath $run -Name AutoNet -ErrorAction Stop).AutoNet } catch { $null }
 $shortcut = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'AutoNet.lnk'
 try {
     $destination = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'AutoNet'
