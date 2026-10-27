@@ -2,6 +2,40 @@
 
 日期：2026-10-11（Asia/Shanghai）。已完成本次覆盖升级；此前一次真实 Wi-Fi 断连恢复记录保留在下方历史章节，真实认证失效、重启和长期稳定性仍待验收。
 
+## 测试基线与工作区快照（2026-10-27，工单 #28，仅离线，未发布）
+
+固定后续工单的对照基线：每张工单都对着本节记录的已知状态验证，而不是对着来源不明的旧产物。基线**不是全绿**——剩两条失败，分属另外两张未完成工单，见下表。本节只记录状态，**不含任何代码修复**：两条失败各自的修复都在别的工单。
+
+- **构建标识**：基线提交 `2de68ce`（`2de68ce0d38717346029ba1163c01d7f9ac5114a`，`chore: 版本升 0.3.1`），分支 `codex/ui-avalonia`，SDK `10.0.401`（`.tools/dotnet/dotnet.exe`，`global.json` 固定且 `rollForward: disable`），Release 配置。证据由 `scripts/build.ps1` 产出：`build.json` 记 `time 2026-10-27T15:01:36Z`（Asia/Shanghai 23:01）、`sdk 10.0.401`、`commit 79c1916`、`result "345/347 passed"`、`testExitCode 1`。`build.ps1` 在回归失败时以非零退出并抛出，所以这次运行**按设计失败**——基线记录的正是这两条已知失败，而不是掩盖它。
+- **关键限定：这次运行在脏工作树上**。`build.json` 的 `trackedChanges` 为 `true`，即 345/347 是「提交 `79c1916` + 并发未提交变更」的结果，**不能由该提交单独复现**：清单里有多条用例在已提交树上并不存在。要复现已提交树本身的结果，看下一条的 340/341。
+- **证据已入库**（`artifacts/` 被 gitignore，故另存副本）：`docs/baselines/2026-10-27-tests.txt`（逐条 `PASS`/`FAIL` 全清单，347 条）与 `docs/baselines/2026-10-27-build.json`。
+- **已提交树的对照基线**：提交 `2de68ce` 在隔离工作树（`git worktree add --detach`）完整构建运行，结果为 **340/341**，唯一失败是存储隔离那条。脏工作树为 **345/347**，失败两条（存储隔离 + 通道模式）。已提交树上没有通道模式用例，故那条只在脏工作树出现。工作树相对 HEAD 是 +7 条新增用例、−1 条被删除的重复用例。
+- **此前记录的失败项本轮不再复现**：`诊断包：缺少设置…` 与 `托盘加固：五万次…` 用 `--filter` 单独重跑，均 `1/1 passed`（退出码 0），证据见 `docs/baselines/2026-10-27-isolated-reruns.txt`。这两项早已在本文「Avalonia 诊断包导出」与「Avalonia 可访问性与缩放」两节（T17 门槛）记为已收敛；本文下方「Avalonia 兼容原型」节仍留着「机器相关确定性失败」的旧描述，以较新的记录为准。
+
+### 已知失败项的真实状态
+
+| 失败项 | 真实状态 | 结论 |
+| --- | --- | --- |
+| `通知回归：存储按 Windows 用户隔离且 QA 激活即重定向（故事 57、70）` | 测试断言「非 QA 存储读取应安全回退（本机真实记录为空时）」，把开发机的真实消费记录当成测试前提。本机 `%LOCALAPPDATA%\AutoNet\notification-consumption.json` 含一条 `InternetRecovered`（2026-10-24），`Load()` 返回 1 而非 0，故必然失败；与 QA 隔离语义无关。在 HEAD `2de68ce` 同样失败，是 HEAD 基线唯一的失败项。 | **测试缺陷**，不是产品缺陷。修复**不在本工单**：已拆到 [#43](https://github.com/yuwen773/auto-net/issues/43)。本工单只记录状态，不改测试、不改生产代码。 |
+| `内嵌通道回归：服务状态保留设置三态且切网提前返回不丢模式` | 该用例**只存在于未提交变更**（`git show HEAD:tests/AutoNet.Tests/AuthChannelRegression.cs` 中不存在）；`MonitorWorker` 构造 `StatusSnapshot` 时从未投影 `settings.AuthChannelMode`，因此快照总是缺省 `ManualOnly`。已提交树上没有这条用例，故已提交树基线不失败。 | **未提交的他人改动（工单 [#29](https://github.com/yuwen773/auto-net/issues/29) 的测试），不是基线缺陷**。修复属于 #29 的范围，本工单不实施、不改动。 |
+
+### 工作区并发变更与不可覆盖文件
+
+以下变更不属于本工单。**不得覆盖、回退或格式化**。本工单只新增了本节、`docs/baselines/` 下的证据，以及 `AGENTS.md` 里指向该目录的一行说明；未改动任何源码或测试。
+
+- **认证恢复设计文档**（未跟踪，2026-10-27 新增）：`docs/adr/0011-bounded-submission-retry.md`、`docs/plans/2026-10-27-auth-recovery-and-settings-design.md`、`docs/research/2026-10-27-auth-recovery-sources.md`、`docs/research/2026-10-27-visual-auth-prototype-evidence.md`；另有 `CONTEXT.md` 与 `docs/adr/0001-submission-recheck-resolution.md` 的对应修订段。这些是**决定，不是已交付行为**（ADR-0011 原文如此），实施属 #31–#36。
+- **托盘身份与 QA 隔离**：`src/AutoNet.Tray.Avalonia/Program.cs`、`SingleInstance.cs`、`App.axaml.cs`（正式托盘沿用 `Local\AutoNet.Tray`，QA 才用独立互斥）、`LogsModel.cs`；测试 `AvaloniaPrototypeRegression.cs`、`AvaloniaShellRegression.cs`。新增用例 4 条，全部通过。
+- **认证通道发起器**：`src/AutoNet.Core/AuthChannelResult.cs`（结论必须与枚举名逐字一致）、`src/AutoNet.Tray.Avalonia/AuthChannelLauncher.cs`（可注入结果路径、新一轮授予清除旧结论）、`StatusPipe.cs`（轮询序列号提前取号，防止迟到读取覆写手动刷新）；测试 `AuthChannelRegression.cs`。除 #29 那条外全部通过。
+- **发布与安装脚本**：`scripts/build.ps1`、`verify-bundle.ps1`、`qa-verify-bundle.ps1`、`qa-install-smoke.ps1`（新增仅限 GitHub 托管 runner 的守卫）、新增 `scripts/qa-install-smoke-guard.ps1`、`.github/workflows/windows.yml`。属于发布完整性工作，本工单未运行这些 QA。
+- **旧 WinForms 托盘**：`src/AutoNet.Tray/Theme.cs` 删除两个已无引用的成员（`Theme.Divider`、`Theme.SmallIconSize`）。全仓 `src/` 内无引用，删除不影响编译。
+- **删除的用例**：`AcceptanceRegression.cs` 删除 `最终验收：存储延迟后两次实际断线请求仍相隔120秒`。经核对，`RecoveryPersistenceRegression.cs` 的 `恢复持久安全：20秒写入延迟后完整两次请求仍至少间隔120秒` 覆盖同一行为且更强（精确断言 119.999s 不发、120s 发），故这是去重而非丢失覆盖。
+
+### 边界
+
+- 本节全部是离线工程证据。`docs/VALIDATION.md` 中既有的真实网络、真实 UAC、真实安装/回退与人工视觉项仍为显式待验收，**不因本节而改变**。
+- 未运行 `scripts/qa-*.ps1` 中的 Avalonia UI QA 与安装烟测；它们需要真实窗口或 CI 托管 runner。
+- `artifacts/` 被 gitignore，故逐条清单与 `build.json` 另存到 `docs/baselines/`；两者是同一次 `build.ps1` 运行的产物。
+
 ## Avalonia 兼容原型（2026-10-15，工程 + 真机受控证据，未安装未部署）
 
 - 对应迁移工单 #2 的兼容关卡，完整结论与证据清单见 [UI-COMPAT-PROTOTYPE.md](UI-COMPAT-PROTOTYPE.md)。原型位于 `src/AutoNet.Tray.Avalonia/`，QA 入口 `scripts/qa-avalonia-prototype.ps1`。
