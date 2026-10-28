@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using AutoNet.Core;
 using AutoNet.Service;
 
@@ -6,6 +7,165 @@ internal static class MonitorRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("监测：通道模式快照在检测异常时保留本轮已知模式但撤销自动授予", async () =>
+        {
+            foreach (var mode in new[] { AuthChannelModes.Off, AuthChannelModes.Automatic, AuthChannelModes.ManualOnly })
+            {
+                var fixture = new MonitorFixture();
+                fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.Http.StatusJson = "{}";
+                using var worker = new MonitorWorker(fixture, fixture.Clock);
+                Require((await worker.RunOnceAsync(default)).AuthChannelRequested);
+                var block = fixture.Authentication;
+                fixture.Settings = fixture.Settings with { AuthChannelMode = mode };
+                fixture.BeforeWifiRead = () => throw new IOException("fixture-wifi-read-failed");
+
+                var status = await worker.RunOnceAsync(default);
+
+                Require(status.State == "检测异常" && status.AuthChannelMode == mode);
+                Require(fixture.LastStatus?.AuthChannelMode == mode);
+                Require(!status.AuthChannelRequested && status.AuthChannelNotBefore is null);
+                Require(fixture.LastStatus is { AuthChannelRequested: false, AuthChannelNotBefore: null });
+                Require(status.CredentialsBlocked && fixture.Authentication == block);
+                Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
+            }
+        }),
+        ("监测：通道模式快照在切网后恢复自动必须重新检测才授予", async () =>
+        {
+            foreach (var mode in new[] { AuthChannelModes.ManualOnly, AuthChannelModes.Off, AuthChannelModes.Automatic })
+            {
+                var fixture = new MonitorFixture();
+                fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.Http.StatusJson = "{}";
+                using var worker = new MonitorWorker(fixture, fixture.Clock);
+                var original = await worker.RunOnceAsync(default);
+                Require(original.AuthChannelRequested && original.AuthChannelNotBefore is not null);
+                var block = fixture.Authentication;
+                fixture.Settings = fixture.Settings with { AuthChannelMode = mode };
+                fixture.Link = fixture.Link with { OtherProfile = true };
+                fixture.Clock.Advance(TimeSpan.FromSeconds(1));
+                var switched = await worker.RunOnceAsync(default);
+                Require(switched.AuthChannelMode == mode && !switched.AuthChannelRequested && switched.AuthChannelNotBefore is null);
+
+                fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+                fixture.Clock.Advance(TimeSpan.FromSeconds(1));
+                var restored = await worker.RunOnceAsync(default);
+                Require(restored.State == "已切换其他 Wi-Fi" && restored.AuthChannelMode == AuthChannelModes.Automatic);
+                Require(!restored.AuthChannelRequested && restored.AuthChannelNotBefore is null);
+                Require(fixture.LastStatus is { AuthChannelRequested: false, AuthChannelNotBefore: null });
+
+                fixture.Link = fixture.Link with { OtherProfile = false };
+                fixture.Clock.Advance(TimeSpan.FromSeconds(1));
+                var rechecked = await worker.RunOnceAsync(default);
+                Require(rechecked.AuthChannelRequested && rechecked.AuthChannelNotBefore > original.AuthChannelNotBefore);
+                var repeated = await worker.RunOnceAsync(default);
+                Require(repeated.AuthChannelNotBefore == rechecked.AuthChannelNotBefore && repeated.Notification == rechecked.Notification);
+                Require(fixture.Authentication == block && fixture.Connects == 0 && fixture.Disconnects == 0);
+                Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
+            }
+        }),
+        ("监测：通道模式快照回落后恢复设置须重新授予而非复用旧时间戳", async () =>
+        {
+            foreach (var mode in new string?[] { null, "", "Always", "missing-settings" })
+            {
+                var fixture = new MonitorFixture();
+                fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+                var saved = fixture.Settings;
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.Http.StatusJson = "{}";
+                using var worker = new MonitorWorker(fixture, fixture.Clock);
+                var original = await worker.RunOnceAsync(default);
+                Require(original.AuthChannelRequested && original.AuthChannelNotBefore is not null);
+                fixture.Settings = mode == "missing-settings" ? null! : saved with { AuthChannelMode = mode! };
+                fixture.Clock.Advance(TimeSpan.FromSeconds(1));
+                var fallback = await worker.RunOnceAsync(default);
+                Require(fallback.AuthChannelMode == AuthChannelModes.ManualOnly && !fallback.AuthChannelRequested && fallback.AuthChannelNotBefore is null);
+                Require(fixture.LastStatus is { AuthChannelMode: AuthChannelModes.ManualOnly, AuthChannelRequested: false, AuthChannelNotBefore: null });
+
+                fixture.Settings = saved;
+                fixture.Clock.Advance(TimeSpan.FromSeconds(1));
+                var restored = await worker.RunOnceAsync(default);
+                Require(restored.AuthChannelRequested && restored.AuthChannelNotBefore > original.AuthChannelNotBefore);
+                Require(fixture.LastStatus?.AuthChannelNotBefore == restored.AuthChannelNotBefore);
+                Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
+            }
+        }),
+        ("监测：通道模式快照在完整检测和切网提前返回间随设置刷新", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.Online = true;
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            foreach (var otherProfile in new[] { false, true, false })
+            foreach (var mode in new[] { AuthChannelModes.Automatic, AuthChannelModes.Off, AuthChannelModes.ManualOnly })
+            {
+                fixture.Settings = fixture.Settings with { AuthChannelMode = mode };
+                fixture.Link = fixture.Link with { OtherProfile = otherProfile };
+                var status = await worker.RunOnceAsync(default);
+                Require(status.AuthChannelMode == mode);
+                Require(status.State == (otherProfile ? "已切换其他 Wi-Fi" : "校园网在线"));
+                Require(!status.AuthChannelRequested && status.AuthChannelNotBefore is null);
+            }
+        }),
+        ("监测：通道模式快照兼容旧设置缺字段且不自动授予", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Settings = JsonSerializer.Deserialize<Settings>(
+                """{"InterfaceId":"00000000-0000-0000-0000-000000000001","WifiProfile":"fixture"}""")!;
+            fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+            fixture.Http.StatusJson = "{}";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            foreach (var otherProfile in new[] { false, true })
+            {
+                fixture.Link = fixture.Link with { OtherProfile = otherProfile };
+                var status = await worker.RunOnceAsync(default);
+                Require(status.AuthChannelMode == AuthChannelModes.ManualOnly);
+                Require(status.State == (otherProfile ? "已切换其他 Wi-Fi" : "需要处理认证"));
+                Require(!status.AuthChannelRequested && status.AuthChannelNotBefore is null);
+                Require(status.CredentialsBlocked && !status.CredentialRequestStarted);
+            }
+            Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
+        }),
+        ("监测：通道模式快照在切网时收紧模式不沿用自动授予", async () =>
+        {
+            foreach (var mode in new[] { AuthChannelModes.ManualOnly, AuthChannelModes.Off })
+            {
+                var fixture = new MonitorFixture();
+                fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.Http.StatusJson = "{}";
+                using var worker = new MonitorWorker(fixture, fixture.Clock);
+                Require((await worker.RunOnceAsync(default)).AuthChannelRequested);
+                fixture.Settings = fixture.Settings with { AuthChannelMode = mode };
+                fixture.Link = fixture.Link with { OtherProfile = true };
+                var status = await worker.RunOnceAsync(default);
+                Require(status.AuthChannelMode == mode && status.State == "已切换其他 Wi-Fi");
+                Require(!status.AuthChannelRequested && status.AuthChannelNotBefore is null);
+                Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
+            }
+        }),
+        ("监测：通道模式快照在设置缺失或无效后安全回落且不沿用自动授予", async () =>
+        {
+            foreach (var mode in new string?[] { null, "", "Always", "automatic", " Automatic ", "missing-settings" })
+            {
+                var fixture = new MonitorFixture();
+                fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.Http.StatusJson = "{}";
+                using var worker = new MonitorWorker(fixture, fixture.Clock);
+                Require((await worker.RunOnceAsync(default)).AuthChannelRequested);
+                var block = fixture.Authentication;
+                var requests = fixture.Http.Requests.Count;
+                fixture.Settings = mode == "missing-settings" ? null! : fixture.Settings with { AuthChannelMode = mode! };
+                var status = await worker.RunOnceAsync(default);
+                Require(status.AuthChannelMode == AuthChannelModes.ManualOnly);
+                Require(status.State == (mode == "missing-settings" ? "等待设置" : "检测异常"));
+                Require(!status.AuthChannelRequested && status.AuthChannelNotBefore is null);
+                Require(status.CredentialsBlocked && fixture.Authentication == block);
+                Require(fixture.Http.Requests.Count == requests && fixture.Connects == 0 && fixture.Disconnects == 0);
+            }
+        }),
         ("监测：Wi-Fi 已连接但持续断网不能无限等待零次恢复", async () =>
         {
             var fixture = new MonitorFixture();
@@ -551,6 +711,7 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public int Connects { get; private set; }
     public int Disconnects { get; private set; }
     public bool FailStatus { get; set; }
+    public StatusSnapshot? LastStatus { get; private set; }
     public bool FailLog { get; set; }
     public bool FailPower { get; set; }
     public bool FailDisconnect { get; set; }
@@ -628,7 +789,11 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public HttpClient CreateDirectClient(WifiLink link) => new(Http, disposeHandler: false);
     public Task<(string SystemPath, string Uu)> CheckAuxiliaryAsync(Settings settings, WifiLink link, CancellationToken ct) => Auxiliary(++AuxiliaryCalls, ct);
     public void UpdatePower(bool enabled) { if (FailPower) throw new System.ComponentModel.Win32Exception(5); }
-    public void WriteStatus(StatusSnapshot status) { if (FailStatus) throw new UnauthorizedAccessException("fixture-secret-url"); }
+    public void WriteStatus(StatusSnapshot status)
+    {
+        if (FailStatus) throw new UnauthorizedAccessException("fixture-secret-url");
+        LastStatus = status;
+    }
     public void WriteLog(string action, string detail, double? seconds, StatusSnapshot? snapshot)
     {
         if (FailLog) throw new IOException("fixture-secret-url");

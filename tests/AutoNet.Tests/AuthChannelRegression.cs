@@ -122,6 +122,21 @@ internal static class AuthChannelRegression
                 new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST", AuthChannelMode = "" }), "空模式未拒绝");
             Require(AuthChannelModes.IsKnown(AuthChannelModes.Automatic) && !AuthChannelModes.IsKnown("Always"), "IsKnown 语义不符");
         })),
+        ("内嵌通道回归：服务状态保留设置三态且切网提前返回不丢模式", async () =>
+        {
+            foreach (var mode in new[] { AuthChannelModes.Automatic, AuthChannelModes.ManualOnly, AuthChannelModes.Off })
+            {
+                var fixture = new MonitorFixture();
+                fixture.Settings = fixture.Settings with { AuthChannelMode = mode };
+                fixture.Http.Online = true;
+                using var worker = new AutoNet.Service.MonitorWorker(fixture, fixture.Clock);
+                Require((await worker.RunOnceAsync(default)).AuthChannelMode == mode,
+                    "完整检测状态丢失配置的通道模式：" + mode);
+                fixture.Link = fixture.Link with { OtherProfile = true };
+                Require((await worker.RunOnceAsync(default)).AuthChannelMode == mode,
+                    "切网提前返回状态丢失配置的通道模式：" + mode);
+            }
+        }),
         ("内嵌通道回归：发起器消费授予并逐字转写提权命令，同授予不重复发起", async () =>
         {
             var started = new List<string>();

@@ -61,6 +61,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private bool authChannelRequested;
     private bool authChannelPublished;
     private DateTimeOffset authChannelNotBefore;
+    private string authChannelMode = AuthChannelModes.ManualOnly;
     // One one-shot notification per cycle: a more specific event raised earlier in the
     // same cycle already tells the user authentication is paused, so the generic pause
     // announcement in Publish must not supersede it.
@@ -92,6 +93,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     // A complete cycle, with only external Windows/HTTP/file boundaries replaced in offline fixtures.
     public async Task<StatusSnapshot> RunOnceAsync(CancellationToken ct)
     {
+        authChannelMode = AuthChannelModes.ManualOnly;
         notifiedThisCycle = false;
         journal.BeginCycle();
         try { return await TickAsync(ct); }
@@ -102,11 +104,14 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         catch (Exception e)
         {
+            authChannelRequested = false;
+            authChannelPublished = false;
+            authChannelNotBefore = default;
             policy.InterruptObservation();
             UpdatePower(false);
             journal.Fault("MainCycle/" + journal.Stage, "主检测异常", e);
             journal.Decision(new() { Stage = journal.Stage, Outcome = "None", Reason = "ObservationFailed", Error = DiagnosticError.From(e) }, new() { State = "检测异常" });
-            return Publish(new StatusSnapshot { State = "检测异常", Detail = "检测将自动重试；" + lastError });
+            return Publish(new StatusSnapshot { AuthChannelMode = authChannelMode, State = "检测异常", Detail = "检测将自动重试；" + lastError });
         }
     }
 
@@ -116,12 +121,16 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         var settings = ReadStep("SettingsRead", environment.LoadSettings);
         if (settings is null)
         {
+            authChannelRequested = false;
+            authChannelPublished = false;
+            authChannelNotBefore = default;
             policy.Reset();
             UpdatePower(false);
             CancelAuxiliary();
             journal.Suspend("SettingsMissing");
             return Publish(new StatusSnapshot { State = "等待设置", Detail = "请在托盘窗口中设置校园 Wi-Fi 和认证信息。" });
         }
+        authChannelMode = AuthChannelModes.IsKnown(settings.AuthChannelMode) ? settings.AuthChannelMode : AuthChannelModes.ManualOnly;
         ReadStep("SettingsValidation", () => { settings.Validate(); return true; });
         var newBudgetKey = Guid.Parse(settings.InterfaceId).ToString("N") + "/" + settings.WifiProfile;
         journal.SetNetwork(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(newBudgetKey)))[..16]);
@@ -160,11 +169,14 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         var link = ReadStep("WifiRead", () => environment.ReadWifi(settings));
         if (link.OtherProfile)
         {
+            authChannelRequested = false;
+            authChannelPublished = false;
+            authChannelNotBefore = default;
             policy.Reset();
             outageObservedAt = null;
             CancelAuxiliary();
             journal.Suspend("OtherWifiSelected");
-            return Publish(new StatusSnapshot { Enabled = settings.Enabled, State = "已切换其他 Wi-Fi", Wifi = "其他配置", Detail = "保留你当前选择的网络，等待校园 Wi-Fi。" });
+            return Publish(new StatusSnapshot { Enabled = settings.Enabled, AuthChannelMode = settings.AuthChannelMode, State = "已切换其他 Wi-Fi", Wifi = "其他配置", Detail = "保留你当前选择的网络，等待校园 Wi-Fi。" });
         }
         var direct = false;
         var portalState = PortalState.Unknown;
@@ -460,7 +472,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         };
         var status = new StatusSnapshot
         {
-            Enabled = settings.Enabled, State = state, Detail = detail,
+            Enabled = settings.Enabled, AuthChannelMode = settings.AuthChannelMode, State = state, Detail = detail,
             Wifi = link.State switch { WifiState.Ready => "已连接", WifiState.WaitingForAddress => "已关联，等待 IPv4", WifiState.Associating => "正在连接", WifiState.Unavailable => "网卡未就绪", _ => "未连接" },
             Direct = direct ? "外网可达" : "外网不可达或未知",
             Portal = direct ? "未查询（外网检查已通过）" : portalState switch { PortalState.LoggedIn => "已认证", PortalState.NeedsLogin => "需认证", _ => "未知，不自动认证" },
@@ -865,8 +877,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         PortalLayoutSuspected = portalLayoutSuspected,
         BrowserFallbackRequested = browserFallbackRequested,
         BrowserFallbackNotBefore = browserFallbackRequested ? browserFallbackNotBefore : null,
-        AuthChannelRequested = authChannelRequested,
-        AuthChannelNotBefore = authChannelRequested ? authChannelNotBefore : null
+        AuthChannelRequested = status.AuthChannelMode == AuthChannelModes.Automatic && authChannelRequested,
+        AuthChannelNotBefore = status.AuthChannelMode == AuthChannelModes.Automatic && authChannelRequested ? authChannelNotBefore : null
     };
 
     private StatusSnapshot Publish(StatusSnapshot status)
