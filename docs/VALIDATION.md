@@ -16,7 +16,7 @@
 
 | 失败项 | 真实状态 | 结论 |
 | --- | --- | --- |
-| `通知回归：存储按 Windows 用户隔离且 QA 激活即重定向（故事 57、70）` | 测试断言「非 QA 存储读取应安全回退（本机真实记录为空时）」，把开发机的真实消费记录当成测试前提。本机 `%LOCALAPPDATA%\AutoNet\notification-consumption.json` 含一条 `InternetRecovered`（2026-10-24），`Load()` 返回 1 而非 0，故必然失败；与 QA 隔离语义无关。在 HEAD `2de68ce` 同样失败，是 HEAD 基线唯一的失败项。 | **测试缺陷**，不是产品缺陷。修复**不在本工单**：已拆到 [#43](https://github.com/yuwen773/auto-net/issues/43)。本工单只记录状态，不改测试、不改生产代码。 |
+| `通知回归：存储按 Windows 用户隔离且 QA 激活即重定向（故事 57、70）` | 测试断言「非 QA 存储读取应安全回退（本机真实记录为空时）」，把开发机的真实消费记录当成测试前提。本机 `%LOCALAPPDATA%\AutoNet\notification-consumption.json` 含一条 `InternetRecovered`（2026-10-24），`Load()` 返回 1 而非 0，故必然失败；与 QA 隔离语义无关。在 HEAD `2de68ce` 同样失败，是 HEAD 基线唯一的失败项。 | **测试缺陷**，不是产品缺陷。修复**不在本工单**：已拆到 [#43](https://github.com/yuwen773/auto-net/issues/43)。本工单只记录状态，不改测试、不改生产代码。**后续**：#43 已落地修复——用例在写入前检查普通及 QA 存储的实际路径，并在证据目录验证写入，不读写真实记录，也不新增生产 API；最终版独立用户两种记录状态和隔离变异验证见 `docs/baselines/2026-10-28-issue43-storage-isolation.txt`。本节基线记录保持原样。 |
 | `内嵌通道回归：服务状态保留设置三态且切网提前返回不丢模式` | 该用例**只存在于未提交变更**（`git show HEAD:tests/AutoNet.Tests/AuthChannelRegression.cs` 中不存在）；`MonitorWorker` 构造 `StatusSnapshot` 时从未投影 `settings.AuthChannelMode`，因此快照总是缺省 `ManualOnly`。已提交树上没有这条用例，故已提交树基线不失败。 | **未提交的他人改动（工单 [#29](https://github.com/yuwen773/auto-net/issues/29) 的测试），不是基线缺陷**。修复属于 #29 的范围，本工单不实施、不改动。 |
 
 ### 工作区并发变更与不可覆盖文件
