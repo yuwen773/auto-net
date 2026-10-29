@@ -154,6 +154,11 @@ public sealed class App : Application
                     "确认重新开始", cancelByDefault: true));
                 var result = await restart.RunAsync();
                 if (result == RestartAuthenticationOutcome.Cancelled) { desktop.Shutdown(0); return; }
+                if (result == RestartAuthenticationOutcome.StorageFailure)
+                {
+                    StartNotice(desktop, "重新开始认证未完成", "安全状态或审计存储不可用，操作未能确认完成。部分记录可能已更新；请检查本地存储和认证诊断，再重新检查后重试。");
+                    return;
+                }
                 if (result == RestartAuthenticationOutcome.Changed)
                 {
                     StartNotice(desktop, "重新开始认证未完成", "认证正在进行或安全状态已变化；本次未重置提交额度，请重新检查后重试。");

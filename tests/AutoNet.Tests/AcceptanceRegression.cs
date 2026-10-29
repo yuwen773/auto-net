@@ -184,7 +184,7 @@ internal static class AcceptanceRegression
         public Func<AuthenticationBlock, bool>? FailAuthenticationWrite { get; init; }
         public bool FailAuthenticationRead { get; set; }
         public Func<DisconnectBudget, bool>? FailBudgetWrite { get; init; }
-        public bool FailResolve { get; init; }
+        public bool FailResolve { get; set; }
         public Settings? LoadSettings() => fixture.LoadSettings();
         public Credentials? LoadCredentials() => fixture.LoadCredentials();
         public AuthenticationBlock? LoadAuthenticationBlock() => FailAuthenticationRead ? throw new UnauthorizedAccessException("synthetic denial") : store.LoadAuthenticationBlock();

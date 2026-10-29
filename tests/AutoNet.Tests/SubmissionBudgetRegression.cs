@@ -105,6 +105,16 @@ internal static class SubmissionBudgetRegression
             Require(store.LoadAuthenticationBlock() == pending && reset is { Attempts: 0 }, "部分写入没有保守保留暂停");
             Require(!store.IsConfirmedSubmissionRestart(reset), "门户部分写入被当成人工确认");
         })),
+        ("提交额度重置：人工流程存储故障提示且不谎报完成", () => Run(directory =>
+        {
+            var store = new SafetyStateStore(directory);
+            var budget = store.TryReserveSubmissionBudget(null, new ManualClock().GetUtcNow()).Budget!;
+            using var held = new FileStream(Path.Combine(directory, "auth-release-audit.jsonl"), FileMode.Create, FileAccess.Write, FileShare.None);
+            var operation = new RestartAuthentication(store, () => Task.FromResult(true));
+            Require(operation.RunAsync().GetAwaiter().GetResult() == RestartAuthenticationOutcome.StorageFailure, "存储故障未返回受控提示结果");
+            Require(store.LoadSubmissionBudget() == budget, "审计失败改变了额度");
+        })),
+        ("提交额度重置：独立进程执行锁、并发修订及重启后确认", ResetCrossProcessAsync),
         ("提交额度：首次持久预留独立于认证暂停且重读保留次数与时刻", () => Run(directory =>
         {
             var store = new SafetyStateStore(directory);
@@ -328,6 +338,65 @@ internal static class SubmissionBudgetRegression
         }
     }
 
+    private static async Task ResetCrossProcessAsync()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "submission-reset-process-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var eventName = @"Local\AutoNet.SubmissionReset.Test." + Guid.NewGuid().ToString("N");
+        using var gate = new EventWaitHandle(false, EventResetMode.ManualReset, eventName);
+        var children = new List<Process>();
+        var now = new ManualClock().GetUtcNow();
+        try
+        {
+            var store = new SafetyStateStore(directory);
+            var block = new AuthenticationBlock(PortalFailure.CredentialsRejected) { Revision = Guid.NewGuid() };
+            store.BlockAuthentication(block);
+            var budget = store.TryReserveSubmissionBudget(null, now).Budget!;
+            var holder = StartPeer(directory, "hold-execution", now, eventName);
+            children.Add(holder);
+            Require(await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "READY", "持锁进程未准备完成");
+            var blocked = StartPeer(directory, "reset", now, "-");
+            children.Add(blocked);
+            Require((await blocked.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(10))).Trim() == "False", "其他进程持锁时仍重置");
+            await blocked.WaitForExitAsync();
+            Require(blocked.ExitCode == 0 && store.LoadSubmissionBudget() == budget, "锁竞争改变额度或进程失败");
+            gate.Set();
+            await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Require(holder.ExitCode == 0, "持锁进程未正常退出");
+
+            gate.Reset();
+            var stale = StartPeer(directory, "reset-after-signal", now, eventName);
+            children.Add(stale);
+            Require(await stale.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "READY", "重置进程未读取修订");
+            var changed = block with { Revision = Guid.NewGuid() };
+            store.BlockAuthentication(changed);
+            gate.Set();
+            Require((await stale.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(10))).Trim() == "False", "过期修订跨进程重置");
+            await stale.WaitForExitAsync();
+            Require(stale.ExitCode == 0 && store.LoadSubmissionBudget() == budget, "并发变化后额度被重置");
+
+            var reset = StartPeer(directory, "reset", now, "-");
+            children.Add(reset);
+            Require((await reset.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(10))).Trim() == "True", "确认重置未成功");
+            await reset.WaitForExitAsync();
+            Require(reset.ExitCode == 0, "重置进程失败");
+            var restarted = StartPeer(directory, "inspect-reset", now, "-");
+            children.Add(restarted);
+            Require((await restarted.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(10))).Trim() == "0:True:CredentialsRejected", "重启后未保留确认标记与认证暂停");
+            await restarted.WaitForExitAsync();
+            Require(restarted.ExitCode == 0 && store.LoadAuthenticationBlock() == changed, "重置改变认证暂停");
+        }
+        finally
+        {
+            foreach (var child in children)
+            {
+                if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
+                child.Dispose();
+            }
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static Process StartPeer(string directory, string mode, DateTimeOffset now, string eventName)
     {
         var info = new ProcessStartInfo(Environment.ProcessPath!)
@@ -354,6 +423,31 @@ internal static class SubmissionBudgetRegression
                 Console.Out.Flush();
                 if (!gate.WaitOne(TimeSpan.FromSeconds(10))) return 2;
                 Console.WriteLine(store.TryReserveSubmissionBudget(null, now).Outcome);
+            }
+            else if (args[2] == "hold-execution")
+            {
+                using var execution = store.TryAcquireSubmissionExecution();
+                if (execution is null) return 2;
+                using var gate = EventWaitHandle.OpenExisting(args[4]);
+                Console.WriteLine("READY"); Console.Out.Flush();
+                if (!gate.WaitOne(TimeSpan.FromSeconds(10))) return 2;
+            }
+            else if (args[2] is "reset" or "reset-after-signal")
+            {
+                var block = store.LoadAuthenticationBlock();
+                var budget = store.LoadSubmissionBudget();
+                if (args[2] == "reset-after-signal")
+                {
+                    using var gate = EventWaitHandle.OpenExisting(args[4]);
+                    Console.WriteLine("READY"); Console.Out.Flush();
+                    if (!gate.WaitOne(TimeSpan.FromSeconds(10))) return 2;
+                }
+                Console.WriteLine(store.TryRestartAuthentication(block, budget));
+            }
+            else if (args[2] == "inspect-reset")
+            {
+                var budget = store.LoadSubmissionBudget();
+                Console.WriteLine($"{budget?.Attempts}:{store.IsConfirmedSubmissionRestart(budget)}:{store.LoadAuthenticationBlock()?.State}");
             }
             else
             {

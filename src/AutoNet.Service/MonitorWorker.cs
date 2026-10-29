@@ -34,6 +34,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private StatusNotification? notification;
     private bool blockedPublished;
     private bool authenticationBlockPending;
+    private bool submissionResolutionStorageFault;
     private AuthenticationBlock? authentication;
     private AuthenticationBlock? authenticationExpected;
     private AuthenticationBlock? authenticationToWrite;
@@ -172,6 +173,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 ? PolicyNow.AddSeconds(loadedAuthentication.RetryDelaySeconds) : DateTimeOffset.MinValue;
         }
         var block = authenticationBlockPending ? authenticationToWrite : authentication;
+        if (block?.State != AuthenticationState.SubmissionPending) submissionResolutionStorageFault = false;
         if (policy.CredentialsBlocked && (block is null || !block.BlocksSubmissions))
         {
             journal.Recovered("Authentication");
@@ -544,7 +546,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             LastRecoverySeconds = lastRecoverySeconds, LastRecoveryAt = lastRecoveryAt,
             ActionStartedAt = actionStartedAt, ActionFinishedAt = actionFinishedAt, AuthenticationAcceptedAt = authenticationAcceptedAt,
             AuthenticationStage = lastAuthentication?.Stage.ToString() ?? "Unknown",
-            AuthenticationFailure = lastAuthentication?.Failure.ToString() ?? blockFailure.ToString(),
+            AuthenticationFailure = policy.CredentialsBlocked && (blockFailure == PortalFailure.SafetyPersistence || submissionResolutionStorageFault)
+                ? nameof(PortalFailure.SafetyPersistence) : lastAuthentication?.Failure.ToString() ?? blockFailure.ToString(),
             AuthenticationHttpStatus = lastAuthentication?.HttpStatus, CredentialRequestStarted = lastAuthentication?.CredentialRequestStarted ?? false,
             AuthenticationPersistentState = authentication?.State.ToString() ?? "Ready",
             CredentialsBlocked = policy.CredentialsBlocked
@@ -608,6 +611,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         catch (Exception e) when (IsStorageFailure(e))
         {
+            submissionResolutionStorageFault = true;
             journal.Fault(stage, directConfirmation
                 ? "门户提交响应确认成功，但消解状态写入失败；保持安全暂停。"
                 : "复检确认门户已登录，但消解状态写入失败；保持安全暂停。", e);
@@ -621,6 +625,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             return false;
         }
         authentication = next;
+        submissionResolutionStorageFault = false;
         submissionBudget = environment.LoadSubmissionBudget();
         activeSubmission = null;
         authenticationBlockPending = false;
