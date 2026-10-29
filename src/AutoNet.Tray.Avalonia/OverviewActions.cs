@@ -26,6 +26,13 @@ internal sealed class OverviewActions(Func<CancellationToken, Task<StatusReading
         return true;
     }
 
+    public async Task<bool> RequestRestartAuthenticationAsync(CancellationToken cancellationToken = default)
+    {
+        if (await ReadTrustedAsync(cancellationToken).ConfigureAwait(false) is null) return false;
+        launch(ElevatedOperationKind.RestartAuthentication);
+        return true;
+    }
+
     private async Task<StatusReading?> ReadTrustedAsync(CancellationToken cancellationToken)
     {
         try

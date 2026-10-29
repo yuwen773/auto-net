@@ -750,6 +750,7 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public AuthenticationBlock? Authentication { get; private set; }
     public SubmissionBudget? SubmissionBudget { get; private set; }
     public SubmissionBudget? LoadSubmissionBudget() => SubmissionBudget;
+    public bool IsConfirmedSubmissionRestart(SubmissionBudget? budget) => false;
     public IDisposable? TryAcquireSubmissionExecution() => new MemoryStream();
     public SubmissionReservation TryReserveSubmissionBudget(SubmissionBudget? expected, DateTimeOffset now)
     {
@@ -808,11 +809,13 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     }
     public int ResolveCalls { get; private set; }
     public bool FailResolve { get; set; }
-    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next)
+    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false)
     {
         ResolveCalls++;
         if (FailResolve) throw new IOException("fixture-secret-url");
-        return TryTransitionAuthentication(expected, next);
+        if (SubmissionBudget != budget || !TryTransitionAuthentication(expected, next)) return false;
+        SubmissionBudget = new() { State = SubmissionBudgetState.Concluded, Revision = Guid.NewGuid() };
+        return true;
     }
     public DisconnectBudget LoadDisconnectBudget(Settings settings) => Budgets.GetValueOrDefault(settings.InterfaceId + "/" + settings.WifiProfile) ?? new();
     public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget)

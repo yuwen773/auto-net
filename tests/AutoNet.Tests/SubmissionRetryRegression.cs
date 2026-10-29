@@ -374,6 +374,38 @@ internal static class SubmissionRetryRegression
             }
             finally { if (!peer.HasExited) { peer.Kill(); peer.WaitForExit(); } }
         })),
+        ("有限重试：人工确认重置后保留未知暂停并受控开始新额度", () => WithStore((fixture, store, _) =>
+        {
+            fixture.Http.LoginResult = "unparseable";
+            using var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store), fixture.Clock);
+            worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            var pending = store.LoadAuthenticationBlock();
+            var used = store.LoadSubmissionBudget();
+            Require(pending?.State == AuthenticationState.SubmissionPending && used?.Attempts == 1, "未准备未知提交");
+            Require(store.TryRestartAuthentication(pending, used), "人工重置失败");
+            Require(store.LoadAuthenticationBlock() == pending, "人工重置解除安全暂停");
+            worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(Count(fixture) == 1, "重置后绕过等待立即提交");
+            fixture.Clock.Advance(TimeSpan.FromSeconds(120));
+            worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(Count(fixture) == 2 && store.LoadSubmissionBudget()?.Attempts == 1, "人工重置后未受控开始新额度");
+        })),
+        ("有限重试：持执行锁最终复核拒绝失效的人工确认", () => WithStore((fixture, store, directory) =>
+        {
+            fixture.Http.LoginResult = "unparseable";
+            using var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store), fixture.Clock);
+            worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(store.TryRestartAuthentication(store.LoadAuthenticationBlock(), store.LoadSubmissionBudget()), "准备人工确认失败");
+            worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            fixture.Clock.Advance(TimeSpan.FromSeconds(120));
+            var reads = 0;
+            fixture.BeforeWifiRead = () =>
+            {
+                if (++reads == 2) File.WriteAllText(Path.Combine(directory, "submission-restart.json"), "{}");
+            };
+            worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(reads >= 2 && Count(fixture) == 1 && store.LoadSubmissionBudget()?.Attempts == 0, "确认失效后仍发送或占用额度");
+        })),
         ("有限重试：外网在线不消解不重置而门户明确成功审计后消解", () => WithStore((fixture, store, directory) =>
         {
             fixture.Http.LoginResult = "unparseable";
@@ -390,7 +422,7 @@ internal static class SubmissionRetryRegression
             fixture.Clock.Advance(TimeSpan.FromSeconds(60));
             worker.RunOnceAsync(default).GetAwaiter().GetResult();
             Require(store.LoadAuthenticationBlock()?.State == AuthenticationState.Ready && File.Exists(Path.Combine(directory, "auth-release-audit.jsonl")), "门户成功未审计消解");
-            Require(store.LoadSubmissionBudget() is { Attempts: 1, State: SubmissionBudgetState.Concluded }, "成功复检没有明确结束或越界重置额度");
+            Require(store.LoadSubmissionBudget() is { Attempts: 0, State: SubmissionBudgetState.Concluded }, "成功复检没有审计并重置额度");
         })),
         ("有限重试：预检失败不占额度也不吃掉未知后的两次重试", () => WithStore((fixture, store, _) =>
         {
@@ -463,6 +495,28 @@ internal static class SubmissionRetryRegression
             fixture.Clock.Advance(TimeSpan.FromSeconds(120));
             worker.RunOnceAsync(default).GetAwaiter().GetResult();
             Require(Count(fixture) == 2 && store.LoadSubmissionBudget()?.Attempts == 2, "状态端点失联退化为永久停发");
+        })),
+        ("有限重试：直接成功记录提交响应来源并审计重置", () => WithStore((fixture, store, directory) =>
+        {
+            using var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store), fixture.Clock);
+            worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(store.LoadAuthenticationBlock()?.State == AuthenticationState.Ready && store.LoadSubmissionBudget()?.Attempts == 0,
+                "直接成功未消解并重置额度");
+            var lines = File.ReadAllLines(Path.Combine(directory, "auth-release-audit.jsonl"));
+            using var audit = System.Text.Json.JsonDocument.Parse(lines[0]);
+            Require(audit.RootElement.GetProperty("Action").GetString() == "门户提交成功消解", "直接成功误记为只读复检");
+        })),
+        ("有限重试：明确成功但消解写入失败时持久暂停避免重发", () => WithStore((fixture, store, _) =>
+        {
+            using (var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store)
+                { FailResolve = true }, fixture.Clock))
+                worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(Count(fixture) == 1 && store.LoadAuthenticationBlock()?.State == AuthenticationState.SafetyBlocked, "明确成功后写失败没有持久暂停");
+            using var restarted = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store), fixture.Clock);
+            restarted.RunOnceAsync(default).GetAwaiter().GetResult();
+            fixture.Clock.Advance(TimeSpan.FromMinutes(10));
+            restarted.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(Count(fixture) == 1, "明确成功后因终态写入失败再次发送");
         })),
         ("有限重试：明确密码绑定拒绝立即停止即使额度终态写失败", () => WithStore((_, _, directory) =>
         {

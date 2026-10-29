@@ -1,4 +1,5 @@
 using AutoNet.Core;
+using AutoNet.Tray.Avalonia;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Diagnostics;
@@ -8,6 +9,102 @@ internal static class SubmissionBudgetRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("提交额度重置：人工确认后审计先行且保留认证暂停与断线额度", () => Run(directory =>
+        {
+            var store = new SafetyStateStore(directory);
+            var block = new AuthenticationBlock(PortalFailure.CredentialsRejected) { Revision = Guid.NewGuid() };
+            store.BlockAuthentication(block);
+            var settings = new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "fixture" };
+            var disconnect = new DisconnectBudget(1, new ManualClock().GetUtcNow().AddSeconds(120)) { Revision = Guid.NewGuid() };
+            store.SaveDisconnectBudget(settings, disconnect);
+            var budget = store.TryReserveSubmissionBudget(null, new ManualClock().GetUtcNow()).Budget!;
+            var auditPath = Path.Combine(directory, "auth-release-audit.jsonl");
+            using (var execution = store.TryAcquireSubmissionExecution())
+            {
+                Require(execution is not null && !store.TryRestartAuthentication(block, budget), "活动提交期间仍允许人工重置");
+                Require(!File.Exists(auditPath), "活动提交期间写入重置审计");
+            }
+            using (var held = new FileStream(auditPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                try { store.TryRestartAuthentication(block, budget); throw new Exception("审计失败仍重置"); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            Require(store.LoadSubmissionBudget() == budget && store.LoadAuthenticationBlock() == block, "审计失败改变安全状态");
+            Require(!store.TryRestartAuthentication(block, budget with { Revision = Guid.NewGuid() }), "过期额度修订仍重置");
+            Require(store.TryRestartAuthentication(block, budget), "确认后未重置额度");
+            Require(store.LoadSubmissionBudget() is { Attempts: 0, State: SubmissionBudgetState.Concluded }, "额度没有清零");
+            Require(store.LoadAuthenticationBlock() == block, "重置清除了认证暂停");
+            Require(store.LoadDisconnectBudget(settings) == disconnect, "重置改变了主动断线额度");
+            using var audit = JsonDocument.Parse(File.ReadAllText(auditPath));
+            Require(audit.RootElement.GetProperty("Action").GetString() == "人工确认重新开始认证", "缺少人工重置审计");
+        })),
+        ("提交额度重置：门户确认需要认证与额度修订均匹配且审计先行", () => Run(directory =>
+        {
+            var store = new SafetyStateStore(directory);
+            var pending = new AuthenticationBlock { State = AuthenticationState.SubmissionPending, Attempts = 1, Revision = Guid.NewGuid() };
+            store.BlockAuthentication(pending);
+            var budget = store.TryReserveSubmissionBudget(null, new ManualClock().GetUtcNow()).Budget!;
+            var ready = new AuthenticationBlock { State = AuthenticationState.Ready, Revision = Guid.NewGuid() };
+            Require(!store.ResolveSubmissionPending(pending, budget with { Revision = Guid.NewGuid() }, ready), "过期额度修订仍消解");
+            Require(store.LoadSubmissionBudget() == budget && store.LoadAuthenticationBlock() == pending, "修订不匹配改变了状态");
+            var path = Path.Combine(directory, "auth-release-audit.jsonl");
+            using (var held = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                try { store.ResolveSubmissionPending(pending, budget, ready); throw new Exception("审计失败仍消解"); }
+                catch (IOException) { }
+            }
+            Require(store.LoadSubmissionBudget() == budget && store.LoadAuthenticationBlock() == pending, "审计失败改变安全状态");
+            Require(store.ResolveSubmissionPending(pending, budget, ready), "明确成功未消解");
+            Require(store.LoadSubmissionBudget() is { Attempts: 0, State: SubmissionBudgetState.Concluded } && store.LoadAuthenticationBlock() == ready,
+                "成功消解未重置额度并解除未知状态");
+        })),
+        ("提交额度重置：独立提权流程确认取消与并发变化均不重置", () => Run(directory =>
+        {
+            var store = new SafetyStateStore(directory);
+            var block = new AuthenticationBlock(PortalFailure.CredentialsRejected) { Revision = Guid.NewGuid() };
+            store.BlockAuthentication(block);
+            var budget = store.TryReserveSubmissionBudget(null, new ManualClock().GetUtcNow()).Budget!;
+            var cancel = new RestartAuthentication(store, () => Task.FromResult(false));
+            Require(cancel.RunAsync().GetAwaiter().GetResult() == RestartAuthenticationOutcome.Cancelled, "取消未停止操作");
+            Require(store.LoadSubmissionBudget() == budget && !File.Exists(Path.Combine(directory, "auth-release-audit.jsonl")), "取消发生写入");
+            var changed = new RestartAuthentication(store, () =>
+            {
+                store.BlockAuthentication(block with { Revision = Guid.NewGuid() });
+                return Task.FromResult(true);
+            });
+            Require(changed.RunAsync().GetAwaiter().GetResult() == RestartAuthenticationOutcome.Changed, "并发认证修订未阻止重置");
+            Require(store.LoadSubmissionBudget() == budget && !File.Exists(Path.Combine(directory, "auth-release-audit.jsonl")), "并发变化后仍发生重置或审计");
+            var accepted = new RestartAuthentication(store, () => Task.FromResult(true));
+            Require(accepted.RunAsync().GetAwaiter().GetResult() == RestartAuthenticationOutcome.Reset, "确认后没有重置");
+            var reset = store.LoadSubmissionBudget();
+            Require(store.IsConfirmedSubmissionRestart(reset), "人工确认的修订未被识别");
+            var marker = Path.Combine(directory, "submission-restart.json");
+            foreach (var invalid in new[] { "{broken", "{}", "{\"Version\":2,\"Revision\":\"" + reset!.Revision + "\"}",
+                "{\"Version\":1,\"Revision\":\"" + Guid.NewGuid() + "\"}",
+                "{\"version\":1,\"Revision\":\"" + reset.Revision + "\"}" })
+            {
+                File.WriteAllText(marker, invalid);
+                Require(!store.IsConfirmedSubmissionRestart(reset), "损坏或不匹配的确认记录仍授权");
+            }
+            File.Delete(marker);
+            Require(!store.IsConfirmedSubmissionRestart(reset), "缺失确认记录仍授权");
+        })),
+        ("提交额度重置：门户消解第二次写入失败保留暂停且不能冒充人工重启", () => Run(directory =>
+        {
+            var store = new SafetyStateStore(directory);
+            var pending = new AuthenticationBlock { State = AuthenticationState.SubmissionPending, Attempts = 1, Revision = Guid.NewGuid() };
+            store.BlockAuthentication(pending);
+            var budget = store.TryReserveSubmissionBudget(null, new ManualClock().GetUtcNow()).Budget!;
+            var ready = new AuthenticationBlock { State = AuthenticationState.Ready, Revision = Guid.NewGuid() };
+            using (var held = new FileStream(Path.Combine(directory, "auth-block.txt"), FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                try { store.ResolveSubmissionPending(pending, budget, ready); throw new Exception("认证状态写入失败未报告"); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            var reset = store.LoadSubmissionBudget();
+            Require(store.LoadAuthenticationBlock() == pending && reset is { Attempts: 0 }, "部分写入没有保守保留暂停");
+            Require(!store.IsConfirmedSubmissionRestart(reset), "门户部分写入被当成人工确认");
+        })),
         ("提交额度：首次持久预留独立于认证暂停且重读保留次数与时刻", () => Run(directory =>
         {
             var store = new SafetyStateStore(directory);

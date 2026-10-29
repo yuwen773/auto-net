@@ -20,7 +20,8 @@ internal static class OverviewView
         Action<bool> technicalExpandedChanged,
         Action<RecoveryIntent> recoveryRequested,
         Action unblockRequested,
-        Action portalOpenRequested)
+        Action portalOpenRequested,
+        Action? restartAuthenticationRequested = null)
     {
         var page = new StackPanel { Spacing = 14, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
         page.Children.Add(new StackPanel
@@ -41,6 +42,13 @@ internal static class OverviewView
         page.Children.Add(StatusCard(content, technicalExpanded, technicalExpandedChanged, unblockRequested));
         if (content.PortalOpen.Visible) page.Children.Add(PortalOpenCard(content.PortalOpen, portalOpenRequested));
         page.Children.Add(ProgressCard(content, recoveryRequested));
+        var restart = ShellAccessibility.Named(new Button
+        {
+            Content = ShellAccessibility.RestartAuthentication, IsEnabled = content.Trusted,
+            HorizontalAlignment = HorizontalAlignment.Left
+        }, ShellAccessibility.RestartAuthentication);
+        restart.Click += (_, _) => restartAuthenticationRequested?.Invoke();
+        page.Children.Add(restart);
         return page;
     }
 

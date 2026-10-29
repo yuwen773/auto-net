@@ -86,7 +86,7 @@ internal static class AuthenticationPersistenceRegression
                     var status = worker.RunOnceAsync(default).GetAwaiter().GetResult();
                     Require(status.CredentialsBlocked && status.AuthenticationAcceptedAt is null);
                 }
-                Require(store.LoadAuthenticationBlock()?.State == AuthenticationState.SubmissionPending);
+                Require(store.LoadAuthenticationBlock()?.State == AuthenticationState.SafetyBlocked);
                 using var restarted = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, new(directory)), fixture.Clock);
                 restarted.RunOnceAsync(default).GetAwaiter().GetResult();
                 Require(Count(fixture) == 1);
@@ -143,7 +143,7 @@ internal static class AuthenticationPersistenceRegression
             });
             return Task.CompletedTask;
         }),
-        ("认证持久安全：接口明确接受后额度结束且外网恢复不重置", async () =>
+        ("认证持久安全：接口明确接受后审计重置且外网恢复不重复重置", async () =>
         {
             var fixture = new MonitorFixture();
             using var worker = new MonitorWorker(fixture, fixture.Clock);
@@ -151,7 +151,7 @@ internal static class AuthenticationPersistenceRegression
             {
                 await worker.RunOnceAsync(default); fixture.Clock.Advance(TimeSpan.FromSeconds(2));
             }
-            Require(Count(fixture) == 1 && fixture.LoadSubmissionBudget() is { State: SubmissionBudgetState.Concluded, Attempts: 1 });
+            Require(Count(fixture) == 1 && fixture.LoadSubmissionBudget() is { State: SubmissionBudgetState.Concluded, Attempts: 0 });
             var budget = fixture.LoadSubmissionBudget();
             fixture.Http.Online = true;
             await worker.RunOnceAsync(default);

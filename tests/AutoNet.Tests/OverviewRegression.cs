@@ -247,6 +247,17 @@ internal static class OverviewRegression
             Require(!await failed.RequestUnblockAsync());
             Require(launched.Count == 1);
         }),
+        ("概览动作：重新开始认证仅在可信状态下发起独立提权操作", async () =>
+        {
+            var launched = new List<ElevatedOperationKind>();
+            var reading = Reading(Online(), TimeSpan.Zero);
+            var actions = new OverviewActions(_ => Task.FromResult(reading), launched.Add);
+            Require(await actions.RequestRestartAuthenticationAsync());
+            Require(launched.SequenceEqual([ElevatedOperationKind.RestartAuthentication]));
+            Require(StartupRequest.Parse(["--restart-auth"]).ElevatedOperation == ElevatedOperationKind.RestartAuthentication);
+            reading = Reading(null);
+            Require(!await actions.RequestRestartAuthenticationAsync() && launched.Count == 1);
+        }),
         ("概览回归：提权恢复操作按明确目标改写设置且缺设置时不写入", () => Sync(() =>
         {
             var directory = Path.Combine(Path.GetTempPath(), "autonet-overview-settings-" + Guid.NewGuid().ToString("N"));

@@ -5,6 +5,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using AutoNet.Core;
 
 namespace AutoNet.Tray.Avalonia;
 
@@ -72,6 +73,12 @@ public sealed class App : Application
     /// </summary>
     private static void StartElevated(IClassicDesktopStyleApplicationLifetime desktop, ElevatedMode elevated)
     {
+        if (elevated.Operation is ElevatedOperationKind.RestartAuthentication)
+        {
+            if (elevated.Qa.Active) { Dispatcher.UIThread.Post(() => desktop.Shutdown(0)); return; }
+            StartRestartAuthentication(desktop);
+            return;
+        }
         if (elevated.Operation is ElevatedOperationKind.UnblockAuthentication)
         {
             // 只有 unblock 模式才走隔离夹具：其他 QA 模式走到这里仍按生产语义执行，
@@ -133,6 +140,32 @@ public sealed class App : Application
         // 受控占位：入口已成立（不被普通互斥锁拦截），具体页面随后续工单提供。
         StartNotice(desktop, elevated.Operation.DisplayName() + "（迁移中）",
             "该操作将在界面迁移完成后通过新的页面提供。\n当前版本不会修改任何设置、凭据或服务。");
+    }
+
+    private static void StartRestartAuthentication(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                var store = new SafetyStateStore(Storage.Private);
+                var restart = new RestartAuthentication(store, () => ConfirmWindow.AskAsync("重新开始认证",
+                    "此操作会重置凭据提交额度，并可能允许之后再次提交凭据。认证暂停和主动断线额度保持不变。\n\n确认重新开始认证？",
+                    "确认重新开始", cancelByDefault: true));
+                var result = await restart.RunAsync();
+                if (result == RestartAuthenticationOutcome.Cancelled) { desktop.Shutdown(0); return; }
+                if (result == RestartAuthenticationOutcome.Changed)
+                {
+                    StartNotice(desktop, "重新开始认证未完成", "认证正在进行或安全状态已变化；本次未重置提交额度，请重新检查后重试。");
+                    return;
+                }
+                StartNotice(desktop, "已重置提交额度", "提交额度已重置。认证暂停仍保持原状；如需解除暂停，请先检查认证诊断。");
+            }
+            catch (Exception e)
+            {
+                StartNotice(desktop, "重新开始认证未完成", "操作未完成：" + e.GetType().Name + "。请检查安全状态后重试。");
+            }
+        });
     }
 
     /// <summary>

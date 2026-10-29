@@ -26,7 +26,7 @@ public sealed partial class SafetyStateStore
         {
             var current = LoadAuthenticationBlock();
             if (current != expected || current is null ||
-                !(current.State == AuthenticationState.SubmissionPending && budget is { Attempts: > 0 } ||
+                !(current.State == AuthenticationState.SubmissionPending && (budget is { Attempts: > 0 } || IsConfirmedSubmissionRestart(budget)) ||
                   current.State == AuthenticationState.InteractionRequired &&
                   PortalLayoutSignal.IsStructural(current.ChannelFallbackCause))) return null;
             if (LoadSubmissionBudget() != budget || policy.Evaluate(budget, utc, elapsed) != SubmissionRetryDecision.Authorized)

@@ -20,6 +20,8 @@ internal static class ShellAccessibility
     /// <summary>解除认证暂停入口：名称携带当前认证事实与动作，不依据陈旧信息。</summary>
     public static string Unblock(OverviewContent content) => $"认证状态（{content.Auth.Title}），{content.Unblock.Label}";
 
+    public const string RestartAuthentication = "重新开始认证…";
+
     /// <summary>浏览器兜底开页入口（#11）：名称固定声明「需要浏览器认证」边界 + 动作标签。</summary>
     public static string PortalOpen(PortalOpenEntryState entry) => $"需要浏览器认证，{entry.Label}";
 

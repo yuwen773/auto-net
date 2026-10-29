@@ -15,8 +15,9 @@ public interface IMonitorEnvironment
     bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next);
     // ADR-0001 recheck resolution: the release audit is appended before the block clears; an
     // audit write failure surfaces as an exception and the caller must not clear the block.
-    bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next);
+    bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false);
     SubmissionBudget? LoadSubmissionBudget();
+    bool IsConfirmedSubmissionRestart(SubmissionBudget? budget);
     IDisposable? TryAcquireSubmissionExecution();
     ChannelSubmissionLease? TryBeginChannelSubmission(AuthenticationBlock? expected, SubmissionBudget? budget,
         PortalFailure structuralFailure, SubmissionRetryPolicy policy, DateTimeOffset utc, TimeSpan elapsed) => null;
@@ -49,8 +50,9 @@ public sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
     public AuthenticationRecordKind AuthenticationRecordSource => safety.LastAuthenticationRecordKind;
     public void BlockAuthentication(AuthenticationBlock block) => safety.BlockAuthentication(block);
     public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) => safety.TryTransitionAuthentication(expected, next);
-    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next) => safety.ResolveSubmissionPending(expected, next);
+    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false) => safety.ResolveSubmissionPending(expected, budget, next, directConfirmation);
     public SubmissionBudget? LoadSubmissionBudget() => safety.LoadSubmissionBudget();
+    public bool IsConfirmedSubmissionRestart(SubmissionBudget? budget) => safety.IsConfirmedSubmissionRestart(budget);
     public IDisposable? TryAcquireSubmissionExecution() => safety.TryAcquireSubmissionExecution();
     public ChannelSubmissionLease? TryBeginChannelSubmission(AuthenticationBlock? expected, SubmissionBudget? budget,
         PortalFailure structuralFailure, SubmissionRetryPolicy policy, DateTimeOffset utc, TimeSpan elapsed) =>

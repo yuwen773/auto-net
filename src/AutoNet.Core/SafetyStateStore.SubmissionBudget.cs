@@ -59,6 +59,69 @@ public sealed partial class SafetyStateStore
 
     private static InvalidDataException InvalidSubmissionBudget() => new("提交额度记录结构、版本或状态无效；停止凭据提交，需检查本地状态文件。");
 
+    public bool TryRestartAuthentication(AuthenticationBlock? expectedAuthentication, SubmissionBudget? expectedBudget)
+    {
+        using var execution = TryAcquireSubmissionExecution();
+        if (execution is null) return false;
+        using var gate = AuthenticationGate();
+        if (ReadAuthenticationBlock() != expectedAuthentication || ReadSubmissionBudget() != expectedBudget) return false;
+        AppendSubmissionResetAudit("人工确认重新开始认证", expectedBudget);
+        var reset = NewResetSubmissionBudget();
+        Storage.AtomicWrite(Path.Combine(directory, "submission-restart.json"), JsonSerializer.Serialize(new { Version = 1, reset.Revision }));
+        WriteResetSubmissionBudget(reset);
+        return true;
+    }
+
+    public bool ResolveSubmissionPending(AuthenticationBlock? expectedAuthentication, SubmissionBudget? expectedBudget, AuthenticationBlock next, bool directConfirmation = false)
+    {
+        using var gate = AuthenticationGate();
+        if (expectedAuthentication?.State != AuthenticationState.SubmissionPending || next.State != AuthenticationState.Ready ||
+            ReadAuthenticationBlock() != expectedAuthentication || ReadSubmissionBudget() != expectedBudget) return false;
+        AppendReleaseAudit(directConfirmation ? "门户提交成功消解" : "复检消解", expectedAuthentication);
+        AppendSubmissionResetAudit("门户确认成功重置提交额度", expectedBudget);
+        WriteResetSubmissionBudget(NewResetSubmissionBudget());
+        Storage.AtomicWrite(AuthBlockPath, JsonSerializer.Serialize(next, Storage.Json));
+        return true;
+    }
+
+    private void AppendSubmissionResetAudit(string action, SubmissionBudget? previous)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            At = DateTimeOffset.UtcNow, Action = action, Attempts = previous?.Attempts ?? 0,
+            Revision = previous?.Revision
+        }) + Environment.NewLine);
+        using var file = new FileStream(Path.Combine(directory, "auth-release-audit.jsonl"), FileMode.Append, FileAccess.Write, FileShare.Read);
+        file.Write(bytes);
+        file.Flush(true);
+    }
+
+    private static SubmissionBudget NewResetSubmissionBudget() => new() { State = SubmissionBudgetState.Concluded, Revision = Guid.NewGuid() };
+
+    private void WriteResetSubmissionBudget(SubmissionBudget budget) => Storage.AtomicWrite(SubmissionBudgetPath,
+        JsonSerializer.Serialize(budget, SubmissionJson));
+
+    public bool IsConfirmedSubmissionRestart(SubmissionBudget? budget)
+    {
+        if (budget is not { Attempts: 0, State: SubmissionBudgetState.Concluded }) return false;
+        try
+        {
+            using var gate = AuthenticationGate();
+            if (ReadSubmissionBudget() != budget) return false;
+            var path = Path.Combine(directory, "submission-restart.json");
+            if (!Exists(path)) return false;
+            using var document = JsonDocument.Parse(Storage.ReadShared(path));
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object && root.EnumerateObject().Count() == 2 &&
+                HasFields(root, "Version", "Revision") && root.TryGetProperty("Version", out var versionValue) &&
+                versionValue.ValueKind == JsonValueKind.Number && versionValue.TryGetInt32(out var version) && version == 1 &&
+                root.TryGetProperty("Revision", out var revisionValue) && revisionValue.ValueKind == JsonValueKind.String &&
+                revisionValue.TryGetGuid(out var revision) && revision == budget.Revision;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or InvalidOperationException)
+        { return false; }
+    }
+
     public SubmissionReservation TryReserveSubmissionBudget(SubmissionBudget? expected, DateTimeOffset now)
     {
         try { return ReserveSubmissionBudget(expected, now); }

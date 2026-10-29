@@ -184,11 +184,13 @@ internal static class AcceptanceRegression
         public Func<AuthenticationBlock, bool>? FailAuthenticationWrite { get; init; }
         public bool FailAuthenticationRead { get; set; }
         public Func<DisconnectBudget, bool>? FailBudgetWrite { get; init; }
+        public bool FailResolve { get; init; }
         public Settings? LoadSettings() => fixture.LoadSettings();
         public Credentials? LoadCredentials() => fixture.LoadCredentials();
         public AuthenticationBlock? LoadAuthenticationBlock() => FailAuthenticationRead ? throw new UnauthorizedAccessException("synthetic denial") : store.LoadAuthenticationBlock();
         public AuthenticationRecordKind AuthenticationRecordSource => store.LastAuthenticationRecordKind;
         public SubmissionBudget? LoadSubmissionBudget() => store.LoadSubmissionBudget();
+        public bool IsConfirmedSubmissionRestart(SubmissionBudget? budget) => store.IsConfirmedSubmissionRestart(budget);
         public IDisposable? TryAcquireSubmissionExecution() => store.TryAcquireSubmissionExecution();
         public ChannelSubmissionLease? TryBeginChannelSubmission(AuthenticationBlock? expected, SubmissionBudget? budget,
             PortalFailure structuralFailure, SubmissionRetryPolicy policy, DateTimeOffset utc, TimeSpan elapsed)
@@ -216,8 +218,9 @@ internal static class AcceptanceRegression
         public void BlockAuthentication(AuthenticationBlock block) => store.BlockAuthentication(block);
         public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) =>
             FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.TryTransitionAuthentication(expected, next);
-        public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next) =>
-            FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.ResolveSubmissionPending(expected, next);
+        public bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false) =>
+            FailResolve || FailAuthenticationWrite?.Invoke(next) == true
+                ? throw new IOException("synthetic state write failure") : store.ResolveSubmissionPending(expected, budget, next, directConfirmation);
         public DisconnectBudget LoadDisconnectBudget(Settings settings) => store.LoadDisconnectBudget(settings);
         public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget)
         {

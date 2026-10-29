@@ -179,7 +179,8 @@ public partial class MainView : UserControl
                     expanded => technicalExpanded = expanded,
                     intent => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestRecoveryChangeAsync(intent)),
                     () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestUnblockAsync()),
-                    () => portalOpenHandler?.Invoke());
+                    () => portalOpenHandler?.Invoke(),
+                    () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestRestartAuthenticationAsync()));
                 break;
             case DiagnosticsContent diagnostics:
                 // 指纹未变化且导出状态未推进时不重建：诊断页避免轮询期的无谓控件树重建；

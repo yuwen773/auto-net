@@ -253,7 +253,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         var oldBudget = policy.DisconnectBudget;
         var action = policy.Decide(observation, PolicyNow, settings.Enabled, credentials is not null, settings.AllowActiveDisconnect);
-        retryingSubmission = authentication?.State == AuthenticationState.SubmissionPending && submissionBudget is { Attempts: > 0 };
+        retryingSubmission = authentication?.State == AuthenticationState.SubmissionPending &&
+            (submissionBudget is { Attempts: > 0 } || environment.IsConfirmedSubmissionRestart(submissionBudget));
         if (retryingSubmission && submissionDecision == SubmissionRetryDecision.Authorized && settings.Enabled && credentials is not null &&
             link.State == WifiState.Ready && portalState != PortalState.LoggedIn && PolicyNow >= pendingRetryAfter)
             action = ActionKind.Authenticate;
@@ -596,42 +597,41 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
     }
 
-    private void ResolveSubmissionByRecheck(PortalAttempt inspection)
+    private bool ResolveSubmissionByRecheck(PortalAttempt inspection, bool directConfirmation = false)
     {
+        var stage = directConfirmation ? "Submission" : "SubmissionRecheck";
         var next = new AuthenticationBlock { State = AuthenticationState.Ready, Revision = Guid.NewGuid() };
         bool cleared;
         try
         {
-            if (submissionBudget is { State: not SubmissionBudgetState.Concluded } budget)
-            {
-                if (!environment.TryTransitionSubmissionBudget(budget, SubmissionBudgetState.Concluded))
-                {
-                    RejectSubmission("SubmissionBudgetStateChanged");
-                    return;
-                }
-                submissionBudget = environment.LoadSubmissionBudget();
-            }
-            cleared = environment.TryResolveSubmissionPending(authentication, next);
+            cleared = environment.TryResolveSubmissionPending(authentication, submissionBudget, next, directConfirmation);
         }
         catch (Exception e) when (IsStorageFailure(e))
         {
-            journal.Fault("SubmissionRecheck", "复检确认门户已登录，但解除审计写入失败；保持提交结果未知状态。", e);
-            return;
+            journal.Fault(stage, directConfirmation
+                ? "门户提交响应确认成功，但消解状态写入失败；保持安全暂停。"
+                : "复检确认门户已登录，但消解状态写入失败；保持安全暂停。", e);
+            return false;
         }
         if (!cleared)
         {
-            journal.Fault("SubmissionRecheck", "复检确认门户已登录，但认证安全状态已变化；保持提交结果未知状态。");
-            return;
+            journal.Fault(stage, directConfirmation
+                ? "门户提交响应确认成功，但认证安全状态已变化；取消消解。"
+                : "复检确认门户已登录，但认证安全状态已变化；取消消解。");
+            return false;
         }
         authentication = next;
+        submissionBudget = environment.LoadSubmissionBudget();
+        activeSubmission = null;
         authenticationBlockPending = false;
         policy.CredentialsBlocked = false;
         blockFailure = PortalFailure.None;
         authenticationRetryUntil = DateTimeOffset.MinValue;
         authenticationAcceptedAt = clock.GetUtcNow();
         journal.Recovered("Authentication");
-        journal.Write("SubmissionResolved", "复检确认门户已登录；提交结果消解为已接受，认证阻断已清除并追加解除审计。", new()
-            { Stage = "SubmissionRecheck", Outcome = "Accepted", Authentication = inspection });
+        journal.Write("SubmissionResolved", directConfirmation ? "门户提交响应确认成功；认证阻断已清除并追加解除审计。" : "复检确认门户已登录；提交结果消解为已接受，认证阻断已清除并追加解除审计。", new()
+            { Stage = stage, Outcome = "Accepted", Authentication = inspection });
+        return true;
     }
 
     private HttpClient DirectClient(WifiLink link)
@@ -832,6 +832,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             if (current != authentication || current?.State != (retryingSubmission ? AuthenticationState.SubmissionPending : AuthenticationState.RetryCoolingDown))
                 return RejectSubmission("AuthenticationStateChanged");
             submissionBudget = ReadStep("SubmissionBudgetRead", environment.LoadSubmissionBudget);
+            if (retryingSubmission && submissionBudget is { Attempts: 0 } && !environment.IsConfirmedSubmissionRestart(submissionBudget))
+                return RejectSubmission("SubmissionRestartNotConfirmed");
             var decision = submissionRetry.Evaluate(submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart));
             if (decision != SubmissionRetryDecision.Authorized) return RejectSubmission("SubmissionBudget" + decision);
             var reservationUtc = clock.GetUtcNow();
@@ -886,6 +888,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
 
     private void CompleteAuthentication(PortalAttempt attempt)
     {
+        if (attempt.Result == LoginResult.Accepted && attempt.CredentialRequestStarted)
+        {
+            if (!ResolveSubmissionByRecheck(attempt, directConfirmation: true))
+                WriteAuthentication(new AuthenticationBlock(PortalFailure.SafetyPersistence) { Attempts = authentication?.Attempts ?? 0 });
+            return;
+        }
         if (attempt.Result is LoginResult.RejectedCredentials or LoginResult.RejectedBinding or LoginResult.NeedsInteraction)
         {
             // Either durable stop is sufficient. Do not lose an explicit refusal merely
