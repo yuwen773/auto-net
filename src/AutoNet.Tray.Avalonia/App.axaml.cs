@@ -156,7 +156,7 @@ public sealed class App : Application
                 if (result == RestartAuthenticationOutcome.Cancelled) { desktop.Shutdown(0); return; }
                 if (result == RestartAuthenticationOutcome.StorageFailure)
                 {
-                    StartNotice(desktop, "重新开始认证未完成", "安全状态或审计存储不可用，操作未能确认完成。部分记录可能已更新；请检查本地存储和认证诊断，再重新检查后重试。");
+                    StartNotice(desktop, "重新开始认证未完成", "安全状态或审计存储不可用，或状态记录损坏；操作未能确认完成。部分记录可能已更新；请检查本地存储和认证诊断，再重新检查后重试。");
                     return;
                 }
                 if (result == RestartAuthenticationOutcome.Changed)

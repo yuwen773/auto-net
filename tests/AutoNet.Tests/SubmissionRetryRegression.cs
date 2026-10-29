@@ -514,7 +514,7 @@ internal static class SubmissionRetryRegression
                 { FailResolve = true }, fixture.Clock))
                 status = worker.RunOnceAsync(default).GetAwaiter().GetResult();
             Require(Count(fixture) == 1 && store.LoadAuthenticationBlock()?.State == AuthenticationState.SafetyBlocked, "明确成功后写失败没有持久暂停");
-            Require(status.CredentialsBlocked && status.AuthenticationFailure == nameof(PortalFailure.SafetyPersistence), "存储故障未反映在服务状态中");
+            Require(status.CredentialsBlocked && status.SubmissionResolutionStorageFault && status.AuthenticationFailure == nameof(PortalFailure.None), "存储故障未单独反映或覆盖了提交结果");
             var reading = new StatusReading(status, NetworkDisplayMap.Map(status, TimeSpan.Zero), true, true, TimeSpan.Zero, fixture.Clock.GetUtcNow());
             var overview = OverviewModel.From(reading);
             Require(overview.Auth.Note.Contains("存储") && overview.Auth.Note.Contains("检查"), "界面未提示检查存储故障");
@@ -533,17 +533,28 @@ internal static class SubmissionRetryRegression
             fixture.Http.PortalResult = "1";
             fixture.Clock.Advance(TimeSpan.FromSeconds(2));
             var failed = worker.RunOnceAsync(default).GetAwaiter().GetResult();
-            Require(failed.AuthenticationFailure == nameof(PortalFailure.SafetyPersistence) && failed.CredentialsBlocked,
+            Require(failed.SubmissionResolutionStorageFault && failed.CredentialsBlocked && failed.AuthenticationFailure != nameof(PortalFailure.SafetyPersistence),
                 "只读复检消解失败未显示存储故障");
             var reading = new StatusReading(failed, NetworkDisplayMap.Map(failed, TimeSpan.Zero), true, true, TimeSpan.Zero, fixture.Clock.GetUtcNow());
             Require(OverviewModel.From(reading).Auth.Title == "认证状态需检查", "未知结果被提示为永久停止提交");
+            var diagnostics = DiagnosticsModel.From(reading);
+            Require(diagnostics.Signals.Any(row => row.Caption == "消解存储故障") &&
+                diagnostics.Signals.All(row => !row.Note.Contains("需要人工核实后解除")), "诊断未区分存储故障或错误提示永久暂停");
             Require(store.LoadAuthenticationBlock()?.State == AuthenticationState.SubmissionPending && Count(fixture) == 1,
                 "消解失败改变未知状态或发送新凭据");
             environment.FailResolve = false;
             fixture.Clock.Advance(TimeSpan.FromSeconds(4));
             var recovered = worker.RunOnceAsync(default).GetAwaiter().GetResult();
-            Require(!recovered.CredentialsBlocked && recovered.AuthenticationFailure != nameof(PortalFailure.SafetyPersistence),
+            Require(!recovered.CredentialsBlocked && !recovered.SubmissionResolutionStorageFault,
                 "消解恢复后仍显示存储故障");
+        })),
+        ("有限重试：消解修订不匹配不误报存储故障", () => WithStore((fixture, store, _) =>
+        {
+            using var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store) { RejectResolve = true }, fixture.Clock);
+            var status = worker.RunOnceAsync(default).GetAwaiter().GetResult();
+            Require(status.CredentialsBlocked && !status.SubmissionResolutionStorageFault, "修订不匹配误报存储不可用");
+            var reading = new StatusReading(status, NetworkDisplayMap.Map(status, TimeSpan.Zero), true, true, TimeSpan.Zero, fixture.Clock.GetUtcNow());
+            Require(!OverviewModel.From(reading).Auth.Note.Contains("存储不可用"), "界面误称存储不可用");
         })),
         ("有限重试：明确密码绑定拒绝立即停止即使额度终态写失败", () => WithStore((_, _, directory) =>
         {

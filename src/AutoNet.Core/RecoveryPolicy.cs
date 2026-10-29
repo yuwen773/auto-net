@@ -224,6 +224,8 @@ public sealed record StatusSnapshot
     public DateTimeOffset? AuthenticationAcceptedAt { get; init; }
     public string AuthenticationStage { get; init; } = "Unknown";
     public string AuthenticationFailure { get; init; } = "None";
+    /// <summary>消解写入故障的进程内观测；旧版状态缺省为 false，不代表已验证存储正常。</summary>
+    public bool SubmissionResolutionStorageFault { get; init; }
     public string AuthenticationPersistentState { get; init; } = "Unknown";
     public int? AuthenticationHttpStatus { get; init; }
     public bool CredentialRequestStarted { get; init; }

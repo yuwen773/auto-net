@@ -84,9 +84,13 @@ internal static class DiagnosticsModel
     private static IReadOnlyList<DiagnosticsRow> Signals(StatusSnapshot s)
     {
         var rows = new List<DiagnosticsRow>();
-        if (s.CredentialsBlocked)
+        if (s.CredentialsBlocked && s.SubmissionResolutionStorageFault && s.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending))
+            rows.Add(new DiagnosticsRow("认证结果待确认", "存在", "继续只读复检；提交遵守共享额度和等待间隔。", OverviewTone.Problem));
+        else if (s.CredentialsBlocked)
             rows.Add(new DiagnosticsRow("认证提交暂停", "存在",
                 "自动认证已安全暂停，需要人工核实后解除；解除须经确认、只读复核、修订核对与审计。", OverviewTone.Problem));
+        if (s.SubmissionResolutionStorageFault)
+            rows.Add(new DiagnosticsRow("消解存储故障", "存在", "消解未能确认完成；请检查本地存储和诊断日志。", OverviewTone.Problem));
         if (s.PortalLayoutSuspected)
             rows.Add(new DiagnosticsRow("门户结构疑似变化", "存在",
                 "这是门户改版信号，不代表认证已暂停，也不代表凭据被拒绝。", OverviewTone.Warning));

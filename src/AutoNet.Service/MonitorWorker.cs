@@ -546,8 +546,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             LastRecoverySeconds = lastRecoverySeconds, LastRecoveryAt = lastRecoveryAt,
             ActionStartedAt = actionStartedAt, ActionFinishedAt = actionFinishedAt, AuthenticationAcceptedAt = authenticationAcceptedAt,
             AuthenticationStage = lastAuthentication?.Stage.ToString() ?? "Unknown",
-            AuthenticationFailure = policy.CredentialsBlocked && (blockFailure == PortalFailure.SafetyPersistence || submissionResolutionStorageFault)
-                ? nameof(PortalFailure.SafetyPersistence) : lastAuthentication?.Failure.ToString() ?? blockFailure.ToString(),
+            AuthenticationFailure = lastAuthentication?.Failure.ToString() ?? blockFailure.ToString(),
+            SubmissionResolutionStorageFault = submissionResolutionStorageFault,
             AuthenticationHttpStatus = lastAuthentication?.HttpStatus, CredentialRequestStarted = lastAuthentication?.CredentialRequestStarted ?? false,
             AuthenticationPersistentState = authentication?.State.ToString() ?? "Ready",
             CredentialsBlocked = policy.CredentialsBlocked
@@ -1069,7 +1069,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         notifiedThisCycle = true;
     }
 
-    private static bool IsStorageFailure(Exception e) => e is IOException or UnauthorizedAccessException or System.Security.SecurityException;
+    private static bool IsStorageFailure(Exception e) => e is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.SecurityException;
 
     public override void Dispose()
     {

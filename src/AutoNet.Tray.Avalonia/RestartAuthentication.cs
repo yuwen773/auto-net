@@ -16,7 +16,7 @@ internal sealed class RestartAuthentication(SafetyStateStore store, Func<Task<bo
             return store.TryRestartAuthentication(authentication, budget)
                 ? RestartAuthenticationOutcome.Reset : RestartAuthenticationOutcome.Changed;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.SecurityException)
         {
             return RestartAuthenticationOutcome.StorageFailure;
         }

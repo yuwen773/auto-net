@@ -212,12 +212,14 @@ internal static class OverviewModel
     {
         if (snapshot.CredentialsBlocked)
         {
-            var note = snapshot.AuthenticationFailure == nameof(PortalFailure.SafetyPersistence)
-                ? "认证安全状态或审计存储不可用；请检查本地存储及诊断日志，提交仍受安全状态和额度约束。"
+            var note = snapshot.SubmissionResolutionStorageFault
+                ? "认证安全状态或审计存储不可用，或状态记录损坏；请检查本地存储及诊断日志，提交仍受安全状态和额度约束。"
+                : snapshot.AuthenticationFailure == nameof(PortalFailure.SafetyPersistence)
+                ? "认证安全状态无法确认；请检查认证诊断及本地状态。"
                 : snapshot.PortalLayoutSuspected
                 ? "自动认证已安全暂停，需要人工核实后解除；门户结构疑似变化。"
                 : "自动认证已安全暂停，需要人工核实后解除。";
-            var title = snapshot.AuthenticationFailure == nameof(PortalFailure.SafetyPersistence) &&
+            var title = snapshot.SubmissionResolutionStorageFault &&
                 snapshot.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending)
                 ? "认证状态需检查" : "认证提交已暂停";
             return new OverviewAuthColumn(OverviewAuthKind.Suspended, title, note, OverviewTone.Problem);

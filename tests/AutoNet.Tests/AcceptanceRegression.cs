@@ -185,6 +185,7 @@ internal static class AcceptanceRegression
         public bool FailAuthenticationRead { get; set; }
         public Func<DisconnectBudget, bool>? FailBudgetWrite { get; init; }
         public bool FailResolve { get; set; }
+        public bool RejectResolve { get; init; }
         public Settings? LoadSettings() => fixture.LoadSettings();
         public Credentials? LoadCredentials() => fixture.LoadCredentials();
         public AuthenticationBlock? LoadAuthenticationBlock() => FailAuthenticationRead ? throw new UnauthorizedAccessException("synthetic denial") : store.LoadAuthenticationBlock();
@@ -220,7 +221,7 @@ internal static class AcceptanceRegression
             FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.TryTransitionAuthentication(expected, next);
         public bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false) =>
             FailResolve || FailAuthenticationWrite?.Invoke(next) == true
-                ? throw new IOException("synthetic state write failure") : store.ResolveSubmissionPending(expected, budget, next, directConfirmation);
+                ? throw new IOException("synthetic state write failure") : !RejectResolve && store.ResolveSubmissionPending(expected, budget, next, directConfirmation);
         public DisconnectBudget LoadDisconnectBudget(Settings settings) => store.LoadDisconnectBudget(settings);
         public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget)
         {

@@ -55,7 +55,7 @@ public sealed record PortalAttempt(LoginResult Result, PortalStage Stage, Portal
         PortalFailure.Tls => "TLS 校验或握手失败", PortalFailure.CredentialsRejected => "服务器明确拒绝凭据",
         PortalFailure.InteractionRequired => "需要人工验证",
         PortalFailure.BindingRejected => "网关或设备绑定被拒绝；请核实 VLAN、MAC/AC 参数，不能据此判断密码错误",
-        PortalFailure.SafetyPersistence => "认证提交授权未能持久保存，停止提交并保留安全暂停",
+        PortalFailure.SafetyPersistence => "认证安全状态无法确认；请检查本地状态和诊断日志",
         PortalFailure.MissingGatewayParameters => "网关未返回登录所需参数", _ => "接口未接受认证"
     };
 }

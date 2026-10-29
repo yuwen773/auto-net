@@ -114,6 +114,14 @@ internal static class SubmissionBudgetRegression
             Require(operation.RunAsync().GetAwaiter().GetResult() == RestartAuthenticationOutcome.StorageFailure, "存储故障未返回受控提示结果");
             Require(store.LoadSubmissionBudget() == budget, "审计失败改变了额度");
         })),
+        ("提交额度重置：损坏额度记录显示存储故障且不要求确认", () => Run(directory =>
+        {
+            File.WriteAllText(Path.Combine(directory, "submission-budget.json"), "{broken");
+            var confirmed = false;
+            var operation = new RestartAuthentication(new SafetyStateStore(directory), () => { confirmed = true; return Task.FromResult(true); });
+            Require(operation.RunAsync().GetAwaiter().GetResult() == RestartAuthenticationOutcome.StorageFailure && !confirmed,
+                "损坏额度未受控提示或仍要求用户确认");
+        })),
         ("提交额度重置：独立进程执行锁、并发修订及重启后确认", ResetCrossProcessAsync),
         ("提交额度：首次持久预留独立于认证暂停且重读保留次数与时刻", () => Run(directory =>
         {
