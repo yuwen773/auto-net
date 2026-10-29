@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType><UseWindowsForms>true</UseWindowsForms></PropertyGroup>
+  <PropertyGroup><OutputType>Exe</OutputType><UseWindowsForms>true</UseWindowsForms><NoWarn>$(NoWarn);MSB3277</NoWarn></PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Core/AutoNet.Core.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Service/AutoNet.Service.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Tray/AutoNet.Tray.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../../src/AutoNet.Tray.Avalonia/AutoNet.Tray.Avalonia.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/AutoNet.AuthChannel/AutoNet.AuthChannel.csproj" /></ItemGroup>
 </Project>

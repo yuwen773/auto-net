@@ -22,6 +22,9 @@ jobs:
       - name: Verify-bundle QA self-test
         shell: pwsh
         run: pwsh.exe -NoLogo -NoProfile -File scripts/qa-verify-bundle.ps1
+      - name: Install-smoke environment guard self-test
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/qa-install-smoke-guard.ps1
       - name: Upload build evidence and Windows package
         if: always()
         uses: actions/upload-artifact@v4

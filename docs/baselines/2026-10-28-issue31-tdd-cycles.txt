@@ -1,0 +1,35 @@
+Cycle 1 RED
+FAIL 提交额度：首次持久预留独立于认证暂停且重读保留次数与时刻: 首次预留未成功
+0/1 passed
+Cycle 1 GREEN
+1/1 passed
+Cycle 2 RED
+FAIL 提交额度：修订比较转换仅推进状态且旧修订不覆盖并发结果: 预留不能推进为可能已发送
+1/2 passed
+Cycle 2 GREEN
+2/2 passed
+Cycle 3 RED
+FAIL 提交额度：活动预留不重复计数且119.999秒拒绝120秒允许三次封顶: 活动预留被第二次计数
+2/3 passed
+Cycle 3 GREEN
+3/3 passed
+Cycle 4 RED
+FAIL 提交额度：墙钟回拨返回保守等待且不改写预留时间: 回拨未返回时钟保守等待
+3/4 passed
+Cycle 4 GREEN
+4/4 passed
+Cycle 5 RED
+FAIL 提交额度：损坏缺字段未知版本重复与不一致记录均拒绝预留并保留原字节: 'b' is an invalid start of a property name. Expected a '"'. Path: $ | LineNumber: 0 | BytePositionInLine: 1.
+4/5 passed
+Cycle 5 GREEN
+5/5 passed
+Cycle 6 RED
+FAIL 提交额度：共享锁竞争与原子替换失败均拒绝预留且旧记录不变: The process cannot access the file 'D:\Work\code\auto-net\tests\AutoNet.Tests\bin\Release\net10.0-windows\submission-budget-a20c4084b5d743989f8fbbdf1ff82eee\auth-state.lock' because it is being used by another process.
+5/6 passed
+Cycle 6 GREEN
+6/6 passed
+Cycle 7 RED
+FAIL 提交额度：不可信时刻不能生成无法读取的预留记录: 无效时刻获得了预留
+7/8 passed
+Cycle 7 GREEN
+8/8 passed

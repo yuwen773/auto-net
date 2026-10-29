@@ -149,8 +149,9 @@ internal sealed class StatusPipe : IDisposable
             {
                 try
                 {
+                    var sequence = NextSequence();
                     var reading = await Task.Run(() => ReadNow(path, clock()), token).ConfigureAwait(false);
-                    Apply(NextSequence(), reading);
+                    Apply(sequence, reading);
                 }
                 catch (OperationCanceledException)
                 {

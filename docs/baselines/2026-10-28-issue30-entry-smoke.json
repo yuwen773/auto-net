@@ -1,0 +1,36 @@
+[
+  {
+    "Arguments": [
+      "--save-settings-handoff"
+    ],
+    "ExitCode": 2,
+    "StdoutEmpty": true,
+    "StderrEmpty": true,
+    "Runtime": "repository-local .NET"
+  },
+  {
+    "Arguments": [
+      "--save-settings-handoff",
+      "bad",
+      "0",
+      "0"
+    ],
+    "ExitCode": 2,
+    "StdoutEmpty": true,
+    "StderrEmpty": true,
+    "Runtime": "repository-local .NET"
+  },
+  {
+    "Arguments": [
+      "--save-settings-handoff",
+      "bad",
+      "0",
+      "0",
+      "--settings"
+    ],
+    "ExitCode": 2,
+    "StdoutEmpty": true,
+    "StderrEmpty": true,
+    "Runtime": "repository-local .NET"
+  }
+]

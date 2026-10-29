@@ -10,6 +10,26 @@ public static class DirectNetwork
 {
     public static HttpClient CreateClient(WifiLink link) => new(CreateHandler(link)) { Timeout = TimeSpan.FromSeconds(2) };
 
+    internal static async Task<Stream> ConnectAsync(string host, int port, WifiLink link, CancellationToken ct)
+    {
+        if (link.Address is null || link.Index == 0) throw new InvalidOperationException("Wi-Fi 尚未取得 IPv4 地址。");
+        var cache = new ConcurrentDictionary<string, (DateTimeOffset Until, IPAddress[] Addresses)>();
+        var addresses = await ResolveAsync(host, link, cache, ct);
+        foreach (var address in addresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork))
+        {
+            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            try
+            {
+                Pin(socket, link);
+                await socket.ConnectAsync(new IPEndPoint(address, port), ct);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch (SocketException) { socket.Dispose(); }
+            catch { socket.Dispose(); throw; }
+        }
+        throw new SocketException((int)SocketError.HostUnreachable);
+    }
+
     // Handler separated from the client so the offline regression can pin "probes never
     // follow redirects" (ADR-0006): a 3xx must reach the probe, not be followed to the
     // portal's landing page.

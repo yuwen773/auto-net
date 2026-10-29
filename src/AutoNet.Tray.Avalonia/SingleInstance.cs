@@ -1,8 +1,8 @@
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
-/// 普通托盘单实例互斥。迁移期间使用独立互斥名，避免与本机已安装的 WinForms 托盘（Local\AutoNet.Tray）
-/// 相互阻塞；候选包替换旧实现时（工单 #15）须沿用原名，保证同一会话只运行一个普通实例。
+/// 普通托盘单实例互斥。入口为正式运行传入既有安装身份，为显式 QA 传入独立身份，
+/// 保证同一会话只运行一个普通实例，同时允许受控验证与已安装托盘并存。
 /// </summary>
 internal sealed class SingleInstance : IDisposable
 {

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using AutoNet.Core;
+using AutoNet.Service;
 
 namespace AutoNet.AuthChannel;
 
@@ -11,30 +12,51 @@ namespace AutoNet.AuthChannel;
 /// 验证码与不可识别结构 → NeedsHuman（人工处置与可见化属工单 #25）。
 /// 异步链跑在 Application.Run 消息循环上（STA），完成后写结果、定退出码并关窗。
 /// </summary>
-internal sealed class AuthChannelWindow : Form
+internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 {
     private const string ProbeScript =
         "(() => { const pw = document.querySelector('input[type=password]');" +
         "return { found: !!pw, ready: !!document.body }; })()";
 
     private readonly ChannelOptions _options;
-    private readonly CredentialSource _credential;
     private readonly string _sessionDir;
     private readonly string _startPath;
     private Microsoft.Web.WebView2.Core.CoreWebView2Environment? _environment;
     private Microsoft.Web.WebView2.WinForms.WebView2? _webView;
+    private AuthChannelProxy? _proxy;
+    private ChannelProcessJob? _processJob;
+    private WifiLink? _proxyLink;
+    private Settings? _proxySettings;
     private readonly TaskCompletionSource _browserExited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenSource _humanCancellationTokenSource = new();
+    private bool _humanAssisted;
+    private bool _submissionStarted;
+    private bool _runtimeInJob;
+    private IDisposable? _launchLease;
+    private bool _launchDenied;
+    private AuthChannelConclusion _submissionConclusion = AuthChannelConclusion.Unknown;
 
     public int ExitCode { get; private set; } = 1;
+    public bool HasTrustedNetworkBoundary => _runtimeInJob && _proxy?.IsRunning == true && _processJob is not null;
+    public bool IsBoundTo(Settings settings, WifiLink link) => HasTrustedNetworkBoundary && settings == _proxySettings &&
+        _proxyLink is { } bound && link.State == WifiState.Ready && bound.Index == link.Index &&
+        Equals(bound.Address, link.Address) && bound.DnsServers.SequenceEqual(link.DnsServers) && RuntimeInJob();
+    public int BrowserProcessId => checked((int)(_webView?.CoreWebView2?.BrowserProcessId ?? 0));
+    public int HelperProcessId => Environment.ProcessId;
+    public string ProcessJobName => _processJob?.Name ?? "";
+
+    private bool RuntimeInJob()
+    {
+        if (_processJob is null || _environment is null || BrowserProcessId <= 0 || !_processJob.Contains(BrowserProcessId)) return false;
+        return _environment.GetProcessInfos().All(info => _processJob.Contains(checked((int)info.ProcessId)));
+    }
 
     /// <summary>最近一次运行失败的受控错误（类型名），供失败结果文件携带（工单 #25 回退链）。</summary>
     public string LastError { get; private set; } = "";
 
-    public AuthChannelWindow(ChannelOptions options, CredentialSource credential)
+    public AuthChannelWindow(ChannelOptions options)
     {
         _options = options;
-        _credential = credential;
         _sessionDir = Path.Combine(Path.GetTempPath(), "autonet-authch-" + Guid.NewGuid().ToString("N"));
         _startPath = new Uri(options.StartUrl).AbsolutePath;
         FormBorderStyle = FormBorderStyle.None;
@@ -54,20 +76,32 @@ internal sealed class AuthChannelWindow : Form
 
     public void CleanupSession()
     {
-        // 同步清理（Main 返回前必须完成）：等 WebView2 浏览器子进程真正退出（上限 20s）再删会话目录。
-        try { _webView?.Dispose(); } catch { /* 会话即弃：清理失败不影响结论 */ }
-        _webView = null;
-        _environment = null;
-        try { _browserExited.Task.Wait(20000); } catch (AggregateException) { }
-        for (var attempt = 0; attempt < 3; attempt++)
+        try
         {
-            try
+            // 同步清理（Main 返回前必须完成）：等 WebView2 浏览器子进程真正退出（上限 20s）再删会话目录。
+            var browserCreated = _environment is not null;
+            try { _webView?.Dispose(); } catch { /* 会话即弃：清理失败不影响结论 */ }
+            _webView = null;
+            _environment = null;
+            try { if (browserCreated) _browserExited.Task.Wait(20000); } catch (AggregateException) { }
+            try { _proxy?.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch (Exception) { }
+            _proxy = null;
+            if (browserCreated && !_browserExited.Task.IsCompleted) return;
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                if (Directory.Exists(_sessionDir)) { Directory.Delete(_sessionDir, recursive: true); }
-                return;
+                try
+                {
+                    if (Directory.Exists(_sessionDir)) { Directory.Delete(_sessionDir, recursive: true); }
+                    return;
+                }
+                catch (IOException) { Thread.Sleep(1500); }
+                catch (UnauthorizedAccessException) { Thread.Sleep(1500); }
             }
-            catch (IOException) { Thread.Sleep(1500); }
-            catch (UnauthorizedAccessException) { Thread.Sleep(1500); }
+        }
+        finally
+        {
+            _launchLease?.Dispose();
+            _launchLease = null;
         }
     }
 
@@ -86,13 +120,20 @@ internal sealed class AuthChannelWindow : Form
             Console.Error.WriteLine(runtimeError);
             LastError = runtimeError;
         }
+        if (_launchDenied)
+        {
+            // 另一辅助进程仍持有启动锁：不写结果文件，避免覆盖它的回执。
+            ExitCode = 4;
+            BeginInvoke(Close);
+            return;
+        }
         WriteResult(_options.ResultPath, conclusion,
             runtimeError.Length > 0 ? runtimeError : DetailFor(conclusion));
         if (runtimeError.Length == 0)
         {
             AuthChannelLogWriter.Append("AuthChannelResult", "conclusion=" + conclusion);
         }
-        if (conclusion == AuthChannelConclusion.NeedsHuman)
+        if (conclusion == AuthChannelConclusion.NeedsHuman && !_humanAssisted)
         {
             // 工单 #25：验证码 / 勾选拒绝 / 结构不可识别 → 窗口自动可见化，页面保持打开
             // 等人工完成（自动提交在 NeedsHuman 判定前就已停止，每页一次提交约束不变）。
@@ -144,11 +185,13 @@ internal sealed class AuthChannelWindow : Form
         File.WriteAllText(path, payload, new UTF8Encoding(false));
     }
 
-    private static string DetailFor(AuthChannelConclusion conclusion) => conclusion switch
+    private string DetailFor(AuthChannelConclusion conclusion) => conclusion switch
     {
         AuthChannelConclusion.LoggedIn => "submit-once=done; outcome=logged-in",
         AuthChannelConclusion.NotLoggedIn => "submit-once=done; outcome=explicit-failure",
         AuthChannelConclusion.NeedsHuman => "submit-once=halted; outcome=needs-human",
+        _ when !_submissionStarted && !HasTrustedNetworkBoundary => "error=NetworkBoundaryUnverified; submit-once=not-authorized",
+        _ when !_submissionStarted => "submit-once=not-authorized; outcome=unknown",
         _ => "submit-once=done; outcome=unknown",
     };
 
@@ -165,24 +208,44 @@ internal sealed class AuthChannelWindow : Form
 
     private async Task<AuthChannelConclusion> ExecuteAsync()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(_options.TimeoutSeconds));
+        if (!_options.FromSettings || _options.FixtureDir is not null ||
+            !Uri.TryCreate(_options.StartUrl, UriKind.Absolute, out var portal) || !Settings.IsSupportedPortal(portal))
+            return AuthChannelConclusion.Unknown;
+        // 托盘重启后仍运行的辅助进程用这条锁阻止第二个通道启动；进程退出即由系统释放。
+        _launchLease = new SafetyStateStore(Storage.Root).TryAcquireChannelLaunch();
+        if (_launchLease is null)
+        {
+            _launchDenied = true;
+            return AuthChannelConclusion.Unknown;
+        }
+        var settings = Storage.LoadSettings();
+        if (settings is null || !settings.Enabled || settings.AuthChannelMode == AuthChannelModes.Off || settings.PortalOrigin != _options.StartUrl)
+            return AuthChannelConclusion.Unknown;
+        settings.Validate();
+        var link = Wifi.Read(settings);
+        if (link.State != WifiState.Ready) return AuthChannelConclusion.Unknown;
+        _processJob = ChannelProcessJob.CreateForCurrentProcess();
+        _proxy = await AuthChannelProxy.StartAsync(link, _processJob);
+        _proxySettings = settings;
+        _proxyLink = link;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_humanCancellationTokenSource.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds + 120));
+        var browserOptions = new Microsoft.Web.WebView2.Core.CoreWebView2EnvironmentOptions(
+            $"--proxy-server=http://127.0.0.1:{_proxy.Port} --proxy-bypass-list=<-loopback> --disable-quic --disable-background-networking");
         _environment = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(
-            browserExecutableFolder: null, userDataFolder: _sessionDir);
+            browserExecutableFolder: null, userDataFolder: _sessionDir, options: browserOptions);
         _webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
         Controls.Add(_webView);
         await _webView.EnsureCoreWebView2Async(_environment).WaitAsync(timeout.Token);
         var core = _webView.CoreWebView2;
         _environment.BrowserProcessExited += (_, _) => _browserExited.TrySetResult();
+        _runtimeInJob = RuntimeInJob();
+        if (!HasTrustedNetworkBoundary) return AuthChannelConclusion.Unknown;
+        _environment.ProcessInfosChanged += (_, _) => { if (!RuntimeInJob()) _runtimeInJob = false; };
         core.Settings.AreDevToolsEnabled = false;
         core.Settings.AreDefaultContextMenusEnabled = false;
         core.Settings.IsStatusBarEnabled = false;
         core.Settings.IsZoomControlEnabled = false;
-        if (_options.FixtureDir is not null)
-        {
-            core.SetVirtualHostNameToFolderMapping(
-                _options.FixtureHost, _options.FixtureDir,
-                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
-        }
         var navigation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         core.NavigationCompleted += (_, _) => navigation.TrySetResult();
         core.Navigate(_options.StartUrl);
@@ -192,19 +255,36 @@ internal sealed class AuthChannelWindow : Form
         var probe = await core.ExecuteScriptAsync(ProbeScript).WaitAsync(timeout.Token);
         if (!JsonDocument.Parse(probe).RootElement.GetProperty("found").GetBoolean())
         {
-            return AuthChannelConclusion.NeedsHuman;
+            return AuthChannelConclusion.Unknown;
         }
 
-        var fillResult = await core.ExecuteScriptAsync(FillScript(_credential.Username, _credential.Password))
-            .WaitAsync(timeout.Token);
+        using var environment = new MonitorEnvironment();
+        var workflow = new AuthChannelWorkflow(environment, this, TimeProvider.System);
+        ChannelWorkflowOutcome outcome;
+        do
+        {
+            outcome = await workflow.RunOnceAsync(timeout.Token);
+            if (outcome == ChannelWorkflowOutcome.Waiting) await Task.Delay(1000, timeout.Token);
+        } while (outcome == ChannelWorkflowOutcome.Waiting);
+        return outcome == ChannelWorkflowOutcome.Submitted ? _submissionConclusion : AuthChannelConclusion.Unknown;
+    }
+
+    public async Task<AuthChannelConclusion> SubmitAsync(Credentials credentials, CancellationToken ct)
+    {
+        var core = _webView!.CoreWebView2;
+        _submissionStarted = true;
+        var fillResult = await core.ExecuteScriptAsync(FillScript(credentials.Username, credentials.Password)).WaitAsync(ct);
         var fill = JsonDocument.Parse(fillResult).RootElement;
         if (!fill.GetProperty("ok").GetBoolean())
         {
-            // 勾选被页面拒绝、结构不可识别：一律停下转人工，绝不二次提交。
-            return AuthChannelConclusion.NeedsHuman;
+            _submissionConclusion = AuthChannelConclusion.NeedsHuman;
+            _humanAssisted = true;
+            ShowForHuman();
+            await HumanAssistDelayAsync();
+            return _submissionConclusion;
         }
-
-        return await PollOutcomeAsync(core, timeout.Token);
+        _submissionConclusion = await PollOutcomeAsync(core, ct);
+        return _submissionConclusion;
     }
 
     private string FillScript(string username, string password)
@@ -213,9 +293,18 @@ internal sealed class AuthChannelWindow : Form
         var pass = JsonSerializer.Serialize(password);
         return """
             (() => {
+              if (location.protocol !== 'https:' || location.hostname.toLowerCase() !== 'login.csust.edu.cn' ||
+                  (location.port && location.port !== '443')) return { ok: false, reason: 'untrusted-source' };
               const pw = document.querySelector('input[type=password]');
               if (!pw) { return { ok: false, reason: 'no-password-input' }; }
               const form = pw.closest('form') || document;
+              if (form === document) return { ok: false, reason: 'no-form' };
+              let target;
+              try { target = new URL(form.getAttribute('action') || location.href, location.href); }
+              catch { return { ok: false, reason: 'invalid-target' }; }
+              if (target.protocol !== 'https:' || target.hostname.toLowerCase() !== 'login.csust.edu.cn' ||
+                  (target.port && target.port !== '443') || target.username || target.password)
+                  return { ok: false, reason: 'untrusted-target' };
               const user = form.querySelector('input[type=text],input[type=email],input[type=tel],input:not([type])');
               if (!user) { return { ok: false, reason: 'no-user-input' }; }
               user.value = __USER__;
@@ -253,14 +342,12 @@ internal sealed class AuthChannelWindow : Form
             var outcome = JsonDocument.Parse(await core.ExecuteScriptAsync(outcomeScript).WaitAsync(token)).RootElement;
             var url = outcome.GetProperty("url").GetString() ?? string.Empty;
             var text = outcome.GetProperty("text").GetString() ?? string.Empty;
+            if (AuthChannelReceipt.ClassifyPage(url, text) == AuthChannelConclusion.NotLoggedIn)
+                return AuthChannelConclusion.NotLoggedIn;
             if (Uri.TryCreate(url, UriKind.Absolute, out var parsed)
                 && !string.Equals(parsed.AbsolutePath, _startPath, StringComparison.OrdinalIgnoreCase))
             {
-                return AuthChannelConclusion.LoggedIn;
-            }
-            if (text.Contains("data-portal-error") || text.Contains("登录失败") || text.Contains("密码错误"))
-            {
-                return AuthChannelConclusion.NotLoggedIn;
+                return AuthChannelConclusion.Unknown;
             }
         }
         return AuthChannelConclusion.Unknown;

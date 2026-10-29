@@ -7,13 +7,41 @@ internal static class MonitorRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("共享额度：结构性预检达到上限后保留原因并授予通道启动意图", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+            fixture.Http.GatewayLocation = "https://login.csust.edu.cn/?wlanuserip=10.0.0.1&wlanacip=192.168.100.254";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            await worker.RunOnceAsync(default);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            var status = await worker.RunOnceAsync(default);
+            if (!status.AuthChannelRequested || !status.CredentialsBlocked)
+                throw new Exception($"未获得授予：state={status.AuthenticationPersistentState}, failure={status.AuthenticationFailure}, layout={status.PortalLayoutSuspected}, block={fixture.Authentication}");
+            Require(fixture.Authentication?.ChannelFallbackCause == PortalFailure.MissingGatewayParameters);
+            Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
+        }),
+        ("共享额度：原因不明的人工暂停不得因结构信号自动授予通道", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
+            fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+            fixture.Http.StatusJson = "{}";
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var status = await worker.RunOnceAsync(default);
+            Require(status.CredentialsBlocked && status.PortalLayoutSuspected && !status.AuthChannelRequested);
+            Require(fixture.Authentication?.State == AuthenticationState.InteractionRequired);
+            Require(fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
+        }),
         ("监测：通道模式快照在检测异常时保留本轮已知模式但撤销自动授予", async () =>
         {
             foreach (var mode in new[] { AuthChannelModes.Off, AuthChannelModes.Automatic, AuthChannelModes.ManualOnly })
             {
                 var fixture = new MonitorFixture();
                 fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
-                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3, ChannelFallbackCause = PortalFailure.InvalidResponse });
                 fixture.Http.StatusJson = "{}";
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
                 Require((await worker.RunOnceAsync(default)).AuthChannelRequested);
@@ -37,7 +65,7 @@ internal static class MonitorRegression
             {
                 var fixture = new MonitorFixture();
                 fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
-                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3, ChannelFallbackCause = PortalFailure.InvalidResponse });
                 fixture.Http.StatusJson = "{}";
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
                 var original = await worker.RunOnceAsync(default);
@@ -73,7 +101,7 @@ internal static class MonitorRegression
                 var fixture = new MonitorFixture();
                 fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
                 var saved = fixture.Settings;
-                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3, ChannelFallbackCause = PortalFailure.InvalidResponse });
                 fixture.Http.StatusJson = "{}";
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
                 var original = await worker.RunOnceAsync(default);
@@ -133,7 +161,7 @@ internal static class MonitorRegression
             {
                 var fixture = new MonitorFixture();
                 fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
-                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3, ChannelFallbackCause = PortalFailure.InvalidResponse });
                 fixture.Http.StatusJson = "{}";
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
                 Require((await worker.RunOnceAsync(default)).AuthChannelRequested);
@@ -151,7 +179,7 @@ internal static class MonitorRegression
             {
                 var fixture = new MonitorFixture();
                 fixture.Settings = fixture.Settings with { AuthChannelMode = AuthChannelModes.Automatic };
-                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
+                fixture.BlockAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3, ChannelFallbackCause = PortalFailure.InvalidResponse });
                 fixture.Http.StatusJson = "{}";
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
                 Require((await worker.RunOnceAsync(default)).AuthChannelRequested);
@@ -497,7 +525,7 @@ internal static class MonitorRegression
             Require(fixture.Logs.Any(e => e.EventCode == "SubmissionRechecking"));
             Require(fixture.Logs.Any(e => e.EventCode == "SubmissionResolved" && e.Diagnostics?.Outcome == "Accepted"));
         }),
-        ("复检消解：复检明确未登录转冷却重试且不记解除审计", async () =>
+        ("复检消解：明确未登录仍等待共享120秒且不记解除审计", async () =>
         {
             var fixture = new MonitorFixture();
             fixture.Http.PortalResult = "0";
@@ -506,14 +534,17 @@ internal static class MonitorRegression
             Require(fixture.Authentication?.State == AuthenticationState.SubmissionPending);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2));
             var rejected = await worker.RunOnceAsync(default);
-            Require(fixture.Authentication is { State: AuthenticationState.RetryCoolingDown, Attempts: 1 });
-            Require(!rejected.CredentialsBlocked && fixture.ResolveCalls == 0);
-            Require(fixture.Logs.Any(e => e.EventCode == "SubmissionResolved" && e.Diagnostics?.Outcome == "Rejected"));
+            Require(fixture.Authentication is { State: AuthenticationState.SubmissionPending, Attempts: 1 });
+            Require(rejected.CredentialsBlocked && fixture.ResolveCalls == 0);
+            Require(fixture.Logs.Any(e => e.EventCode == "SubmissionRechecked" && e.Diagnostics?.Outcome == "NeedsLogin"));
             fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            await worker.RunOnceAsync(default);
+            Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(116));
             await worker.RunOnceAsync(default);
             Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 2);
         }),
-        ("复检消解：两次复检仍未知保持人工并通知，重启后重新复检可消解", async () =>
+        ("复检消解：两次复检仍未知通知后受控重试且重启可消解", async () =>
         {
             var fixture = new MonitorFixture();
             fixture.Http.PortalResult = "0";
@@ -529,7 +560,7 @@ internal static class MonitorRegression
             Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1 && fixture.ResolveCalls == 0);
             fixture.Clock.Advance(TimeSpan.FromHours(1));
             var later = await worker.RunOnceAsync(default);
-            Require(later.CredentialsBlocked && later.Notification == second.Notification);
+            Require(later.CredentialsBlocked && fixture.LoadSubmissionBudget()?.Attempts == 2);
             fixture.Http.PortalResult = "1";
             using var restarted = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
             var armed = await restarted.RunOnceAsync(default);
@@ -580,7 +611,7 @@ internal static class MonitorRegression
             fixture.Clock.Advance(TimeSpan.FromSeconds(2));
             var online = await worker.RunOnceAsync(default);
             Require(online.Direct == "外网可达" && fixture.ResolveCalls == 0);
-            Require(fixture.Authentication is { State: AuthenticationState.RetryCoolingDown, Attempts: 1 });
+            Require(fixture.Authentication is { State: AuthenticationState.SubmissionPending, Attempts: 1 });
             Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/eportal/portal/login") == 1);
         }),
         ("门户改版：状态结构变化聚合改版信号，恢复后清除且不重复广播", async () =>
@@ -717,6 +748,23 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public bool FailDisconnect { get; set; }
     private bool legacyBlocked;
     public AuthenticationBlock? Authentication { get; private set; }
+    public SubmissionBudget? SubmissionBudget { get; private set; }
+    public SubmissionBudget? LoadSubmissionBudget() => SubmissionBudget;
+    public IDisposable? TryAcquireSubmissionExecution() => new MemoryStream();
+    public SubmissionReservation TryReserveSubmissionBudget(SubmissionBudget? expected, DateTimeOffset now)
+    {
+        if (SubmissionBudget != expected) return new(SubmissionReservationOutcome.StateChanged, SubmissionBudget);
+        if (SubmissionBudget is { Attempts: >= 3 }) return new(SubmissionReservationOutcome.Exhausted, SubmissionBudget);
+        SubmissionBudget = new() { State = SubmissionBudgetState.Reserved, Attempts = (expected?.Attempts ?? 0) + 1,
+            ReservedAt = now, NextPossibleAt = now.AddSeconds(120), Revision = Guid.NewGuid() };
+        return new(SubmissionReservationOutcome.Reserved, SubmissionBudget);
+    }
+    public bool TryTransitionSubmissionBudget(SubmissionBudget expected, SubmissionBudgetState next)
+    {
+        if (SubmissionBudget != expected) return false;
+        SubmissionBudget = expected with { State = next, Revision = Guid.NewGuid() };
+        return true;
+    }
     public bool Blocked
     {
         get => Authentication?.BlocksSubmissions ?? legacyBlocked;

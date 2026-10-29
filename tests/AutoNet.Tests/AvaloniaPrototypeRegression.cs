@@ -66,8 +66,40 @@ internal static class AvaloniaPrototypeRegression
             Require(StartupRouter.Decide(tray, isAdministrator: false, anotherInstanceRunning: false).Kind == StartupActionKind.RunTray);
             Require(StartupRouter.Decide(tray, isAdministrator: false, anotherInstanceRunning: true).Kind == StartupActionKind.ReportAlreadyRunning,
                 "第二个普通实例应报告已在运行");
-            Require(AutoNet.Tray.Avalonia.Program.MutexName != @"Local\AutoNet.Tray",
-                "原型互斥名必须与本机已安装的 WinForms 托盘区分，避免相互阻塞");
+        })),
+        ("启动契约：正式托盘与旧实现共享单实例身份", () => Sync(() =>
+        {
+            var previousDirectory = Environment.GetEnvironmentVariable("AUTONET_QA_DIR");
+            try
+            {
+                Environment.SetEnvironmentVariable("AUTONET_QA_DIR", null);
+                // 独立测试后缀避免占用已安装托盘的真实互斥；旧入口与候选入口必须解析到同一身份。
+                var suffix = ".Tests." + Guid.NewGuid().ToString("N");
+                using var legacy = new Mutex(initiallyOwned: true, @"Local\AutoNet.Tray" + suffix, out var first);
+                Require(first, "测试夹具未取得独立互斥");
+                try
+                {
+                    bool? acquired = null;
+                    Exception? failure = null;
+                    var contender = new Thread(() =>
+                    {
+                        try
+                        {
+                            using var candidate = SingleInstance.Acquire(AutoNet.Tray.Avalonia.Program.MutexName + suffix);
+                            acquired = candidate.Acquired;
+                        }
+                        catch (Exception e) { failure = e; }
+                    }) { IsBackground = true };
+                    contender.Start();
+                    Require(contender.Join(TimeSpan.FromSeconds(5)), "竞争实例未及时结束");
+                    if (failure is not null) throw failure;
+                    Require(acquired == false, "旧托盘运行时新版仍取得普通实例互斥");
+                    Require(AutoNet.Tray.Avalonia.Program.MutexName == @"Local\AutoNet.Tray",
+                        "正式发布必须沿用安装契约的普通实例互斥身份");
+                }
+                finally { legacy.ReleaseMutex(); }
+            }
+            finally { Environment.SetEnvironmentVariable("AUTONET_QA_DIR", previousDirectory); }
         })),
         ("原型验证：单实例互斥独占且释放后可重新获取", () => Sync(() =>
         {
@@ -99,12 +131,16 @@ internal static class AvaloniaPrototypeRegression
                 Environment.SetEnvironmentVariable("AUTONET_QA_MODE", null);
                 var inactive = QaEnvironment.FromProcess();
                 Require(!inactive.Active && inactive.Mode == QaMode.None, "未设置 QA 目录时不得激活 QA 场景");
+                Require(AutoNet.Tray.Avalonia.Program.MutexName == @"Local\AutoNet.Tray",
+                    "未激活 QA 时必须使用正式托盘互斥");
 
                 var directory = Path.Combine(Path.GetTempPath(), "autonet-qa-env-" + Guid.NewGuid().ToString("N"));
                 Environment.SetEnvironmentVariable("AUTONET_QA_DIR", directory);
                 Environment.SetEnvironmentVariable("AUTONET_QA_MODE", "lifecycle");
                 var active = QaEnvironment.FromProcess();
                 Require(active.Active && active.Mode == QaMode.Lifecycle);
+                Require(AutoNet.Tray.Avalonia.Program.MutexName == @"Local\AutoNet.Tray.Avalonia",
+                    "显式 QA 场景必须与已安装托盘隔离并保持报告契约");
                 Require(active.Directory == Path.GetFullPath(directory));
                 Require(active.LifecycleReportPath.StartsWith(active.Directory, StringComparison.OrdinalIgnoreCase));
                 Require(active.ThemeLightPath != active.ThemeDarkPath, "明暗主题证据不得写入同一文件");

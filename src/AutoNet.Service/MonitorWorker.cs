@@ -37,6 +37,13 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private AuthenticationBlock? authentication;
     private AuthenticationBlock? authenticationExpected;
     private AuthenticationBlock? authenticationToWrite;
+    private readonly SubmissionRetryPolicy submissionRetry = new();
+    private SubmissionBudget? submissionBudget;
+    private SubmissionBudget? activeSubmission;
+    private SubmissionRetryDecision submissionDecision;
+    private bool retryingSubmission;
+    private DateTimeOffset pendingRetryAfter;
+    private DateTimeOffset nextSubmissionRecheck;
     private DateTimeOffset authenticationRetryUntil;
     // ADR-0001 recheck schedule: read-only probes about 2s and 6s after the pending state
     // appeared; the schedule re-arms after a restart.
@@ -104,6 +111,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         catch (Exception e)
         {
+            activeSubmission = null;
             authChannelRequested = false;
             authChannelPublished = false;
             authChannelNotBefore = default;
@@ -144,6 +152,18 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         if (authenticationBlockPending && policy.CredentialsBlocked) PersistAuthenticationBlock();
         var loadedAuthentication = ReadStep("AuthenticationStateRead", environment.LoadAuthenticationBlock);
+        submissionBudget = ReadStep("SubmissionBudgetRead", environment.LoadSubmissionBudget);
+        if (submissionBudget is { State: SubmissionBudgetState.Reserved } interrupted && activeSubmission is null)
+        {
+            using var execution = environment.TryAcquireSubmissionExecution();
+            if (execution is not null && environment.TryTransitionSubmissionBudget(interrupted, SubmissionBudgetState.PossiblySent))
+            {
+                submissionBudget = environment.LoadSubmissionBudget();
+                journal.Write("SubmissionInterrupted", "上次预留的执行进程已结束；按可能发送计数并重新完整等待。",
+                    new() { Stage = "Submission", Reason = "InterruptedReservation", Outcome = "PossiblySent" });
+            }
+        }
+        submissionRetry.Evaluate(submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart));
         if (loadedAuthentication != authentication)
         {
             authentication = loadedAuthentication;
@@ -198,6 +218,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         else { directHttp?.Dispose(); directHttp = null; directKey = ""; }
         await RecheckSubmissionAsync(settings, link, ct);
+        submissionDecision = submissionRetry.Evaluate(submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart), direct);
         var observation = new Observation(link.State, direct, portalState);
         var diagnostic = new DiagnosticData
         {
@@ -232,6 +253,17 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         var oldBudget = policy.DisconnectBudget;
         var action = policy.Decide(observation, PolicyNow, settings.Enabled, credentials is not null, settings.AllowActiveDisconnect);
+        retryingSubmission = authentication?.State == AuthenticationState.SubmissionPending && submissionBudget is { Attempts: > 0 };
+        if (retryingSubmission && submissionDecision == SubmissionRetryDecision.Authorized && settings.Enabled && credentials is not null &&
+            link.State == WifiState.Ready && portalState != PortalState.LoggedIn && PolicyNow >= pendingRetryAfter)
+            action = ActionKind.Authenticate;
+        if (action == ActionKind.Authenticate && submissionDecision != SubmissionRetryDecision.Authorized)
+        {
+            RejectSubmission("SubmissionBudget" + submissionDecision);
+            action = ActionKind.None;
+        }
+        if (retryingSubmission && submissionDecision == SubmissionRetryDecision.Exhausted)
+            RejectSubmission("SubmissionBudgetExhausted");
         diagnostic = diagnostic with
         {
             Outcome = action.ToString(), Reason = policy.DecisionReason, FailedRounds = policy.FailedRounds,
@@ -267,6 +299,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         string? actionEvent = null;
         WifiRequestStatus? disconnectResult = null;
         WifiRequestResult? wifiRequest = null;
+        using var submissionExecution = action == ActionKind.Authenticate ? environment.TryAcquireSubmissionExecution() : null;
+        if (action == ActionKind.Authenticate && submissionExecution is null)
+        {
+            RejectSubmission("SubmissionExecutionUnavailable");
+            action = ActionKind.None;
+        }
         if (action != ActionKind.None)
         {
             ct.ThrowIfCancellationRequested();
@@ -364,8 +402,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                                 ElapsedMilliseconds = step.ElapsedMilliseconds, Error = step.Error,
                                 HttpStatus = step.HttpStatus, Parameters = step.Evidence
                             });
-                        }, budgets, qaSubmissionLost).LoginDetailedAsync(credentials!, ct,
-                            review => AuthorizeSubmission(settings, link, ct, review))
+                        }, budgets, qaSubmissionLost).LoginDetailedAsync(credentials!, ct, allowUnknownStatus: retryingSubmission,
+                            authorizeSubmissionAsync: review => AuthorizeSubmissionAsync(settings, link, ct, review))
                         : new(LoginResult.Unsupported, PortalStage.Submission, PortalFailure.SafetyPersistence);
                     detail = lastAuthentication.SafeSummary;
                     if (lastAuthentication.Failure != PortalFailure.None) journal.Fault("Authentication", detail);
@@ -439,13 +477,17 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         // the machine-scope credentials itself and reports through its result file — the
         // credentials never travel through status.json, and the service stays session 0.
         authChannelRequested = RecoveryPolicy.ShouldRequestAuthChannel(
-            settings.AuthChannelMode, portalLayoutSuspected, blockFailure, authentication?.Attempts ?? 0);
+            settings.AuthChannelMode, portalLayoutSuspected && PortalLayoutSignal.IsStructural(authentication?.ChannelFallbackCause ?? PortalFailure.None),
+            blockFailure, authentication?.Attempts ?? 0) ||
+            settings.AuthChannelMode == AuthChannelModes.Automatic && retryingSubmission &&
+            submissionDecision == SubmissionRetryDecision.Authorized && action == ActionKind.Authenticate &&
+            lastAuthentication is { CredentialRequestStarted: false } failedPreflight && PortalLayoutSignal.IsStructural(failedPreflight.Failure);
         if (authChannelRequested && !authChannelPublished)
         {
             authChannelPublished = true;
             authChannelNotBefore = clock.GetUtcNow().Add(RecoveryPolicy.AuthChannelCooldown);
             Notify(NotificationCodes.AuthChannelStarted);
-            journal.Write("AuthChannelStarted", $"门户结构疑似改版且连续自动认证失败已达 {RecoveryPolicy.AuthenticationAttemptCap} 次阈值；将在用户会话以内嵌认证通道提交凭据（页面原有加密与提交逻辑，凭据仅进入本应用隐私会话）。",
+            journal.Write("AuthChannelStarted", "门户结构性预检失败；已请求在用户会话启动内嵌认证通道，实际提交仍需独立授权。",
                 diagnostic with { AuthenticationAttempts = authentication?.Attempts ?? 0, AuthenticationAttemptMax = RecoveryPolicy.AuthenticationAttemptCap });
         }
         if (!authChannelRequested) { authChannelPublished = false; authChannelNotBefore = default; }
@@ -455,7 +497,23 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 : "自动认证因历史安全标记暂停；请先查看诊断和日志，再使用“解除认证暂停”。保存设置不会解除暂停。"
             : "自动认证及主动断线已暂停；" + lastAuthentication.SafeSummary + "；核实后使用“解除认证暂停”。";
         if (policy.CredentialsBlocked && authentication?.State == AuthenticationState.SubmissionPending && blockFailure == PortalFailure.None)
-            detail = "认证提交的持久结果尚未确认，认证及主动断线已暂停；将进行只读复检定性，未证实成功前不会重发凭据。";
+            detail = submissionBudget is null
+                ? "认证提交的持久结果尚未确认且缺少提交额度记录；保持暂停并只读复检，不自动重发凭据。"
+                : submissionDecision == SubmissionRetryDecision.Exhausted
+                    ? "已停止自动提交：首次提交后的两次额外额度已用尽；继续低频只读复检。"
+                    : "认证提交结果未知；只读复检继续，只有外网不可达且共享额度和至少120秒等待满足后才受控重试。" + (submissionDecision switch
+                    {
+                        SubmissionRetryDecision.InternetOnline => "外网已恢复，暂停提交。",
+                        SubmissionRetryDecision.WaitClock or SubmissionRetryDecision.InvalidTime => "时间不可信，保守延后。",
+                        SubmissionRetryDecision.InFlight => "等待上次提交执行结束。",
+                        SubmissionRetryDecision.Concluded => "本次提交已明确结束，已停止自动提交。",
+                        _ => "等待下一次安全复核。"
+                    });
+        if (authentication?.State != AuthenticationState.SubmissionPending && submissionBudget is { Attempts: > 0 } &&
+            submissionDecision is SubmissionRetryDecision.Concluded or SubmissionRetryDecision.Exhausted)
+            detail += submissionDecision == SubmissionRetryDecision.Exhausted
+                ? " 已停止自动提交：提交额度已用尽；继续检测网络。"
+                : " 已停止自动提交：本次凭据提交已明确结束；继续检测网络。";
         if (policy.CredentialsBlocked && browserFallbackRequested)
             detail = $"本次故障已达到 {RecoveryPolicy.AuthenticationAttemptCap} 次自动认证尝试，认证及主动断线已暂停；请诊断后人工确认，不会无限重试。可打开门户认证页在浏览器中人工登录。";
         // Appended last: the pause wordings above replace the detail wholesale, and the
@@ -496,19 +554,23 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     }
 
     // ADR-0001 recheck resolution: an unknown submission outcome is classified by read-only
-    // chkstatus probes alone — about 2s and 6s after the pending state appeared, never a new
+    // chkstatus probes alone — about 2s and 6s, then every 60s while pending, never a new
     // credential request; the internet probe is recorded as evidence only. LoggedIn resolves to
     // Accepted (release audit first, then a revision-compared block clear with the attempt count
-    // reset); NeedsLogin is a definitive failure and cools down for the regular retry path;
-    // still-unknown after both probes stays SubmissionPending for manual handling.
+    // reset); NeedsLogin retains the shared submission interval. Legacy pending records
+    // without a submission budget remain paused rather than gaining a fresh allowance.
     private async Task RecheckSubmissionAsync(Settings settings, WifiLink link, CancellationToken ct)
     {
-        if (submissionPendingSince is not { } since || submissionRechecks >= SubmissionRecheckDelays.Length) return;
-        if (PolicyNow < since.Add(SubmissionRecheckDelays[submissionRechecks])) return;
+        if (submissionPendingSince is not { } since) return;
+        if (submissionRechecks < SubmissionRecheckDelays.Length
+            ? PolicyNow < since.Add(SubmissionRecheckDelays[submissionRechecks]) : PolicyNow < nextSubmissionRecheck) return;
         // The recheck reads chkstatus through the Wi-Fi adapter; while the link is unusable a
         // probe would only fail, so the slot is not spent and the probe runs once it returns.
         if (link.State != WifiState.Ready) return;
+        using var execution = environment.TryAcquireSubmissionExecution();
+        if (execution is null) return;
         var ordinal = ++submissionRechecks;
+        nextSubmissionRecheck = PolicyNow.AddSeconds(60);
         journal.Stage = "SubmissionRecheck";
         if (ordinal == 1) Notify(NotificationCodes.SubmissionRechecking);
         journal.Write("SubmissionRechecking", $"提交结果未知，开始第 {ordinal} 次只读复检；不发送新凭据请求。", new()
@@ -520,23 +582,15 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 ResolveSubmissionByRecheck(inspection);
                 return;
             case PortalState.NeedsLogin:
-                var attempts = authentication?.Attempts ?? 0;
-                if (WriteAuthentication(new AuthenticationBlock(PortalFailure.LoginRejected)
-                {
-                    State = AuthenticationState.RetryCoolingDown, Attempts = attempts > 0 ? attempts : 1,
-                    RetryDelaySeconds = RecoveryPolicy.FastRetrySeconds, RetryNotBefore = clock.GetUtcNow().AddSeconds(RecoveryPolicy.FastRetrySeconds)
-                }))
-                {
-                    policy.DeferAuthenticationUntil(authenticationRetryUntil);
-                    journal.Recovered("Authentication");
-                    journal.Write("SubmissionResolved", "复检确认门户未登录；提交未成功，冷却后将按既有退避重新认证。", new()
-                        { Stage = "SubmissionRecheck", Outcome = "Rejected", Authentication = inspection });
-                }
+                journal.Write("SubmissionRechecked", submissionBudget is null
+                    ? "复检确认门户未登录，但缺少提交额度记录；保守保留暂停，不自动初始化新额度。"
+                    : "复检确认门户未登录；保留提交额度与最短间隔，不据此提前授权。",
+                    new() { Stage = "SubmissionRecheck", Outcome = "NeedsLogin", Authentication = inspection });
                 return;
             default:
                 if (submissionRechecks < SubmissionRecheckDelays.Length) return;
-                Notify(NotificationCodes.SubmissionUnresolved);
-                journal.Write("SubmissionUnresolved", "两次只读复检均无法定性；保持提交结果未知状态，等待人工处理。",
+                if (submissionRechecks == SubmissionRecheckDelays.Length) Notify(NotificationCodes.SubmissionUnresolved);
+                journal.Write("SubmissionUnresolved", "只读复检仍无法定性；保持提交结果未知状态，继续低频复检并遵守提交额度。",
                     new() { Stage = "SubmissionRecheck", Authentication = inspection });
                 return;
         }
@@ -546,7 +600,19 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     {
         var next = new AuthenticationBlock { State = AuthenticationState.Ready, Revision = Guid.NewGuid() };
         bool cleared;
-        try { cleared = environment.TryResolveSubmissionPending(authentication, next); }
+        try
+        {
+            if (submissionBudget is { State: not SubmissionBudgetState.Concluded } budget)
+            {
+                if (!environment.TryTransitionSubmissionBudget(budget, SubmissionBudgetState.Concluded))
+                {
+                    RejectSubmission("SubmissionBudgetStateChanged");
+                    return;
+                }
+                submissionBudget = environment.LoadSubmissionBudget();
+            }
+            cleared = environment.TryResolveSubmissionPending(authentication, next);
+        }
         catch (Exception e) when (IsStorageFailure(e))
         {
             journal.Fault("SubmissionRecheck", "复检确认门户已登录，但解除审计写入失败；保持提交结果未知状态。", e);
@@ -725,9 +791,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private bool PrepareAuthentication()
     {
         var current = ReadStep("AuthenticationStateRead", environment.LoadAuthenticationBlock);
+        if (retryingSubmission)
+            return current == authentication && current?.State == AuthenticationState.SubmissionPending || RejectSubmission("AuthenticationStateChanged");
         if (current != authentication || current?.BlocksSubmissions == true || PolicyNow < authenticationRetryUntil)
             return RejectSubmission(current != authentication ? "AuthenticationStateChanged" : current?.BlocksSubmissions == true ? "AuthenticationPaused" : "AuthenticateCooldown");
-        if ((current?.Attempts ?? 0) >= 3)
+        if ((current?.Attempts ?? 0) >= 3 && submissionBudget is not { State: SubmissionBudgetState.PossiblySent, Attempts: < 3 })
         {
             WriteAuthentication(new(PortalFailure.InteractionRequired) { Attempts = 3 });
             return RejectSubmission("AuthenticationAttemptLimit");
@@ -736,7 +804,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         // later cooldown write fails, restarting cannot turn that failure into a new authorization.
         return WriteAuthentication(new()
         {
-            State = AuthenticationState.RetryCoolingDown, Attempts = (current?.Attempts ?? 0) + 1,
+            State = AuthenticationState.RetryCoolingDown, Attempts = Math.Min(3, (current?.Attempts ?? 0) + 1),
             RetryDelaySeconds = 60, RetryNotBefore = clock.GetUtcNow().AddSeconds(60)
         });
     }
@@ -745,7 +813,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     // only interruptible at their boundaries, and expiry is an explicit, logged refusal —
     // never a silent authorization and never a portal timeout. `ct` is the caller's token:
     // its cancellation propagates out of the chain instead of being converted.
-    private bool AuthorizeSubmission(Settings settings, WifiLink link, CancellationToken ct, CancellationToken review)
+    private async Task<bool> AuthorizeSubmissionAsync(Settings settings, WifiLink link, CancellationToken ct, CancellationToken review)
     {
         try
         {
@@ -756,16 +824,39 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             if (currentSettings is null || currentSettings != settings || !currentSettings.Enabled || currentLink.State != WifiState.Ready ||
                 currentLink.Index != link.Index || !Equals(currentLink.Address, link.Address))
                 return RejectSubmission(currentSettings != settings ? "SettingsChanged" : currentSettings?.Enabled != true ? "RecoveryDisabled" : "WifiChanged");
+            using var fresh = environment.CreateDirectClient(currentLink);
+            var internet = await HealthChecks.InternetDetailedAsync(fresh, review);
+            if (internet.Online) return RejectSubmission("FreshInternetRecovered");
             review.ThrowIfCancellationRequested();
             var current = ReadStep("AuthenticationStateRead", environment.LoadAuthenticationBlock);
-            if (current != authentication || current?.State != AuthenticationState.RetryCoolingDown) return RejectSubmission("AuthenticationStateChanged");
+            if (current != authentication || current?.State != (retryingSubmission ? AuthenticationState.SubmissionPending : AuthenticationState.RetryCoolingDown))
+                return RejectSubmission("AuthenticationStateChanged");
+            submissionBudget = ReadStep("SubmissionBudgetRead", environment.LoadSubmissionBudget);
+            var decision = submissionRetry.Evaluate(submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart));
+            if (decision != SubmissionRetryDecision.Authorized) return RejectSubmission("SubmissionBudget" + decision);
+            var reservationUtc = clock.GetUtcNow();
+            var reservationTick = clock.GetTimestamp();
+            var reservation = environment.TryReserveSubmissionBudget(submissionBudget, reservationUtc);
+            if (reservation.Outcome != SubmissionReservationOutcome.Reserved) return RejectSubmission("SubmissionBudget" + reservation.Outcome);
+            activeSubmission = submissionBudget = reservation.Budget!;
+            journal.Write("SubmissionBudgetReserved", "凭据提交额度已持久预留；本次按可能发出计数。", new()
+                { Stage = "Submission", Outcome = "Reserved", Reason = "SubmissionBudgetReserved", ActionId = journal.ActionId });
             if (!WriteAuthentication(new()
             {
                 State = AuthenticationState.SubmissionPending, Attempts = current.Attempts
             })) return RejectSubmission("SubmissionReservationFailed");
+            submissionPendingSince = PolicyNow;
+            submissionRechecks = 0;
             review.ThrowIfCancellationRequested();
             currentSettings = ReadStep("SettingsRead", environment.LoadSettings);
             currentLink = ReadStep("WifiRead", () => environment.ReadWifi(settings));
+            var finalAuthentication = ReadStep("AuthenticationStateRead", environment.LoadAuthenticationBlock);
+            var finalBudget = ReadStep("SubmissionBudgetRead", environment.LoadSubmissionBudget);
+            review.ThrowIfCancellationRequested();
+            if (finalAuthentication != authentication || finalBudget != activeSubmission)
+                return RejectSubmission("FinalAuthenticationOrBudgetChanged");
+            if (((clock.GetUtcNow() - reservationUtc) - clock.GetElapsedTime(reservationTick)).Duration() > TimeSpan.FromSeconds(2))
+                return RejectSubmission("FinalClockUntrusted");
             var allowed = currentSettings is not null && currentSettings == settings && currentSettings.Enabled && currentLink.State == WifiState.Ready &&
                 currentLink.Index == link.Index && Equals(currentLink.Address, link.Address);
             if (!allowed) return RejectSubmission("FinalSettingsOrWifiChanged");
@@ -779,6 +870,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             // from a portal timeout so the evidence tells the two apart.
             return RejectSubmission("ReviewChainTimeout");
         }
+        catch (Exception e) when (IsStorageFailure(e))
+        {
+            journal.Fault("SubmissionAuthorization", "提交预留或最终复核存储不可用，停止发送。", e);
+            return RejectSubmission("SubmissionStorageUnavailable");
+        }
     }
 
     private bool RejectSubmission(string reason)
@@ -790,23 +886,41 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
 
     private void CompleteAuthentication(PortalAttempt attempt)
     {
+        if (attempt.Result is LoginResult.RejectedCredentials or LoginResult.RejectedBinding or LoginResult.NeedsInteraction)
+        {
+            // Either durable stop is sufficient. Do not lose an explicit refusal merely
+            // because the independent budget file cannot be updated.
+            WriteAuthentication(new(attempt.Failure) { Attempts = authentication?.Attempts ?? 0 });
+            CompleteSubmissionBudget(SubmissionBudgetState.Concluded);
+            return;
+        }
+        if (!CompleteSubmissionBudget(attempt.Result == LoginResult.Accepted ? SubmissionBudgetState.Concluded : SubmissionBudgetState.PossiblySent)) return;
         if (attempt.Failure == PortalFailure.SafetyPersistence) return;
+        if (retryingSubmission && !attempt.CredentialRequestStarted)
+        {
+            pendingRetryAfter = PolicyNow.AddSeconds(60);
+            if (attempt.Failure == PortalFailure.AlreadyAuthenticated) ResolveSubmissionByRecheck(attempt);
+            return;
+        }
         var attempts = authentication?.Attempts ?? 0;
         AuthenticationBlock next;
-        if (attempt.Result is LoginResult.RejectedBinding or LoginResult.RejectedCredentials or LoginResult.NeedsInteraction or LoginResult.Unsupported)
-            next = new(attempt.Failure) { Attempts = attempts };
-        else if (attempt.Result == LoginResult.Accepted || attempt.Failure == PortalFailure.AlreadyAuthenticated)
+        if (attempt.Result == LoginResult.Accepted || attempt.Failure == PortalFailure.AlreadyAuthenticated)
             next = new() { State = AuthenticationState.Ready, Attempts = attempts };
         else if (attempt.CredentialRequestStarted && !attempt.RetryPermitted)
         {
-            // SubmissionPending was flushed before sending. An ambiguous response never grants a
-            // retry; from here the read-only rechecks (ADR-0001) classify the outcome instead.
+            // The durable pending state survives ambiguous replies. ADR-0011 allows a
+            // later attempt only through the independent budget and full review chain.
             policy.CredentialsBlocked = true;
             submissionPendingSince ??= PolicyNow;
             journal.Fault("Authentication", "认证提交结果未确认，保留持久安全暂停；稍后进行只读复检定性。");
             return;
         }
-        else if (attempts >= 3) next = new(PortalFailure.InteractionRequired) { Attempts = 3 };
+        else if (attempts >= 3 && !attempt.CredentialRequestStarted) next = new(PortalFailure.InteractionRequired)
+        {
+            Attempts = 3,
+            ChannelFallbackCause = PortalLayoutSignal.IsStructural(attempt.Failure) ? attempt.Failure : PortalFailure.None
+        };
+        else if (attempt.Result == LoginResult.Unsupported) next = new(attempt.Failure) { Attempts = attempts };
         else
         {
             var seconds = (int)Math.Clamp(Math.Ceiling((policy.NextAttempt - PolicyNow).TotalSeconds), 2, 60);
@@ -818,6 +932,32 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         if (WriteAuthentication(next) && attempt.Result == LoginResult.Accepted && attempt.CredentialRequestStarted)
             authenticationAcceptedAt = clock.GetUtcNow();
+    }
+
+    private bool CompleteSubmissionBudget(SubmissionBudgetState nextState)
+    {
+        try
+        {
+            if (activeSubmission is { } reserved)
+            {
+                if (!environment.TryTransitionSubmissionBudget(reserved, nextState))
+                {
+                    activeSubmission = null;
+                    RejectSubmission("SubmissionBudgetStateChanged");
+                    return false;
+                }
+                activeSubmission = null;
+                submissionBudget = environment.LoadSubmissionBudget();
+                submissionRetry.Evaluate(submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart));
+            }
+            return true;
+        }
+        catch (Exception e) when (IsStorageFailure(e))
+        {
+            activeSubmission = null;
+            journal.Fault("SubmissionBudgetWrite", "提交结果的额度状态无法持久确认；保留已用额度，不提前重发。", e);
+            return false;
+        }
     }
 
     private bool WriteAuthentication(AuthenticationBlock next)

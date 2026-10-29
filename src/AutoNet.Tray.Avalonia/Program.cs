@@ -8,14 +8,21 @@ namespace AutoNet.Tray.Avalonia;
 internal static class Program
 {
     /// <summary>
-    /// 普通托盘单实例互斥名。迁移期间独立命名，避免与本机已安装的 WinForms 托盘
-    /// （Local\AutoNet.Tray）相互阻塞；候选包替换旧实现时（工单 #15）必须改回原名。
+    /// 正式托盘沿用既有安装身份；只有显式 QA 场景使用独立互斥，避免干扰已安装实例。
+    /// QA 报告与进程入口按同一规则选择身份。
     /// </summary>
-    internal const string MutexName = @"Local\AutoNet.Tray.Avalonia";
+    internal static string MutexName => ResolveMutexName(QaEnvironment.FromProcess());
+
+    internal static string ResolveMutexName(QaEnvironment qa) =>
+        qa.Active ? @"Local\AutoNet.Tray.Avalonia" : @"Local\AutoNet.Tray";
 
     [STAThread]
     private static int Main(string[] args)
     {
+        // #30：凭据交接助手先于普通参数解析、QA 参数记录与单实例；无效交接也不能打开设置窗口。
+        if (args.Contains(SettingsHandoffLauncher.Command))
+            return SettingsHandoffLauncher.RunReceiverAsync(args).GetAwaiter().GetResult();
+
         StartupRequest request;
         try
         {
@@ -66,7 +73,8 @@ internal static class Program
         if (decision.Kind is StartupActionKind.RequestElevation)
             return RequestElevation(decision.Operation!.Value, qa, request.ExportTargetPath);
 
-        using var instance = SingleInstance.Acquire(MutexName);
+        var mutexName = ResolveMutexName(qa);
+        using var instance = SingleInstance.Acquire(mutexName);
         if (!instance.Acquired)
         {
             decision = StartupRouter.Decide(request, isAdministrator, anotherInstanceRunning: true);
@@ -79,7 +87,7 @@ internal static class Program
                     phase = "already-running",
                     reportedBy = Environment.ProcessId,
                     processPath = Environment.ProcessPath,
-                    mutex = MutexName,
+                    mutex = mutexName,
                     at = QaReports.Timestamp()
                 });
                 return 3;

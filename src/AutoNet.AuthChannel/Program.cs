@@ -21,14 +21,14 @@ internal static class Program
                 return 2;
             }
 
-            var credential = options.Injected ?? CredentialInput.ReadStdin();
-            if (credential is null || string.IsNullOrEmpty(credential.Username) || string.IsNullOrEmpty(credential.Password))
+            var credential = options.FromSettings ? null : CredentialInput.ReadStdin();
+            if (!options.FromSettings && (credential is null || string.IsNullOrEmpty(credential.Username) || string.IsNullOrEmpty(credential.Password)))
             {
                 Console.Error.WriteLine("missing credential");
                 return 2;
             }
 
-            var window = new AuthChannelWindow(options, credential);
+            var window = new AuthChannelWindow(options);
             Application.Run(window);
             window.CleanupSession();
             var exitCode = window.ExitCode;
@@ -59,7 +59,7 @@ internal sealed record ChannelOptions(
     int TimeoutSeconds,
     string? FixtureDir,
     string FixtureHost,
-    CredentialSource? Injected = null,
+    bool FromSettings = false,
     int HumanWaitSeconds = 600)
 {
     public static ChannelOptions? Parse(string[] args)
@@ -82,15 +82,13 @@ internal sealed record ChannelOptions(
                 default: return null;
             }
         }
-        CredentialSource? injected = null;
         if (fromSettings)
         {
-            // 提权令牌读取机器级凭据（LocalMachine DPAPI）：凭据只在进程内存，不经命令行。
+            // 这里只读取设置；凭据由提交复核流程在需要时从受保护存储读取。
             var settings = Storage.LoadSettings();
-            var credentials = Storage.LoadCredentials();
-            if (settings is null || credentials is null)
+            if (settings is null)
             {
-                Console.Error.WriteLine("settings-or-credentials-missing");
+                Console.Error.WriteLine("settings-missing");
                 return null;
             }
             if (settings.AuthChannelMode == AuthChannelModes.Off)
@@ -99,11 +97,10 @@ internal sealed record ChannelOptions(
                 return null;
             }
             startUrl = settings.PortalOrigin;
-            injected = new CredentialSource(credentials.Username, credentials.Password);
         }
         if (string.IsNullOrWhiteSpace(startUrl) || string.IsNullOrWhiteSpace(resultPath)) { return null; }
         if (fixtureDir is not null && !Directory.Exists(fixtureDir)) { return null; }
-        return new ChannelOptions(startUrl, resultPath, timeout, fixtureDir, fixtureHost, injected, humanWait);
+        return new ChannelOptions(startUrl, resultPath, timeout, fixtureDir, fixtureHost, fromSettings, humanWait);
     }
 }
 

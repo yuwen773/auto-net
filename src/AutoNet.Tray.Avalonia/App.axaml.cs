@@ -88,14 +88,10 @@ public sealed class App : Application
 
         if (elevated.Operation is ElevatedOperationKind.Settings)
         {
-            // 只有 settings 模式才走隔离夹具：其他 QA 模式走到这里仍按生产语义执行。
-            if (elevated.Qa.Mode == QaMode.Settings)
-            {
-                QaSettings.RunEditor(elevated.Qa, code => desktop.Shutdown(code));
-                return;
-            }
-
-            StartSettingsEditor(desktop);
+            DispatchSettings(elevated.Qa,
+                () => StartSettingsEditor(desktop),
+                () => QaSettings.RunEditor(elevated.Qa, code => desktop.Shutdown(code)),
+                () => desktop.Shutdown(0));
             return;
         }
 
@@ -289,7 +285,8 @@ public sealed class App : Application
             ? null
             : () => portalOpener.OpenManuallyAsync();
         var authChannelLauncher = new AuthChannelLauncher(
-            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart, authChannelPresent, authChannelFallback);
+            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart, authChannelPresent, authChannelFallback,
+            launchActive: () => new AutoNet.Core.SafetyStateStore(AutoNet.Core.Storage.Root).IsChannelLaunchActive());
         // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
         Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility
             ? QaAccessibility.RecordPortalOpen
@@ -309,14 +306,11 @@ public sealed class App : Application
             notifier = new TrayBalloonNotifier(trayHost.TrayIcon!);
             pipe.Updated += notifications.Observe;
         }
-        // 自动开页由状态读取驱动（#11）；portal-open 与可访问性 QA 模式不订阅管道——前者由
-        // QaPortal 手工驱动（时序完全确定），后者夹具只驱动投影显示、绝不触发真实浏览器。
-        // 手动开页只经概览页按钮。
-        if (tray.Qa.Mode is not (QaMode.PortalOpen or QaMode.Accessibility))
-            pipe.Updated += reading => _ = portalOpener.EvaluateAsync(reading);
-        // 通道授予消费（工单 #24）：同一批 QA 模式不订阅（可访问性记录器不消费真实授予）。
-        if (tray.Qa.Mode is not (QaMode.PortalOpen or QaMode.Accessibility))
-            pipe.Updated += reading => _ = authChannelLauncher.ObserveAsync(reading.Snapshot);
+        // 自动开页与认证通道由生产状态读取驱动；所有 QA 模式都隔离真实动作。
+        // portal-open 仍由 QaPortal 手工驱动受控记录器，不受此订阅边界影响。
+        AttachAutomaticActions(pipe, tray.Qa,
+            reading => _ = portalOpener.EvaluateAsync(reading),
+            reading => _ = authChannelLauncher.ObserveAsync(reading.Snapshot));
         desktop.Exit += (_, _) =>
         {
             trayHost.Dispose();
@@ -366,6 +360,21 @@ public sealed class App : Application
                 QaAccessibility.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
         }
+    }
+
+    internal static void AttachAutomaticActions(StatusPipe pipe, QaEnvironment qa,
+        Action<StatusReading> portalOpen, Action<StatusReading> authChannel)
+    {
+        if (qa.Active) return;
+        pipe.Updated += portalOpen;
+        pipe.Updated += authChannel;
+    }
+
+    internal static void DispatchSettings(QaEnvironment qa, Action production, Action fixture, Action stopProbe)
+    {
+        if (!qa.Active) production();
+        else if (qa.Mode == QaMode.Settings) fixture();
+        else stopProbe();
     }
 
     /// <summary>生产路径：设置修改入口发起独立提权操作（--settings）；拒绝 UAC 时什么都不发生（故事 43）。</summary>

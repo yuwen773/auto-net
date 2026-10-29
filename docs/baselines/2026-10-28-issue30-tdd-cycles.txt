@@ -1,0 +1,65 @@
+Cycle 1 RED
+FAIL 凭据交接：双方核验后仅保存一次且返回受控结果: 发送端未收到保存结果
+0/1 passed
+Cycle 1 GREEN
+1/1 passed
+Cycle 2 RED
+FAIL 凭据交接：发送端发现接收进程不符时拒发且零写入: 接收进程不符仍发送或写入
+1/2 passed
+Cycle 2 GREEN
+2/2 passed
+Cycle 3 RED
+FAIL 凭据交接：接收端拒绝发送方PID时间SID会话路径与令牌不符且零写入: 发送方身份不符仍写入
+2/3 passed
+Cycle 3 GREEN
+3/3 passed
+Cycle 4 RED
+FAIL 凭据交接：真实管道断开ACL继承且仅授权指定SID并禁止创建实例: 管道ACL未显式断开继承
+3/4 passed
+Cycle 4 GREEN
+4/4 passed
+Cycle 5 RED
+FAIL 凭据交接：完成后的关联在发送和接收两端均不能重放: The operation was canceled.
+4/5 passed
+Cycle 5 GREEN
+5/5 passed
+Cycle 6 RED
+FAIL 凭据交接：连接和提交确认前超时零写入且残留关联不可复用: The operation was canceled.
+5/6 passed
+Cycle 6 GREEN
+6/6 passed
+Cycle 7 RED
+FAIL 凭据交接：启动等待已耗尽期限时不得重新获得交接时间: 过期关联获得了新期限
+6/7 passed
+Cycle 7 GREEN
+7/7 passed
+Cycle 8 RED
+FAIL 凭据交接：提交确认后回执超时如实报告结果未知且不重试: 已授权写入后的回执超时被误报为零写入
+7/8 passed
+Cycle 8 GREEN
+8/8 passed
+Cycle 9 RED
+FAIL 凭据交接：关联不符或损坏载荷拒绝且零写入: Found invalid data while decoding.
+8/9 passed
+Cycle 9 GREEN
+9/9 passed
+Cycle 10 RED
+FAIL 凭据交接：保存启动只传关联元数据且UAC拒绝不建立交接: UAC拒绝未作为取消处理
+9/10 passed
+Cycle 10 GREEN
+10/10 passed
+Cycle 11 RED
+FAIL 凭据交接：提权接收入口拒绝混合参数无效关联与旧进程身份: 非法接收入口未在任何保存前拒绝
+11/12 passed
+Cycle 11 GREEN
+12/12 passed
+Cycle 12 RED
+FAIL 凭据交接：保存异常不回显载荷或伪报零写入: 保存异常逃逸或已发生的写入被隐藏
+12/13 passed
+Cycle 12 GREEN
+13/13 passed
+Cycle 13 RED
+FAIL 凭据交接：旧载荷与确认帧跨接收进程重放被拒且旧存储不变: 另一接收进程接受了旧确认帧
+13/14 passed
+Cycle 13 GREEN
+14/14 passed

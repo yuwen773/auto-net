@@ -140,7 +140,7 @@ internal static class SafetyRegression
                 Require(DrcomPortal.Classify(json.RootElement) == LoginResult.Rejected);
             }
         }),
-        ("绑定拒绝：只提交一次，重启保存设置及更改凭据不解除，专门解除后再试", async () =>
+        ("绑定拒绝：只提交一次且单独解除认证暂停不重置提交额度", async () =>
         {
             var fixture = new MonitorFixture();
             fixture.Http.LoginResult = "{\"result\":0,\"msg\":\"只能绑定指定的VLAN设备\"}";
@@ -162,9 +162,11 @@ internal static class SafetyRegression
             Require(fixture.Connects == 1 && fixture.Disconnects == 0);
             fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
             fixture.Http.PortalResult = "0";
-            fixture.Blocked = false; // The fixture's dedicated manual release boundary.
+            var budget = fixture.LoadSubmissionBudget();
+            fixture.Blocked = false; // Clearing the auth pause is separate from #34's audited budget reset.
             var again = await restarted.RunOnceAsync(default);
-            Require(again.CredentialsBlocked && fixture.Http.Requests.Count(u => u.Query.Contains("user_password")) == 2);
+            Require(!again.CredentialsBlocked && fixture.Http.Requests.Count(u => u.Query.Contains("user_password")) == 1);
+            Require(fixture.LoadSubmissionBudget() == budget && again.Detail.Contains("已停止自动提交"));
         }),
         ("绑定拒绝：在线及暂停恢复不解除认证阻断，已断开仍可重连", async () =>
         {

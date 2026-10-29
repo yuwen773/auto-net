@@ -63,13 +63,15 @@ internal static class AuthenticationPersistenceRegression
                 fixture.Clock.Advance(TimeSpan.Zero, TimeSpan.FromDays(10));
                 using var restarted = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, new(directory)), fixture.Clock);
                 restarted.RunOnceAsync(default).GetAwaiter().GetResult();
-                fixture.Clock.Advance(TimeSpan.FromSeconds(1)); restarted.RunOnceAsync(default).GetAwaiter().GetResult();
+                fixture.Clock.Advance(TimeSpan.FromSeconds(119)); restarted.RunOnceAsync(default).GetAwaiter().GetResult();
                 Require(Count(fixture) == 1);
                 fixture.Clock.Advance(TimeSpan.FromSeconds(1)); restarted.RunOnceAsync(default).GetAwaiter().GetResult();
                 Require(Count(fixture) == 2);
-                fixture.Clock.Advance(TimeSpan.FromSeconds(2)); restarted.RunOnceAsync(default).GetAwaiter().GetResult();
+                fixture.Clock.Advance(TimeSpan.FromSeconds(120)); restarted.RunOnceAsync(default).GetAwaiter().GetResult();
                 fixture.Clock.Advance(TimeSpan.FromHours(1));
-                Require(restarted.RunOnceAsync(default).GetAwaiter().GetResult().CredentialsBlocked && Count(fixture) == 3);
+                restarted.RunOnceAsync(default).GetAwaiter().GetResult();
+                Require(Count(fixture) == 3 && store.LoadSubmissionBudget()?.Attempts == 3 &&
+                    fixture.Logs.Any(log => log.Diagnostics?.Reason == "SubmissionBudgetExhausted"));
             });
             return Task.CompletedTask;
         }),
@@ -141,7 +143,7 @@ internal static class AuthenticationPersistenceRegression
             });
             return Task.CompletedTask;
         }),
-        ("认证持久安全：连续接口接受但HTTPS未恢复也不会无限提交", async () =>
+        ("认证持久安全：接口明确接受后额度结束且外网恢复不重置", async () =>
         {
             var fixture = new MonitorFixture();
             using var worker = new MonitorWorker(fixture, fixture.Clock);
@@ -149,9 +151,11 @@ internal static class AuthenticationPersistenceRegression
             {
                 await worker.RunOnceAsync(default); fixture.Clock.Advance(TimeSpan.FromSeconds(2));
             }
-            Require(Count(fixture) == 3 && (await worker.RunOnceAsync(default)).CredentialsBlocked);
+            Require(Count(fixture) == 1 && fixture.LoadSubmissionBudget() is { State: SubmissionBudgetState.Concluded, Attempts: 1 });
+            var budget = fixture.LoadSubmissionBudget();
             fixture.Http.Online = true;
-            Require((await worker.RunOnceAsync(default)).CredentialsBlocked); // A manual safety pause survives online recovery.
+            await worker.RunOnceAsync(default);
+            Require(Count(fixture) == 1 && fixture.LoadSubmissionBudget() == budget);
         }),
         ("认证持久安全：完整结构中矛盾的状态与拒绝原因也必须阻断", () =>
         {

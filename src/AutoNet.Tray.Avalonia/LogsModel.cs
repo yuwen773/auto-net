@@ -90,7 +90,6 @@ internal static class LogsModel
     public const string LoadingNote = "正在读取…";
     public const string UnreadableDetailNote = "该条日志详情不可读取；可选择其他事件或刷新重试。";
     public const string NoFilterMatchNote = "没有符合筛选条件的事件。";
-    public const string NoSelectionNote = "请选择一个事件查看技术诊断详情。";
 
     /// <summary>把一次读取状态投影为日志页内容。</summary>
     public static LogsContent From(LogsState state)

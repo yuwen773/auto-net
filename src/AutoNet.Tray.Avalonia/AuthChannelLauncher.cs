@@ -22,6 +22,7 @@ internal sealed class AuthChannelLauncher
         NoGrant,
         ModeOff,
         AlreadyConsumed,
+        Busy,
         UntrustedState,
         UacDeclined,
         StartFailed,
@@ -34,26 +35,30 @@ internal sealed class AuthChannelLauncher
     private readonly Func<string, Process?> start;
     private readonly Action<NotificationAlert>? presentAlert;
     private readonly Func<Task>? openPortalFallback;
+    private readonly Func<bool>? launchActive;
     private readonly string resultPath;
     private DateTimeOffset? consumedGrant;
     private DateTimeOffset? launchedAt;
     private string? lastConclusion;
+    private Process? activeProcess;
     private StatusSnapshot? lastReading;
 
     public AuthChannelLauncher(
         Func<Task<StatusSnapshot?>> refresh,
         Func<string, Process?> start,
         Action<NotificationAlert>? presentAlert = null,
-        Func<Task>? openPortalFallback = null)
+        Func<Task>? openPortalFallback = null,
+        string? resultPath = null,
+        Func<bool>? launchActive = null)
     {
         this.refresh = refresh;
         this.start = start;
         this.presentAlert = presentAlert;
         this.openPortalFallback = openPortalFallback;
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoNet");
-        Directory.CreateDirectory(dir);
-        resultPath = Path.Combine(dir, ResultFileName);
+        this.launchActive = launchActive;
+        this.resultPath = resultPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoNet", ResultFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(this.resultPath))!);
     }
 
     public string ResultPath => resultPath;
@@ -88,11 +93,11 @@ internal sealed class AuthChannelLauncher
         var fresh = await refresh();
         if (fresh?.AuthChannelRequested != true || fresh.AuthChannelNotBefore != grant) return ObserveOutcome.UntrustedState;
         var outcome = Launch(reading);
-        if (outcome == ObserveOutcome.Launched || outcome == ObserveOutcome.UacDeclined || outcome == ObserveOutcome.StartFailed)
+        if (outcome == ObserveOutcome.Launched || outcome == ObserveOutcome.UacDeclined || outcome == ObserveOutcome.StartFailed || outcome == ObserveOutcome.Busy)
         {
             // UAC 拒绝与启动失败同样视为本授予已消费：绝不自我重试、绝不反复打扰。
             consumedGrant = grant;
-            if (outcome != ObserveOutcome.Launched) launchedAt = null;
+            if (outcome is ObserveOutcome.UacDeclined or ObserveOutcome.StartFailed) launchedAt = null;
         }
         return outcome;
     }
@@ -103,10 +108,12 @@ internal sealed class AuthChannelLauncher
         SignalPresent: reading?.PortalLayoutSuspected ?? false,
         Requested: reading?.AuthChannelRequested ?? false,
         LastConclusion: lastConclusion,
-        Busy: launchedAt is not null && lastConclusion is null);
+        Busy: IsProcessActive() || launchActive?.Invoke() == true);
     private ObserveOutcome Launch(StatusSnapshot reading)
     {
         if (reading.AuthChannelMode == AuthChannelModes.Off) return ObserveOutcome.ModeOff;
+        lastConclusion = null;
+        if (IsProcessActive() || launchActive?.Invoke() == true) return ObserveOutcome.Busy;
         launchedAt = DateTimeOffset.UtcNow;
         try { File.Delete(resultPath); } catch (IOException) { }
         catch (UnauthorizedAccessException) { }
@@ -118,6 +125,7 @@ internal sealed class AuthChannelLauncher
                 // UAC 拒绝 = 用户此刻不要通道；消费标记由调用方置位（同授予不重试）。
                 return ObserveOutcome.UacDeclined;
             }
+            activeProcess = process;
             return ObserveOutcome.Launched;
         }
         catch (Exception ex)
@@ -128,6 +136,20 @@ internal sealed class AuthChannelLauncher
             _ = openPortalFallback?.Invoke();
             return ObserveOutcome.StartFailed;
         }
+    }
+
+    private bool IsProcessActive()
+    {
+        if (activeProcess is null) return false;
+        try
+        {
+            if (!activeProcess.HasExited) return true;
+            activeProcess.Dispose();
+            activeProcess = null;
+            return false;
+        }
+        catch (InvalidOperationException) { return true; }
+        catch (System.ComponentModel.Win32Exception) { return true; }
     }
 
     private void ConsumeResult(StatusSnapshot reading)

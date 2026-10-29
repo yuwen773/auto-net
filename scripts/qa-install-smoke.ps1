@@ -14,6 +14,10 @@ param(
     [string]$RepoRoot = (Split-Path $PSScriptRoot -Parent)
 )
 $ErrorActionPreference = 'Stop'
+if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+    Write-Host 'SMOKE-FAIL CI_ONLY：仅限 GitHub 托管的一次性 CI runner；拒绝在本机或自托管 runner 上执行'
+    exit 2
+}
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Write-Host 'SMOKE-FAIL 需要管理员（CI runner 自带；本机严禁运行此脚本）'; exit 2 }
 

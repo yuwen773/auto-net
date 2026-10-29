@@ -5,6 +5,14 @@ using System.Text.Json;
 using AutoNet.Core;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args.FirstOrDefault() == "--handoff-test-peer") return await SettingsHandoffRegression.RunPeerAsync(args);
+if (args.FirstOrDefault() == "--submission-budget-test-peer") return SubmissionBudgetRegression.RunPeer(args);
+if (args.FirstOrDefault() == "--submission-retry-test-peer") return SubmissionRetryRegression.RunPeer(args);
+if (args.FirstOrDefault() == "--channel-session-test-peer") { Console.WriteLine("READY"); Console.Out.Flush(); Console.ReadLine(); return 0; }
+if (args.FirstOrDefault() == "--channel-job-test-peer") return ChannelJobRegression.RunPeer();
+if (args.FirstOrDefault() == "--proxy-job-test-peer") return await AuthChannelProxyRegression.RunPeerAsync();
+if (args.FirstOrDefault() == "--webview-proxy-peer") return await WebViewProxyRegression.RunPeerAsync(args);
+if (args.FirstOrDefault() == "--webview-proxy-check") return await WebViewProxyRegression.RunAsync();
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("正常联网不执行修复", () => Sync(() => {
@@ -143,6 +151,11 @@ tests = tests.Concat(UnblockRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticsPageRegression.Cases).ToArray();
 tests = tests.Concat(LogsPageRegression.Cases).ToArray();
 tests = tests.Concat(SettingsPageRegression.Cases).ToArray();
+tests = tests.Concat(SettingsHandoffRegression.Cases).ToArray();
+tests = tests.Concat(SubmissionBudgetRegression.Cases).ToArray();
+tests = tests.Concat(SubmissionRetryRegression.Cases).ToArray();
+tests = tests.Concat(AuthChannelProxyRegression.Cases).ToArray();
+tests = tests.Concat(ChannelJobRegression.Cases).ToArray();
 tests = tests.Concat(ThemePreferenceRegression.Cases).ToArray();
 tests = tests.Concat(NotificationRouterRegression.Cases).ToArray();
 tests = tests.Concat(PortalOpenRegression.Cases).ToArray();
