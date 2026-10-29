@@ -512,7 +512,11 @@ internal static class SubmissionRetryRegression
             StatusSnapshot status;
             using (var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store)
                 { FailResolve = true }, fixture.Clock))
+            {
                 status = worker.RunOnceAsync(default).GetAwaiter().GetResult();
+                var next = worker.RunOnceAsync(default).GetAwaiter().GetResult();
+                Require(next.SubmissionResolutionStorageFault, "存储故障在下一轮被提前清除");
+            }
             Require(Count(fixture) == 1 && store.LoadAuthenticationBlock()?.State == AuthenticationState.SafetyBlocked, "明确成功后写失败没有持久暂停");
             Require(status.CredentialsBlocked && status.SubmissionResolutionStorageFault && status.AuthenticationFailure == nameof(PortalFailure.None), "存储故障未单独反映或覆盖了提交结果");
             var reading = new StatusReading(status, NetworkDisplayMap.Map(status, TimeSpan.Zero), true, true, TimeSpan.Zero, fixture.Clock.GetUtcNow());
@@ -555,6 +559,13 @@ internal static class SubmissionRetryRegression
             Require(status.CredentialsBlocked && !status.SubmissionResolutionStorageFault, "修订不匹配误报存储不可用");
             var reading = new StatusReading(status, NetworkDisplayMap.Map(status, TimeSpan.Zero), true, true, TimeSpan.Zero, fixture.Clock.GetUtcNow());
             Require(!OverviewModel.From(reading).Auth.Note.Contains("存储不可用"), "界面误称存储不可用");
+        })),
+        ("有限重试：认证修订变化后不沿用旧消解故障", () => WithStore((fixture, store, _) =>
+        {
+            using var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store) { FailResolve = true }, fixture.Clock);
+            Require(worker.RunOnceAsync(default).GetAwaiter().GetResult().SubmissionResolutionStorageFault, "未记录初次故障");
+            store.BlockAuthentication(new AuthenticationBlock(PortalFailure.CredentialsRejected) { Revision = Guid.NewGuid() });
+            Require(!worker.RunOnceAsync(default).GetAwaiter().GetResult().SubmissionResolutionStorageFault, "认证修订变化后沿用旧故障");
         })),
         ("有限重试：明确密码绑定拒绝立即停止即使额度终态写失败", () => WithStore((_, _, directory) =>
         {

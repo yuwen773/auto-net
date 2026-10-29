@@ -35,6 +35,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private bool blockedPublished;
     private bool authenticationBlockPending;
     private bool submissionResolutionStorageFault;
+    private Guid? submissionResolutionFaultRevision;
     private AuthenticationBlock? authentication;
     private AuthenticationBlock? authenticationExpected;
     private AuthenticationBlock? authenticationToWrite;
@@ -173,7 +174,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 ? PolicyNow.AddSeconds(loadedAuthentication.RetryDelaySeconds) : DateTimeOffset.MinValue;
         }
         var block = authenticationBlockPending ? authenticationToWrite : authentication;
-        if (block?.State != AuthenticationState.SubmissionPending) submissionResolutionStorageFault = false;
+        if (submissionResolutionStorageFault && block?.Revision != submissionResolutionFaultRevision)
+        {
+            submissionResolutionStorageFault = false;
+            submissionResolutionFaultRevision = null;
+        }
         if (policy.CredentialsBlocked && (block is null || !block.BlocksSubmissions))
         {
             journal.Recovered("Authentication");
@@ -612,6 +617,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         catch (Exception e) when (IsStorageFailure(e))
         {
             submissionResolutionStorageFault = true;
+            submissionResolutionFaultRevision = authentication?.Revision;
             journal.Fault(stage, directConfirmation
                 ? "门户提交响应确认成功，但消解状态写入失败；保持安全暂停。"
                 : "复检确认门户已登录，但消解状态写入失败；保持安全暂停。", e);
@@ -626,6 +632,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
         authentication = next;
         submissionResolutionStorageFault = false;
+        submissionResolutionFaultRevision = null;
         submissionBudget = environment.LoadSubmissionBudget();
         activeSubmission = null;
         authenticationBlockPending = false;
@@ -896,7 +903,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         if (attempt.Result == LoginResult.Accepted && attempt.CredentialRequestStarted)
         {
             if (!ResolveSubmissionByRecheck(attempt, directConfirmation: true))
+            {
                 WriteAuthentication(new AuthenticationBlock(PortalFailure.SafetyPersistence) { Attempts = authentication?.Attempts ?? 0 });
+                if (submissionResolutionStorageFault)
+                    submissionResolutionFaultRevision = (authenticationBlockPending ? authenticationToWrite : authentication)?.Revision;
+            }
             return;
         }
         if (attempt.Result is LoginResult.RejectedCredentials or LoginResult.RejectedBinding or LoginResult.NeedsInteraction)
