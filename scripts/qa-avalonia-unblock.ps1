@@ -23,9 +23,14 @@ $steps = [ordered]@{}
 $failures = [System.Collections.Generic.List[string]]::new()
 $tracked = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $savedEnvironment = @{}
-foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH')) {
+foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH', 'AUTONET_QA_MUTEX_SUFFIX')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
 }
+
+# 本机可能仍有已安装的候选托盘占用 QA 默认互斥名；按证据目录生成一次性后缀隔离，
+# 同一次运行内的所有实例共用该后缀，单实例语义不变，也不触碰已安装进程。
+$mutexSuffix = 'q' + ([Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($evidence)))).Substring(0, 16).ToLowerInvariant()
 
 function Pass([string]$Name, $Detail) { $steps[$Name] = @{ result = 'pass'; detail = $Detail }; Write-Host ('PASS ' + $Name) }
 function Fail([string]$Name, [string]$Message) {
@@ -110,6 +115,8 @@ try {
         New-Item -ItemType Directory -Path $unblockDir | Out-Null
 
         [Environment]::SetEnvironmentVariable('AUTONET_QA_DIR', $unblockDir)
+
+        [Environment]::SetEnvironmentVariable('AUTONET_QA_MUTEX_SUFFIX', $mutexSuffix)
         [Environment]::SetEnvironmentVariable('AUTONET_QA_MODE', 'unblock')
         [Environment]::SetEnvironmentVariable('AUTONET_QA_STATUS_PATH', '')
         $start = [Diagnostics.ProcessStartInfo]::new($exe)

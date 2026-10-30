@@ -7,6 +7,7 @@
 - #35、#37、#41 依次并入 `codex/ui-avalonia`（先 #35、再 #37、最后 #41）。#35 与 #37 之间无重叠；#41 与两者在 `MonitorWorker.cs`、`MainWindow.axaml.cs`、`MainView.axaml.cs`、`App.axaml.cs`、`Program.cs`、`ShellAccessibility.cs`、`AGENTS.md`、`docs/VALIDATION.md` 与设置页回归文件上冲突，均按两侧意图人工合并，未丢弃任一侧。
 - 合并期的取舍：旧的独立提权设置窗口入口随 #41 的设置页合并整体删除，窗口与壳改接 `SettingsPage`；`AUTONET_QA_MUTEX_SUFFIX` 统一由 `QaEnvironment` 单点解析（字符集与长度上限以 #37 的解析器为准，#41 原先的内联解析并入其中）；设置页改为长期复用的表单控件后不再保留设置内容的指纹缓存，认证页的渲染门缓存保持不变；`MonitorWorker` 同时保留额度投影与非秘密配置投影两条互不重叠的私有方法。
 - 完整 Release 构建 **0 警告 / 0 错误**，全量 **541/541**（同一次合并中依次为 466/466、495/495、541/541；#41 分支自身为 488/488）。未运行真实门户、断网、UAC、安装或服务替换；提权编辑器与真实受限存储仍为 `NOT_VERIFIED` / `NOT_RUN`。
+- QA 互斥隔离：十套 Avalonia QA 脚本统一按证据目录派生一次性 `AUTONET_QA_MUTEX_SUFFIX`（同一次运行内共用，单实例语义不变），避免本机已安装候选托盘占用 QA 默认互斥名导致 `already-running` 误判；此前需手工设置环境变量绕过。合并后复跑：壳 8/8、概览 4/4、诊断 4/4、日志 5/5、通知 pass、认证页 pass、设置页 pass（提权编辑器与真实受限目录 `NOT_VERIFIED`）、门户打开 pass、主题 pass、解除认证暂停 pass、诊断包导出 pass、兼容原型 8/8、可访问性 pass。收尾阶段读取真实受限存储指纹仍需管理员上下文，非管理员下报 `Access to the path 'C:\ProgramData\AutoNet\private\settings.json' is denied`，该行为在改动前后一致（QA 结果本身为 pass）。
 
 ## 额度状态可见化（2026-10-29，工单 #35，仅离线，未发布）
 
