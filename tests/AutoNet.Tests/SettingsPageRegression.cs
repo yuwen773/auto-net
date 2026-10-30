@@ -198,6 +198,52 @@ internal static class SettingsPageRegression
             finally { Directory.Delete(directory, recursive: true); }
             return Task.CompletedTask;
         }),
+        ("设置页回归：保存设置与修改密码不重置提交额度", () =>
+        {
+            var directory = NewDirectory();
+            try
+            {
+                // 隔离目录里使用真实存储：先形成“已用两次、结果未知”的提交额度，
+                // 再走设置页的真实保存路径（同账号留空密码、修改密码、换账号）。
+                var safety = new SafetyStateStore(directory);
+                var clock = new ManualClock();
+                var first = safety.TryReserveSubmissionBudget(null, clock.GetUtcNow()).Budget!;
+                Require(safety.TryTransitionSubmissionBudget(first, SubmissionBudgetState.PossiblySent), "准备首次提交额度失败");
+                clock.Advance(TimeSpan.FromSeconds(120));
+                var second = safety.TryReserveSubmissionBudget(safety.LoadSubmissionBudget(), clock.GetUtcNow()).Budget!;
+                Require(safety.TryTransitionSubmissionBudget(second, SubmissionBudgetState.PossiblySent), "准备第二次提交额度失败");
+                var budget = safety.LoadSubmissionBudget()!;
+                Require(budget is { Attempts: 2, State: SubmissionBudgetState.PossiblySent }, "夹具未形成已用两次额度");
+                var budgetPath = Path.Combine(directory, "submission-budget.json");
+                var budgetBefore = File.ReadAllBytes(budgetPath);
+                var block = new AuthenticationBlock { State = AuthenticationState.SubmissionPending, Attempts = 2, Revision = Guid.NewGuid() };
+                safety.BlockAuthentication(block);
+                var blockPath = Path.Combine(directory, "auth-block.txt");
+                var blockBefore = File.ReadAllBytes(blockPath);
+
+                var (editor, _) = CreateEditor(directory, seedUsername: "TEST-USER-1", seedPassword: PasswordOne);
+
+                // 保存设置：账号未变、密码留空，沿用既有密码。
+                Require(editor.Save(Draft(Profile, "TEST-USER-1", "")).Saved, "保存设置应成功");
+                Require(File.ReadAllBytes(budgetPath).SequenceEqual(budgetBefore), "保存设置改写了提交额度记录");
+                Require(safety.LoadSubmissionBudget() == budget, "保存设置重置了已用额度");
+                Require(File.ReadAllBytes(blockPath).SequenceEqual(blockBefore), "保存设置改写了认证未知状态");
+
+                // 修改密码：账号不变、提供新密码。
+                Require(editor.Save(Draft(Profile, "TEST-USER-1", PasswordTwo)).Saved, "修改密码应成功");
+                Require(File.ReadAllBytes(budgetPath).SequenceEqual(budgetBefore), "修改密码改写了提交额度记录");
+                Require(safety.LoadSubmissionBudget() == budget, "修改密码重置了已用额度");
+                Require(!File.Exists(Path.Combine(directory, "submission-restart.json")), "保存路径写入了人工重启确认标记");
+                Require(!safety.IsConfirmedSubmissionRestart(budget), "保存路径伪造了人工重启授权");
+
+                // 换账号并提供新密码同样不属于额度重置入口。
+                Require(editor.Save(Draft(Profile, "TEST-USER-2", PasswordTwo)).Saved, "换账号保存应成功");
+                Require(File.ReadAllBytes(budgetPath).SequenceEqual(budgetBefore) && safety.LoadSubmissionBudget() == budget,
+                    "换账号保存改写了提交额度");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+            return Task.CompletedTask;
+        }),
         ("设置页回归：编辑器加载投影返回既有配置且不产生写入", () =>
         {
             var directory = NewDirectory();
