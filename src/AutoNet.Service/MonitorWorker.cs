@@ -631,6 +631,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             DisconnectResetAfterSeconds = RecoveryPolicy.OnlineResetSeconds,
             DisconnectRequestUnconfirmed = policy.DisconnectBudget.State == DisconnectRequestState.RequestPending,
             NextAttempt = policy.NextAttempt > PolicyNow ? clock.GetUtcNow() + (policy.NextAttempt - PolicyNow) : null,
+            NextAttemptAction = policy.NextAttemptAction.ToString(),
             LastRecoverySeconds = lastRecoverySeconds, LastRecoveryAt = lastRecoveryAt,
             ActionStartedAt = actionStartedAt, ActionFinishedAt = actionFinishedAt, AuthenticationAcceptedAt = authenticationAcceptedAt,
             AuthenticationStage = lastAuthentication?.Stage.ToString() ?? "Unknown",

@@ -162,7 +162,7 @@ internal static class QaAccessibility
                 keyboard.Add(new QaAccessibilityKeyboard("Tab 遍历（概览页，绕环一周）", "Tab ×" + (tabTrail.Count - 1), true, true,
                     string.Join(" → ", tabTrail)));
 
-                // 方向键导航页面：左侧导航第一项按 ↓ 切换到网络诊断。
+                // 方向键导航页面：左侧导航第一项按 ↓ 依次切换到上网认证、网络诊断。
                 await controller.SelectAsync(ShellPage.Overview);
                 await Task.Delay(150);
                 var firstNav = VisibleDescendants(window).OfType<ListBoxItem>()
@@ -171,9 +171,12 @@ internal static class QaAccessibility
                 focusSet = firstNav.Focus(NavigationMethod.Tab, KeyModifiers.None);
                 Require(focusSet, "导航项未能获得键盘焦点");
                 PressKey(firstNav, Key.Down);
-                await Task.Delay(400);
+                await Task.Delay(250);
+                Require(controller.SelectedPage == ShellPage.Authentication, "方向键未切换到上网认证页");
+                PressKey(firstNav, Key.Down);
+                await Task.Delay(250);
                 Require(controller.SelectedPage == ShellPage.Diagnostics, "方向键未切换到网络诊断页");
-                keyboard.Add(new QaAccessibilityKeyboard("左侧导航（概览 → 网络诊断）", "Down", focusSet, true,
+                keyboard.Add(new QaAccessibilityKeyboard("左侧导航（概览 → 上网认证 → 网络诊断）", "Down ×2", focusSet, true,
                     controller.SelectedPage.ToString()));
 
                 // 诊断页导出入口名称（非运行中状态；#12 与 #33 的交叉证据）。

@@ -77,6 +77,11 @@ public sealed class RecoveryPolicy
     };
     public DateTimeOffset? OutageSince { get; private set; }
     public DateTimeOffset NextAttempt { get; private set; } = DateTimeOffset.MinValue;
+    /// <summary>
+    /// 与 <see cref="NextAttempt"/> 对应的动作种类。通用退避时间也可能来自 Wi-Fi 重连，
+    /// 界面不能把它当成认证重试；此字段让投影能区分两者。
+    /// </summary>
+    public ActionKind NextAttemptAction { get; private set; }
     public int Attempts { get; private set; }
     public bool CredentialsBlocked { get; set; }
     public string DecisionReason { get; private set; } = "NotEvaluated";
@@ -111,12 +116,14 @@ public sealed class RecoveryPolicy
             observation.Condition == NetworkCondition.NeedsAuthentication && hasCredentials && !CredentialsBlocked
                 ? ActionKind.Authenticate : stalled ? ActionKind.DisconnectWifi : ActionKind.None;
         NextAttempt = DateTimeOffset.MinValue;
+        NextAttemptAction = ActionKind.None;
         if (action == ActionKind.None) return NoAction(observation.Wifi != WifiState.Ready ? observation.Condition.ToString() :
             !hasCredentials ? "CredentialsMissing" : CredentialsBlocked ? "AuthenticationPaused" :
             !allowActiveDisconnect ? "ActiveDisconnectDisabled" : "NoApplicableAction");
         if (action == ActionKind.DisconnectWifi && (DisconnectAttempts >= DisconnectAttemptCap || disconnectPending))
             return NoAction(disconnectPending ? "DisconnectCompletionUnconfirmed" : "DisconnectBudgetExhausted");
         NextAttempt = retries.TryGetValue(action, out var retry) ? retry.NextAttempt : DateTimeOffset.MinValue;
+        NextAttemptAction = action;
         if (action == ActionKind.DisconnectWifi)
         {
             NextAttempt = NextDisconnectAttempt > stalledSince!.Value.AddSeconds(StalledObservationSeconds)
@@ -140,6 +147,7 @@ public sealed class RecoveryPolicy
             ? DisconnectCooldownSeconds
             : fast ? FastRetrySeconds : Math.Min(BackoffCeilingSeconds, 10 * (1 << Math.Min(Math.Max(actionAttempts - 3, 0), 3)));
         NextAttempt = finishedAt.AddSeconds(delay);
+        NextAttemptAction = lastAction;
         retries[lastAction] = (actionAttempts, NextAttempt);
         if (lastAction == ActionKind.DisconnectWifi)
         {
@@ -164,6 +172,7 @@ public sealed class RecoveryPolicy
         disconnectPending = false;
         disconnectCompletedAt = budget.CompletedAt;
         NextAttempt = NextDisconnectAttempt = now.AddSeconds(DisconnectCooldownSeconds);
+        NextAttemptAction = ActionKind.DisconnectWifi;
     }
 
     public void CancelUnissuedDisconnectReservation() => disconnectPending = false;
@@ -184,6 +193,7 @@ public sealed class RecoveryPolicy
     {
         OutageSince = null;
         NextAttempt = DateTimeOffset.MinValue;
+        NextAttemptAction = ActionKind.None;
         Attempts = 0;
         lastAction = ActionKind.None;
         stalledSince = null;
@@ -217,6 +227,11 @@ public sealed record StatusSnapshot
     public bool DisconnectRequestUnconfirmed { get; init; }
     public DateTimeOffset? OutageSince { get; init; }
     public DateTimeOffset? NextAttempt { get; init; }
+    /// <summary>
+    /// <see cref="NextAttempt"/> 对应的动作种类（None/ReconnectWifi/Authenticate/DisconnectWifi）。
+    /// 旧版状态缺省为 None：界面不得把未知来源的退避时间当成认证重试。
+    /// </summary>
+    public string NextAttemptAction { get; init; } = nameof(ActionKind.None);
     public double? LastRecoverySeconds { get; init; }
     public DateTimeOffset? LastRecoveryAt { get; init; }
     public DateTimeOffset? ActionStartedAt { get; init; }

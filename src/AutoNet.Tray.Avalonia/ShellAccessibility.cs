@@ -49,6 +49,18 @@ internal static class ShellAccessibility
     /// <summary>技术详情展开区（概览页）：标题固定，展开状态由控件自身状态呈现。</summary>
     public const string TechnicalDetail = "技术详情";
 
+    /// <summary>认证页状态区（#37）：只声明区域用途，具体状态由可见文字与字形共同表达。</summary>
+    public const string AuthStatus = "认证状态";
+
+    /// <summary>认证页门户地址（#37）：名称固定声明字段用途，地址文本与窗口内可见内容一致。</summary>
+    public const string AuthAddress = "门户地址";
+
+    /// <summary>认证页浏览器宿主区域（#37）：名称固定，不包含页面内容或地址。</summary>
+    public const string AuthHost = "门户页面";
+
+    /// <summary>认证页手动重试入口（#37）：只在受控失败状态下可见。</summary>
+    public const string AuthRetry = "重试加载门户页面…";
+
     /// <summary>设置控件可访问名称的统一入口，视图构建时链式调用。</summary>
     public static T Named<T>(T control, string name) where T : Control
     {

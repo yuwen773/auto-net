@@ -9,12 +9,16 @@ internal static class Program
 {
     /// <summary>
     /// 正式托盘沿用既有安装身份；只有显式 QA 场景使用独立互斥，避免干扰已安装实例。
-    /// QA 报告与进程入口按同一规则选择身份。
+    /// QA 报告与进程入口按同一规则选择身份。设置 AUTONET_QA_MUTEX_SUFFIX 时再追加后缀，
+    /// 用于并行 QA 工作树或与旧版候选托盘（其互斥名恰为 QA 默认名）并存时隔离。
     /// </summary>
     internal static string MutexName => ResolveMutexName(QaEnvironment.FromProcess());
 
-    internal static string ResolveMutexName(QaEnvironment qa) =>
-        qa.Active ? @"Local\AutoNet.Tray.Avalonia" : @"Local\AutoNet.Tray";
+    internal static string ResolveMutexName(QaEnvironment qa) => !qa.Active
+        ? @"Local\AutoNet.Tray"
+        : qa.MutexSuffix.Length == 0
+            ? @"Local\AutoNet.Tray.Avalonia"
+            : @"Local\AutoNet.Tray.Avalonia." + qa.MutexSuffix;
 
     [STAThread]
     private static int Main(string[] args)

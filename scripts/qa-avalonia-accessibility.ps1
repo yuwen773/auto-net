@@ -112,7 +112,7 @@ try {
         Require ($unblockEnter.Count -ge 1 -and $unblockEnter[0].Triggered -and $unblockEnter[0].Recorded -eq '--unblock-auth') '缺少解除入口的键盘触发证据'
         $tab = $report.Keyboard | Where-Object { $_.Key -like 'Tab*' }
         Require ($tab.Count -ge 1 -and $tab[0].Triggered -and $tab[0].Recorded -like '*→*') ('Tab 绕环遍历证据不符：' + ($tab[0] | ConvertTo-Json -Compress))
-        $down = $report.Keyboard | Where-Object { $_.Key -eq 'Down' -and $_.Context -like '左侧导航*' }
+        $down = $report.Keyboard | Where-Object { $_.Key -like 'Down*' -and $_.Context -like '左侧导航*' }
         Require ($down.Count -ge 1 -and $down[0].Triggered -and $down[0].Recorded -eq 'Diagnostics') '方向键切换页面证据不符'
 
         # 可访问名称（故事 33）：恢复开关随状态动态更新；解除/开页/导出携带当前事实。
@@ -128,15 +128,15 @@ try {
         Require ($namesMap['导出入口·诊断页'].ExportName -eq '导出诊断包…') ('导出入口名称不符：' + $namesMap['导出入口·诊断页'].ExportName)
 
         # Tab 停留点（T06）：每页序列非空且导航项名称与页面名一致。
-        Require ($report.TabSequences.Count -eq 4) ('页面 Tab 序列数不符：' + $report.TabSequences.Count)
+        Require ($report.TabSequences.Count -eq 5) ('页面 Tab 序列数不符：' + $report.TabSequences.Count)
         foreach ($pageStops in $report.TabSequences) {
             Require ($pageStops.Stops.Count -gt 0) ($pageStops.Page + ' 页无可键盘到达控件')
             $navNames = @($pageStops.Stops | Where-Object Kind -eq 'ListBoxItem' | ForEach-Object Name)
-            Require ($navNames.Count -ge 4) ($pageStops.Page + ' 页导航项不足：' + ($navNames -join '、'))
+            Require ($navNames.Count -ge 5) ($pageStops.Page + ' 页导航项不足：' + ($navNames -join '、'))
         }
 
-        # 受控缩放（T05 / 故事 31）：四页 × 三档全部通过，无关键裁切。
-        Require ($report.Scaling.Count -eq 12) ('受控缩放记录数不符：' + $report.Scaling.Count)
+        # 受控缩放（T05 / 故事 31）：五页 × 三档全部通过，无关键裁切。
+        Require ($report.Scaling.Count -eq 15) ('受控缩放记录数不符：' + $report.Scaling.Count)
         foreach ($scale in $report.Scaling) {
             Require ($scale.Pass) ($scale.Page + ' ' + $scale.Scale + '%：' + ($scale.Clipped -join '；'))
             $shot = Join-Path $qaDir ('scale-' + $scale.Page.ToLowerInvariant() + '-' + $scale.Scale + '.png')

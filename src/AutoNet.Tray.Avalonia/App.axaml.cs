@@ -266,8 +266,20 @@ public sealed class App : Application
         var portalOpener = new PortalPageOpener(PortalOpenStore.Create(tray.Qa), pipe.RefreshAsync, browserLaunch);
         // 日志页（#7）：读取既有日志目录；QA 夹具模式只在 logs 模式下重定向到证据目录内的夹具。
         var logsPage = LogsPage.Production(tray.Qa);
+        // 认证页（#37）：浏览器宿主抽象。生产宿主在 #38 接入受控网络边界前失败关闭，
+        // 不创建浏览器、不发起网络请求；auth-page QA 用假宿主验证页面生命周期。
+        IAuthPageBrowserHost authHost = tray.Qa.Mode == QaMode.AuthPage
+            ? new QaAuthPageHost()
+            : AuthPageBrowserHostFactory.Production();
+        // 状态投影在读取线程上发起，协调器经此调度器把内容与事件交给界面线程；
+        // 已在界面线程时同步执行，避免 QA 驱动时多一次排队。
+        var authPage = new AuthPageCoordinator(authHost, action =>
+        {
+            if (Dispatcher.UIThread.CheckAccess()) action();
+            else Dispatcher.UIThread.Post(action);
+        });
         var shell = new ShellController(pipe, (page, token) =>
-            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener);
+            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener, authPage);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
         logsPage.Updated += content => shell.ApplyExternal(content);
         // 概览/可访问性 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
@@ -330,7 +342,7 @@ public sealed class App : Application
             ? QaAccessibility.RecordPortalOpen
             : () => _ = portalOpener.OpenManuallyAsync();
         window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings,
-            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannelLauncher);
+            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannelLauncher, authPage);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
@@ -396,6 +408,9 @@ public sealed class App : Application
                 break;
             case QaMode.Accessibility:
                 QaAccessibility.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
+                break;
+            case QaMode.AuthPage:
+                QaAuthPage.Run(shell, authPage, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
         }
     }
