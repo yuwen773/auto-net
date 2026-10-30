@@ -12,6 +12,8 @@ internal enum SettingsPageSaveState
     Rejected,
     TimedOut,
     StoreFailed,
+    /// <summary>保存前发现设置已被其他窗口或会话修改；本次零写入，不能与“可能已写入”混用。</summary>
+    SettingsChanged,
     OutcomeUnknown
 }
 
@@ -26,6 +28,8 @@ internal sealed class SettingsDraftValues
     public WifiProfile? Profile { get; set; }
     /// <summary>用户未在页面明确选择 Wi-Fi：保存端保留受限存储中的当前守护配置。</summary>
     public bool KeepProfile { get; set; } = true;
+    /// <summary>用户未改动账号：保存端保留受限存储中的账号，只改其他字段时无需重输。</summary>
+    public bool KeepUsername { get; set; } = true;
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
     public string ProxyUrl { get; set; } = "";
@@ -37,9 +41,10 @@ internal sealed class SettingsDraftValues
     /// <summary>没有可信配置投影且用户尚未改动该开关：保存端保留受限存储中的原值。</summary>
     public bool KeepEnabled { get; set; } = true;
     public bool KeepAllowActiveDisconnect { get; set; } = true;
-    public bool KeepKeepAwakeOnAc { get; set; } = true;
+    public bool KeepAwakeOnAcKept { get; set; } = true;
     public bool KeepAuthChannelMode { get; set; } = true;
-    public bool AllowMissingSettingsForUnprojected { get; set; } = true;
+    /// <summary>从未取得已有设置时，允许受限存储确认没有配置的情况下创建首次设置。</summary>
+    public bool AllowFirstTimeSetup { get; set; } = true;
     public bool Enabled { get; set; } = true;
     public bool AllowActiveDisconnect { get; set; } = true;
     public bool KeepAwakeOnAc { get; set; } = true;
@@ -50,19 +55,21 @@ internal sealed class SettingsDraftValues
         Enabled, AllowActiveDisconnect, KeepAwakeOnAc, AuthChannelMode)
     {
         KeepProfile = KeepProfile,
+        KeepUsername = KeepUsername,
         KeepProxyUrl = KeepProxyUrl,
         KeepUuEndpoint = KeepUuEndpoint,
         KeepEnabled = KeepEnabled,
         KeepAllowActiveDisconnect = KeepAllowActiveDisconnect,
-        KeepKeepAwakeOnAc = KeepKeepAwakeOnAc,
+        KeepAwakeOnAcKept = KeepAwakeOnAcKept,
         KeepAuthChannelMode = KeepAuthChannelMode,
-        AllowMissingSettingsForUnprojected = AllowMissingSettingsForUnprojected
+        AllowFirstTimeSetup = AllowFirstTimeSetup
     };
 
     public void CopyFrom(SettingsDraft draft)
     {
         Profile = draft.Profile;
         KeepProfile = draft.KeepProfile;
+        KeepUsername = draft.KeepUsername;
         Username = draft.Username;
         Password = draft.Password;
         ProxyUrl = draft.ProxyUrl;
@@ -71,9 +78,9 @@ internal sealed class SettingsDraftValues
         KeepUuEndpoint = draft.KeepUuEndpoint;
         KeepEnabled = draft.KeepEnabled;
         KeepAllowActiveDisconnect = draft.KeepAllowActiveDisconnect;
-        KeepKeepAwakeOnAc = draft.KeepKeepAwakeOnAc;
+        KeepAwakeOnAcKept = draft.KeepAwakeOnAcKept;
         KeepAuthChannelMode = draft.KeepAuthChannelMode;
-        AllowMissingSettingsForUnprojected = draft.AllowMissingSettingsForUnprojected;
+        AllowFirstTimeSetup = draft.AllowFirstTimeSetup;
         Enabled = draft.Enabled;
         AllowActiveDisconnect = draft.AllowActiveDisconnect;
         KeepAwakeOnAc = draft.KeepAwakeOnAc;
@@ -84,7 +91,8 @@ internal sealed class SettingsDraftValues
 /// <summary>
 /// 设置页模型（#41）：字段与既有提权编辑窗口一致，保存经独立提权交接。
 /// 本类不依赖 Avalonia，也不读写受限存储；只持有普通 UI 进程内存里的草稿，
-/// 由注入的交接委托把草稿交给提权进程。密码在每次交接结束后立即从草稿清除。
+/// 由注入的交接委托把草稿交给提权进程（保存端的跨进程互斥见保存锁 SettingsWriteLock）。
+/// 非秘密配置与账号来自配置投影；密码在每次交接结束后立即从草稿清除。
 /// </summary>
 internal sealed class SettingsPage
 {
@@ -93,10 +101,12 @@ internal sealed class SettingsPage
     public const string CancelledMessage = "已取消管理员授权，未写入任何设置。";
     public const string TimedOutMessage = "等待管理员授权超时，未写入任何设置。";
     public const string RejectedMessage = "设置交接未通过，未写入任何设置。";
-    public const string InvalidSettingsMessage = "设置校验未通过，未写入任何设置。请检查账号、代理与 UU 地址。";
+    // 接收端与页面共用同一份文案，避免两处措辞漂移。
+    public const string InvalidSettingsMessage = ElevatedSettings.InvalidSettingsMessage;
     public const string StoreFailedMessage = "保存未完成：存储写入失败。凭据可能已写入、设置可能未写入；请核对后重试。";
     public const string SettingsUnreadableMessage = "保存未完成：无法读取现有设置，未写入任何内容。请稍后重试。";
-    public const string SaveBusyMessage = "保存未完成：另一个设置保存正在进行，未写入任何内容。请稍后重试。";
+    public const string SaveBusyMessage = ElevatedSettings.SaveBusyMessage;
+    public const string SettingsChangedMessage = ElevatedSettings.SettingsChangedMessage;
     public const string OutcomeUnknownMessage = "保存结果未知：管理员操作可能已写入部分或全部内容，请核对当前设置。";
     public const string SavedWithPendingEditsMessage = "已保存提交时的内容；保存期间的新修改尚未保存，请再次保存。";
 
@@ -153,6 +163,9 @@ internal sealed class SettingsPage
 
     public bool MessageIsError { get; private set; }
 
+    /// <summary>消息表示保存成功（含“保存期间有新修改”）；视图据此选择成功色调，不解析文案前缀。</summary>
+    public bool MessageIsSuccess { get; private set; }
+
     /// <summary>消息、保存中状态或只读事实变化；UI 侧负责调度到界面线程。</summary>
     public event Action? StateChanged;
 
@@ -168,18 +181,23 @@ internal sealed class SettingsPage
     /// <summary>应用一次状态投影。只有未修改的草稿才接受新的配置投影，避免轮询覆盖用户输入。</summary>
     public void Update(SettingsContent content)
     {
+        // 保存前写入的配置投影比页面刚保存的内容更旧：采用它会把只读事实与脱敏提示刷回
+        // 保存前的值，而草稿仍保持较新的值。等下一次状态写入（ProjectedAt > lastSavedAt）再采用。
+        if (content.ConfigProjected && content.ProjectedAt <= lastSavedAt) return;
+
         Content = content;
         var profileUpdated = false;
+        var usernameUpdated = false;
         if (content.ConfigProjected)
         {
             // 草稿已修改时也必须记住已确认的现有配置，避免其消失后误当首次设置。
             hasSeenSettings = true;
-            Draft.AllowMissingSettingsForUnprojected = false;
+            Draft.AllowFirstTimeSetup = false;
             // 草稿已修改时不整体回填（会覆盖用户输入），但用户未编辑的开关必须跟上可信投影，
             // 否则页面会把“未知”继续当成未知，而实际已保存值已经可取。
             if (Draft.KeepEnabled) Draft.Enabled = content.Enabled;
             if (Draft.KeepAllowActiveDisconnect) Draft.AllowActiveDisconnect = content.AllowActiveDisconnect;
-            if (Draft.KeepKeepAwakeOnAc) Draft.KeepAwakeOnAc = content.KeepAwakeOnAc;
+            if (Draft.KeepAwakeOnAcKept) Draft.KeepAwakeOnAc = content.KeepAwakeOnAc;
             if (Draft.KeepAuthChannelMode && AuthChannelModes.IsKnown(content.AuthChannelMode))
                 Draft.AuthChannelMode = content.AuthChannelMode;
             // 用户没有明确选择 Wi-Fi 时，草稿必须跟上其他窗口刚保存的守护配置；
@@ -190,14 +208,19 @@ internal sealed class SettingsPage
                 Draft.Profile = projected;
                 profileUpdated = true;
             }
+            // 用户尚未改动账号时跟随配置投影预填；账号只用于展示，密码永不回读。
+            if (Draft.KeepUsername && content.Username.Length > 0 && Draft.Username != content.Username)
+            {
+                Draft.Username = content.Username;
+                usernameUpdated = true;
+            }
         }
-        if (!Dirty && content.ConfigProjected && content.ProjectionKey != appliedKey &&
-            content.ProjectedAt > lastSavedAt)
+        if (!Dirty && content.ConfigProjected && content.ProjectionKey != appliedKey)
         {
             ApplyProjection(content);
             ProjectionApplied?.Invoke();
         }
-        else if (profileUpdated) ProjectionApplied?.Invoke();
+        else if (profileUpdated || usernameUpdated) ProjectionApplied?.Invoke();
 
         StateChanged?.Invoke();
     }
@@ -208,6 +231,16 @@ internal sealed class SettingsPage
         if (!Draft.KeepProfile && SameProfile(profile, Draft.Profile)) return;
         Draft.Profile = profile;
         Draft.KeepProfile = false;
+        MarkDirty();
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>用户明确改动账号：清除“保留账号”，保存按用户输入处理；密码仍须单独输入。</summary>
+    public void SetUsername(string value)
+    {
+        if (Draft.Username == value) return;
+        Draft.Username = value;
+        Draft.KeepUsername = false;
         MarkDirty();
         StateChanged?.Invoke();
     }
@@ -262,9 +295,9 @@ internal sealed class SettingsPage
 
     public void SetKeepAwakeOnAc(bool value)
     {
-        if (!Draft.KeepKeepAwakeOnAc && Draft.KeepAwakeOnAc == value) return;
+        if (!Draft.KeepAwakeOnAcKept && Draft.KeepAwakeOnAc == value) return;
         Draft.KeepAwakeOnAc = value;
-        Draft.KeepKeepAwakeOnAc = false;
+        Draft.KeepAwakeOnAcKept = false;
         MarkDirty();
         StateChanged?.Invoke();
     }
@@ -288,6 +321,7 @@ internal sealed class SettingsPage
         Dirty = false;
         Message = "";
         MessageIsError = false;
+        MessageIsSuccess = false;
         Interlocked.Increment(ref draftVersion);
         ResetDraft();
         PasswordCleared?.Invoke();
@@ -316,6 +350,10 @@ internal sealed class SettingsPage
 
         var draft = Draft.ToDraft();
         var version = Volatile.Read(ref draftVersion);
+        // 保存期间状态轮询可能替换 Content；保留提交时的投影事实，供保存后判断哪些值对页面仍未知。
+        var projectedBeforeSave = Content.ConfigProjected;
+        var proxyRedactedBeforeSave = Content.ProxyUrlRedacted;
+        var uuRedactedBeforeSave = Content.UuEndpointRedacted;
         var local = ValidateLocally(draft);
         if (local is not null)
         {
@@ -352,15 +390,22 @@ internal sealed class SettingsPage
         if (mapped.Saved)
         {
             hasSeenSettings = true;
-            Draft.AllowMissingSettingsForUnprojected = false;
+            Draft.AllowFirstTimeSetup = false;
         }
         if (mapped.Saved && !editedDuringSave)
         {
             Dirty = false;
             lastSavedAt = DateTimeOffset.UtcNow;
-            // 未投影时，接收端保留的地址与开关对普通进程未知；不要把空展示值或页面默认值伪装为已保存配置。
-            var hasKeptFields = draft.KeepProxyUrl || draft.KeepUuEndpoint || draft.KeepEnabled ||
-                draft.KeepAllowActiveDisconnect || draft.KeepKeepAwakeOnAc || draft.KeepAuthChannelMode;
+            // 只有“页面从未显示过、由接收端保留”的值才算未知；完整显示的地址即使带保留标记，
+            // 页面也知道它的值，不能因此把配置投影误标为不可用。
+            var hasKeptFields =
+                (draft.KeepProfile && (draft.Profile is null || !projectedBeforeSave)) ||
+                (draft.KeepProxyUrl && (!projectedBeforeSave || proxyRedactedBeforeSave)) ||
+                (draft.KeepUuEndpoint && (!projectedBeforeSave || uuRedactedBeforeSave)) ||
+                (draft.KeepEnabled && !projectedBeforeSave) ||
+                (draft.KeepAllowActiveDisconnect && !projectedBeforeSave) ||
+                (draft.KeepAwakeOnAcKept && !projectedBeforeSave) ||
+                (draft.KeepAuthChannelMode && !projectedBeforeSave);
             if (!hasKeptFields)
             {
                 Content = WithDraft(Content, draft, lastSavedAt);
@@ -378,11 +423,11 @@ internal sealed class SettingsPage
         {
             // 提交的草稿确实已保存，但保存期间产生了新修改：不能把它们标成已保存。
             Dirty = true;
-            SetMessage(SavedWithPendingEditsMessage, error: false);
+            SetMessage(SavedWithPendingEditsMessage, error: false, success: true);
         }
         else
         {
-            SetMessage(mapped.Message, error: !mapped.Saved);
+            SetMessage(mapped.Message, error: !mapped.Saved, success: mapped.Saved);
         }
 
         if (mapped.Saved && refresh is not null) _ = refresh();
@@ -397,10 +442,11 @@ internal sealed class SettingsPage
         PasswordCleared?.Invoke();
     }
 
-    private void SetMessage(string message, bool error)
+    private void SetMessage(string message, bool error, bool success = false)
     {
         Message = message;
         MessageIsError = error;
+        MessageIsSuccess = success;
         StateChanged?.Invoke();
     }
 
@@ -415,17 +461,19 @@ internal sealed class SettingsPage
     {
         Draft.Profile = null;
         Draft.KeepProfile = true;
+        Draft.Username = "";
+        Draft.KeepUsername = true;
         Draft.ProxyUrl = "";
         Draft.KeepProxyUrl = true;
         Draft.UuEndpoint = "";
         Draft.KeepUuEndpoint = true;
-        Draft.AllowMissingSettingsForUnprojected = !hasSeenSettings;
+        Draft.AllowFirstTimeSetup = !hasSeenSettings;
         Draft.Enabled = true;
         Draft.KeepEnabled = true;
         Draft.AllowActiveDisconnect = true;
         Draft.KeepAllowActiveDisconnect = true;
         Draft.KeepAwakeOnAc = true;
-        Draft.KeepKeepAwakeOnAc = true;
+        Draft.KeepAwakeOnAcKept = true;
         Draft.AuthChannelMode = AuthChannelModes.ManualOnly;
         Draft.KeepAuthChannelMode = true;
         appliedKey = "";
@@ -435,9 +483,12 @@ internal sealed class SettingsPage
     private void ApplyProjection(SettingsContent content)
     {
         hasSeenSettings = true;
-        Draft.AllowMissingSettingsForUnprojected = false;
+        Draft.AllowFirstTimeSetup = false;
         Draft.Profile = FindProfile(content);
-        // 账号与密码不在状态投影里：绝不由投影回读或覆盖。
+        // 账号由配置投影预填、密码永不回读；未编辑账号时保存端仍以受限存储为准。
+        // 投影暂时没有账号（例如凭据读取失败）时保留现有预填值，不把界面刷成空白。
+        if (content.Username.Length > 0) Draft.Username = content.Username;
+        Draft.KeepUsername = true;
         Draft.ProxyUrl = content.ProxyUrlDisplay;
         Draft.KeepProxyUrl = true;
         Draft.UuEndpoint = content.UuEndpointDisplay;
@@ -447,7 +498,7 @@ internal sealed class SettingsPage
         Draft.AllowActiveDisconnect = content.AllowActiveDisconnect;
         Draft.KeepAllowActiveDisconnect = true;
         Draft.KeepAwakeOnAc = content.KeepAwakeOnAc;
-        Draft.KeepKeepAwakeOnAc = true;
+        Draft.KeepAwakeOnAcKept = true;
         Draft.AuthChannelMode = content.AuthChannelMode;
         Draft.KeepAuthChannelMode = true;
         appliedKey = content.ProjectionKey;
@@ -455,27 +506,20 @@ internal sealed class SettingsPage
 
     private static SettingsPageSaveResult? ValidateLocally(SettingsDraft draft)
     {
-        if (draft.Profile is not { } profile)
+        // 没有明确选择 Wi-Fi 时，KeepProfile 表示由保存端保留受限存储中的当前目标；
+        // 只有既没有选择、也没有保留语义时才是真正的“未选择配置”。
+        if (draft.Profile is null && !draft.KeepProfile)
             return new(SettingsPageSaveState.ValidationFailed, ElevatedSettings.MissingProfileMessage);
 
-        // 与既有保存路径同语义：账号空白在凭据写入前拒绝。
-        if (draft.Username.Trim().Length == 0)
+        // 未改动账号（KeepUsername）时由保存端读取受限存储中的账号；只有明确改动后留空才拒绝。
+        if (!draft.KeepUsername && draft.Username.Trim().Length == 0)
             return new(SettingsPageSaveState.ValidationFailed, ElevatedSettings.CredentialsEmptyMessage);
 
-        var settings = new Settings
-        {
-            InterfaceId = profile.InterfaceId,
-            WifiProfile = profile.Name,
-            Enabled = draft.Enabled,
-            AllowActiveDisconnect = draft.AllowActiveDisconnect,
-            KeepAwakeOnAc = draft.KeepAwakeOnAc,
-            ProxyUrl = draft.ProxyUrl.Trim(),
-            UuEndpoint = draft.UuEndpoint.Trim(),
-            AuthChannelMode = draft.AuthChannelMode
-        };
         try
         {
-            settings.Validate();
+            // 与保存端共用同一套地址与通道规则，避免两处校验漂移。
+            Settings.ValidateConnectionOptions(
+                draft.ProxyUrl.Trim(), draft.UuEndpoint.Trim(), draft.AuthChannelMode);
         }
         catch (ArgumentException e)
         {
@@ -497,6 +541,8 @@ internal sealed class SettingsPage
             SettingsSaveOutcome.StoreFailed => new(SettingsPageSaveState.StoreFailed, StoreFailedMessage),
             SettingsSaveOutcome.SettingsUnreadable => new(SettingsPageSaveState.StoreFailed, SettingsUnreadableMessage),
             SettingsSaveOutcome.SaveBusy => new(SettingsPageSaveState.StoreFailed, SaveBusyMessage),
+            // 零写入的并发拒绝必须与“可能已写入”区分，不能共用结果未知的措辞。
+            SettingsSaveOutcome.SettingsChanged => new(SettingsPageSaveState.SettingsChanged, SettingsChangedMessage),
             _ => new(SettingsPageSaveState.OutcomeUnknown, OutcomeUnknownMessage)
         },
         HandoffOutcome.Cancelled => new(SettingsPageSaveState.Cancelled, CancelledMessage),
@@ -511,18 +557,19 @@ internal sealed class SettingsPage
         {
             ConfigProjected = true,
             ProjectedAt = at,
+            Username = draft.Username,
             InterfaceId = draft.Profile?.InterfaceId ?? "",
             WifiProfile = draft.Profile?.Name ?? "",
             ProxyUrlDisplay = ConfigProjection.Display(draft.ProxyUrl),
-            ProxyUrlRedacted = draft.KeepProxyUrl || ConfigProjection.HasHiddenParts(draft.ProxyUrl),
+            // 页面刚保存的是完整已知值：只有该值本身仍含隐藏部分时才需要提示，不再沿用“保留”标记。
+            ProxyUrlRedacted = ConfigProjection.HasHiddenParts(draft.ProxyUrl),
             UuEndpointDisplay = ConfigProjection.Display(draft.UuEndpoint),
-            UuEndpointRedacted = draft.KeepUuEndpoint || ConfigProjection.HasHiddenParts(draft.UuEndpoint),
+            UuEndpointRedacted = ConfigProjection.HasHiddenParts(draft.UuEndpoint),
             Enabled = draft.Enabled,
             AllowActiveDisconnect = draft.AllowActiveDisconnect,
             KeepAwakeOnAc = draft.KeepAwakeOnAc,
             AuthChannelMode = draft.AuthChannelMode
         };
-        updated = updated with { ProjectionKey = SettingsModel.ConfigFingerprint(updated) };
-        return updated with { ContentKey = SettingsModel.ContentFingerprint(updated) };
+        return updated with { ProjectionKey = SettingsModel.ConfigFingerprint(updated) };
     }
 }

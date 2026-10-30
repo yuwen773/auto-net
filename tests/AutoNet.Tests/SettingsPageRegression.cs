@@ -186,6 +186,7 @@ internal static class SettingsPageRegression
             Require(content.RecoveryState == "已开启", "自动恢复开关状态投影不符：" + content.RecoveryState);
             Require(content.GuardedNetwork == online.Wifi, "守护网络未按快照投影：" + content.GuardedNetwork);
             Require(content.ConfigProjected, "后台已投影配置但页面未识别");
+            Require(content.Username == "TEST-USER-1", "账号未进入配置投影：" + content.Username);
             Require(content.WifiProfile == Profile.Name, "Wi-Fi 配置投影不符：" + content.WifiProfile);
             Require(content.ProxyUrlDisplay == online.ProxyUrlDisplay, "代理投影不符：" + content.ProxyUrlDisplay);
             Require(content.UuEndpointDisplay == online.UuEndpointDisplay, "UU 地址投影不符：" + content.UuEndpointDisplay);
@@ -215,18 +216,145 @@ internal static class SettingsPageRegression
 
             // 指纹：同状态稳定，状态变化时更新。
             var again = SettingsModel.From(Reading(online));
-            Require(again.ContentKey == content.ContentKey, "同状态指纹不稳定");
-            Require(disabled.ContentKey != content.ContentKey, "状态变化时指纹未更新");
+            Require(again.ProjectionKey == content.ProjectionKey, "同状态投影指纹不稳定");
+            Require(disabled.ProjectionKey != content.ProjectionKey, "状态变化时投影指纹未更新");
         })),
-        ("设置页回归：投影不含账号与密码", () => Sync(() =>
+        ("设置页回归：配置投影不含密码且账号仅用于预填", () => Sync(() =>
         {
             var content = SettingsModel.From(Reading(Online()));
-            var text = content.ContentKey + content.ProjectionKey + content.RecoveryState + content.GuardedNetwork +
+            var text = content.ProjectionKey + content.RecoveryState + content.GuardedNetwork +
                 content.WifiProfile + content.ProxyUrlDisplay + content.UuEndpointDisplay + content.AuthChannelMode;
-            Require(!text.Contains(PasswordOne, StringComparison.Ordinal) && !text.Contains("TEST-USER", StringComparison.Ordinal),
-                "投影不得携带凭据内容");
+            Require(!text.Contains(PasswordOne, StringComparison.Ordinal), "投影不得携带密码");
+            Require(content.Username == "TEST-USER-1", "账号应作为预填值进入投影");
             Require(SettingsModel.CredentialNote.Contains("DPAPI", StringComparison.Ordinal), "凭据说明缺少加密存储事实");
             Require(SettingsModel.PasswordNote.Contains("遮挡", StringComparison.Ordinal), "密码说明缺少遮挡事实");
+        })),
+        ("设置页回归：有投影时账号预填且空密码保存成功", () => Sync(() =>
+        {
+            var directory = NewDirectory();
+            try
+            {
+                var (editor, paths) = CreateEditor(directory, seedUsername: "TEST-USER-1", seedPassword: PasswordOne);
+                var page = CreatePage(editor);
+                page.Update(SettingsModel.From(Reading(Online())));
+                Require(page.Draft.Username == "TEST-USER-1", "账号未从配置投影预填：" + page.Draft.Username);
+                Require(page.Draft.Password.Length == 0, "密码不得预填");
+                var result = page.SaveAsync().GetAwaiter().GetResult();
+                Require(result.Saved, "预填账号后空密码保存失败：" + result.Message);
+                Require(ReadCredentials(paths.Credentials) is { Username: "TEST-USER-1", Password: PasswordOne },
+                    "空密码未保留已保存密码");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        })),
+        ("设置页回归：无投影未选配置且未改账号时保留账号与守护目标", () => Sync(() =>
+        {
+            var directory = NewDirectory();
+            try
+            {
+                var (editor, paths) = CreateEditor(directory, seedUsername: "TEST-USER-1", seedPassword: PasswordOne);
+                Storage.AtomicWrite(paths.Settings, JsonSerializer.Serialize(new Settings
+                {
+                    InterfaceId = Profile.InterfaceId,
+                    WifiProfile = Profile.Name,
+                    ProxyUrl = "http://127.0.0.1:7897/kept",
+                    Enabled = false
+                }, Storage.Json));
+                var page = CreatePage(editor);
+                page.Update(SettingsModel.From(null));
+                Require(page.Draft.Profile is null && page.Draft.KeepProfile, "无投影时草稿未处于保留守护目标状态");
+                Require(page.Draft.KeepUsername && page.Draft.Username.Length == 0, "无投影时账号不应凭空出现");
+                // 只改一个选项：守护目标、账号、密码与未编辑地址都必须保留。
+                page.SetEnabled(true);
+                var result = page.SaveAsync().GetAwaiter().GetResult();
+                Require(result.Saved, "无投影保留账号与守护目标的保存失败：" + result.Message);
+                var actual = JsonSerializer.Deserialize<Settings>(Storage.ReadShared(paths.Settings), Storage.Json)!;
+                Require(actual.InterfaceId == Profile.InterfaceId && actual.WifiProfile == Profile.Name,
+                    "未选择的守护目标被清空或改写");
+                Require(actual.Enabled, "用户明确修改的选项未保存");
+                Require(actual.ProxyUrl == "http://127.0.0.1:7897/kept", "未编辑地址未保留");
+                Require(ReadCredentials(paths.Credentials) is { Username: "TEST-USER-1", Password: PasswordOne },
+                    "未改动的账号或密码被改写");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        })),
+        ("设置页回归：保存前的旧投影不覆盖保存后的页面事实", () => Sync(() =>
+        {
+            var directory = NewDirectory();
+            try
+            {
+                var (editor, _) = CreateEditor(directory, seedUsername: "TEST-USER-1", seedPassword: PasswordOne);
+                var page = CreatePage(editor);
+                page.Update(SettingsModel.From(Reading(Online())));
+                Require(page.SaveAsync().GetAwaiter().GetResult().Saved, "准备保存失败");
+                Require(page.Content.ConfigProjected, "保存后配置投影不应被标记为不可用");
+
+                // 保存前写入、仍在 15 秒新鲜窗口内的状态：UpdatedAt 早于 lastSavedAt，
+                // 且携带不同的只读事实与配置值；它必须被新鲜度闸门挡住。
+                var stale = Online() with
+                {
+                    UpdatedAt = DateTimeOffset.UtcNow.AddSeconds(-1),
+                    Enabled = false,
+                    ProxyUrlDisplay = "http://127.0.0.1:9999"
+                };
+                page.Update(SettingsModel.From(Reading(stale)));
+                Require(page.Content.Enabled, "过期投影把自动恢复事实刷回保存前的值");
+                Require(page.Content.ProxyUrlDisplay == "http://127.0.0.1:7897",
+                    "过期投影覆盖了保存后的地址：" + page.Content.ProxyUrlDisplay);
+                Require(page.Draft.Enabled, "过期投影改写了已保存的草稿");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        })),
+        ("设置页回归：完整显示的地址保存后不误报配置不可读", () => Sync(() =>
+        {
+            var directory = NewDirectory();
+            try
+            {
+                var (editor, _) = CreateEditor(directory, seedUsername: "TEST-USER-1", seedPassword: PasswordOne);
+                var page = CreatePage(editor);
+                page.Update(SettingsModel.From(Reading(Online())));
+                Require(page.Draft.KeepProxyUrl && page.Draft.KeepUuEndpoint, "完整显示的地址应带保留标记");
+                Require(page.SaveAsync().GetAwaiter().GetResult().Saved, "保存失败");
+                Require(page.Content.ConfigProjected, "完整显示的地址保存后被误标为无法读取配置");
+                Require(!page.Content.ProxyUrlRedacted && !page.Content.UuEndpointRedacted,
+                    "完整显示的地址保存后被误标为已隐藏");
+                Require(page.Message.Contains("已保存", StringComparison.Ordinal), "保存后未显示成功文案：" + page.Message);
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        })),
+        ("设置页回归：无法识别的既有通道模式被拒绝而不是静默改写", () => Sync(() =>
+        {
+            var directory = NewDirectory();
+            try
+            {
+                var (editor, paths) = CreateEditor(directory, seedUsername: "TEST-USER-1", seedPassword: PasswordOne);
+                Storage.AtomicWrite(paths.Settings, JsonSerializer.Serialize(new Settings
+                {
+                    InterfaceId = Profile.InterfaceId,
+                    WifiProfile = Profile.Name,
+                    AuthChannelMode = "FutureMode"
+                }, Storage.Json));
+                var before = File.ReadAllBytes(paths.Settings);
+                var page = CreatePage(editor);
+                page.Update(SettingsModel.From(null));
+                page.Draft.Profile = Profile;
+                page.Draft.Username = "TEST-USER-1";
+                page.MarkDirty();
+                var result = page.SaveAsync().GetAwaiter().GetResult();
+                Require(result.State == SettingsPageSaveState.ValidationFailed, "未知通道模式未被拒绝：" + result.State);
+                Require(result.Message == SettingsPage.InvalidSettingsMessage, "未知通道模式提示不符：" + result.Message);
+                Require(File.ReadAllBytes(paths.Settings).SequenceEqual(before), "未知通道模式被静默改写");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        })),
+        ("设置页回归：并发修改的零写入拒绝不宣称可能已写入", () => Sync(() =>
+        {
+            var page = new SettingsPage(() => [Profile], (_, _) =>
+                Task.FromResult(new HandoffResult(HandoffOutcome.Completed, SettingsSaveOutcome.SettingsChanged)));
+            page.ApplyForQa(Draft(Profile, "TEST-USER-1", PasswordOne));
+            var result = page.SaveAsync().GetAwaiter().GetResult();
+            Require(result.State == SettingsPageSaveState.SettingsChanged, "零写入的并发拒绝状态不符：" + result.State);
+            Require(result.Message.Contains("未写入", StringComparison.Ordinal), "并发拒绝未说明零写入：" + result.Message);
+            Require(!result.Message.Contains("可能已写入", StringComparison.Ordinal), "零写入被误报为可能已写入");
         })),
         ("设置页回归：首次设置必须提供密码且零写入", () =>
         {
@@ -503,7 +631,8 @@ internal static class SettingsPageRegression
             page.MarkDirty();
             page.Discard();
             Require(page.Draft.Password.Length == 0, "放弃修改未清除密码");
-            Require(page.Draft.Username.Length == 0, "放弃修改未清除账号");
+            Require(page.Draft.Username == content.Username && page.Draft.KeepUsername,
+                "放弃修改未恢复投影账号或保留标记");
             Require(page.Draft.ProxyUrl == content.ProxyUrlDisplay, "放弃修改未恢复配置投影：" + page.Draft.ProxyUrl);
             Require(!page.Dirty, "放弃修改后仍标记为已修改");
             return Task.CompletedTask;
@@ -1106,6 +1235,7 @@ internal static class SettingsPageRegression
         Tunnel = "系统路径可达，出口未核验",
         Uu = "未核验",
         SettingsProjected = true,
+        Username = "TEST-USER-1",
         InterfaceId = Profile.InterfaceId,
         WifiProfile = Profile.Name,
         ProxyUrlDisplay = "http://127.0.0.1:7897",

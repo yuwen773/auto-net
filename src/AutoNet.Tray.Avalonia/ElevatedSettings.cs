@@ -57,15 +57,17 @@ internal sealed record SettingsDraft(
 {
     /// <summary>普通界面没有明确选择 Wi-Fi：接收端保留受限存储中的当前守护配置，避免过期草稿覆盖。</summary>
     public bool KeepProfile { get; init; }
+    /// <summary>用户未改动账号：接收端保留受限存储中的账号；无投影时只改其他字段也无需重输账号。</summary>
+    public bool KeepUsername { get; init; }
     public bool KeepProxyUrl { get; init; }
     public bool KeepUuEndpoint { get; init; }
     /// <summary>普通界面没有可信配置投影、用户未改动该开关：接收端保留受限存储中的原值。</summary>
     public bool KeepEnabled { get; init; }
     public bool KeepAllowActiveDisconnect { get; init; }
-    public bool KeepKeepAwakeOnAc { get; init; }
+    public bool KeepAwakeOnAcKept { get; init; }
     public bool KeepAuthChannelMode { get; init; }
     /// <summary>从未取得已有配置时，若受限存储确认没有配置，允许以空地址创建首次设置。</summary>
-    public bool AllowMissingSettingsForUnprojected { get; init; }
+    public bool AllowFirstTimeSetup { get; init; }
 }
 
 /// <summary>
@@ -93,6 +95,11 @@ internal sealed class ElevatedSettings(
     public const string MissingStoreMessage = "请先安装后台服务，然后设置认证信息。";
     public const string SaveBusyMessage = "保存未完成：另一个设置保存正在进行，未写入任何内容。请稍后重试。";
     public const string SettingsChangedMessage = "保存未完成：设置已被其他窗口或会话修改，未写入任何内容。请关闭后重新打开设置再保存。";
+    /// <summary>
+    /// 接收端拒绝保存的统一文案。拒绝原因经 <see cref="SettingsSaveOutcome"/> 枚举跨进程传递，
+    /// 具体文本不会进入界面，所以这句话必须同时覆盖账号、代理、UU 地址与无法识别的认证通道模式。
+    /// </summary>
+    public const string InvalidSettingsMessage = "设置校验未通过，未写入任何设置。请检查账号、密码、代理、UU 地址与认证通道设置。";
 
     /// <summary>生产依赖：既有受限存储与真实 Wi-Fi 配置枚举（只列所有用户可用的配置，与既有表单一致）。</summary>
     public static ElevatedSettings Production() => new(
@@ -127,7 +134,9 @@ internal sealed class ElevatedSettings(
     public SettingsSaveResult Save(SettingsDraft draft, SettingsSaveGuard? guard = null)
     {
         // 故事 35：必须选择网卡与已保存 Wi-Fi 配置，守护目标不允许为空。
-        if (draft.Profile is not { } profile) return new(SettingsSaveOutcome.MissingProfile, MissingProfileMessage);
+        // 例外：普通界面没有可信投影时保留受限存储中的当前目标（KeepProfile），由 SaveLocked 在锁内解析。
+        if (draft.Profile is null && !draft.KeepProfile)
+            return new(SettingsSaveOutcome.MissingProfile, MissingProfileMessage);
 
         IDisposable? writeLock = null;
         if (acquireLock is not null)
@@ -137,19 +146,18 @@ internal sealed class ElevatedSettings(
             catch (Exception e) { return new(SettingsSaveOutcome.StoreFailed, "保存未完成：" + e.GetType().Name); }
         }
 
-        try { return SaveLocked(draft, profile, guard); }
+        try { return SaveLocked(draft, guard); }
         finally { writeLock?.Dispose(); }
     }
 
-    private SettingsSaveResult SaveLocked(SettingsDraft draft, WifiProfile profile, SettingsSaveGuard? guard)
+    private SettingsSaveResult SaveLocked(SettingsDraft draft, SettingsSaveGuard? guard)
     {
-        var username = draft.Username.Trim();
         // 故事 37：账号未变且密码留空 → 保留已保存密码；首次设置或更改账号 → 必须提供新密码。
         var existing = loadCredentials();
         // #41 审查修复：普通界面只看到地址的安全展示值，未编辑的开关也可能对页面未知。
         // 这些字段必须保留受限存储中的完整原值，不能以展示值或页面默认值覆盖。
         var needsExisting = draft.KeepProfile || draft.KeepProxyUrl || draft.KeepUuEndpoint || draft.KeepEnabled ||
-            draft.KeepAllowActiveDisconnect || draft.KeepKeepAwakeOnAc || draft.KeepAuthChannelMode;
+            draft.KeepAllowActiveDisconnect || draft.KeepAwakeOnAcKept || draft.KeepAuthChannelMode;
         Settings? existingSettings = null;
         if (needsExisting || guard is not null)
         {
@@ -164,11 +172,24 @@ internal sealed class ElevatedSettings(
             // 否则另一个会话刚保存的设置会被旧快照静默覆盖。
             if (guard is not null && !Equals(existingSettings, guard.Expected))
                 return new(SettingsSaveOutcome.SettingsChanged, SettingsChangedMessage);
-            if (needsExisting && existingSettings is null && (!draft.AllowMissingSettingsForUnprojected ||
+            if (needsExisting && existingSettings is null && (!draft.AllowFirstTimeSetup ||
                 draft.KeepProxyUrl && draft.ProxyUrl.Length != 0 ||
                 draft.KeepUuEndpoint && draft.UuEndpoint.Length != 0))
                 return new(SettingsSaveOutcome.SettingsUnreadable, "保存未完成：现有设置不存在，未写入任何内容。");
         }
+
+        // 页面没有可信投影且受限存储也没有可保留的守护目标时，无法确定要保存哪个网络。
+        if (draft.Profile is null && existingSettings is null)
+            return new(SettingsSaveOutcome.MissingProfile, MissingProfileMessage);
+
+        // #41 审查修复：无法识别的既有通道模式不能被页面默认值静默改写；未编辑时明确拒绝。
+        if (draft.KeepAuthChannelMode && existingSettings is not null &&
+            !AuthChannelModes.IsKnown(existingSettings.AuthChannelMode))
+            return new(SettingsSaveOutcome.InvalidSettings, InvalidSettingsMessage);
+
+        // 用户未改动账号时以受限存储为准：无投影或投影过期都不会把旧草稿账号写回。
+        var username = draft.Username.Trim();
+        if (draft.KeepUsername && existing is not null) username = existing.Username.Trim();
         var keepsPassword = draft.Password.Length == 0;
         if (keepsPassword && (existing is null || existing.Username != username))
             return new(SettingsSaveOutcome.PasswordRequired, PasswordRequiredMessage);
@@ -178,18 +199,20 @@ internal sealed class ElevatedSettings(
 
         // 用户没有在页面明确选择 Wi-Fi 时，守护目标以受限存储中的当前值为准：
         // 另一个窗口刚改成网络 B 后，本窗口的旧草稿不能把它改回网络 A。
-        var guarded = draft.KeepProfile && existingSettings is not null ? existingSettings : null;
+        // profile 为 null 时 KeepProfile 必为 true，且上面的检查已确认 existingSettings 非空。
+        var profile = draft.Profile;
+        var guardTarget = draft.KeepProfile ? existingSettings : null;
         var settings = new Settings
         {
-            InterfaceId = guarded?.InterfaceId ?? profile.InterfaceId,
-            WifiProfile = guarded?.WifiProfile ?? profile.Name,
+            InterfaceId = guardTarget?.InterfaceId ?? profile!.InterfaceId,
+            WifiProfile = guardTarget?.WifiProfile ?? profile!.Name,
             Enabled = draft.KeepEnabled && existingSettings is not null
                 ? existingSettings.Enabled
                 : draft.Enabled,
             AllowActiveDisconnect = draft.KeepAllowActiveDisconnect && existingSettings is not null
                 ? existingSettings.AllowActiveDisconnect
                 : draft.AllowActiveDisconnect,
-            KeepAwakeOnAc = draft.KeepKeepAwakeOnAc && existingSettings is not null
+            KeepAwakeOnAc = draft.KeepAwakeOnAcKept && existingSettings is not null
                 ? existingSettings.KeepAwakeOnAc
                 : draft.KeepAwakeOnAc,
             ProxyUrl = draft.KeepProxyUrl && existingSettings is not null
@@ -198,8 +221,7 @@ internal sealed class ElevatedSettings(
             UuEndpoint = draft.KeepUuEndpoint && existingSettings is not null
                 ? existingSettings.UuEndpoint
                 : draft.UuEndpoint.Trim(),
-            AuthChannelMode = draft.KeepAuthChannelMode && existingSettings is not null &&
-                AuthChannelModes.IsKnown(existingSettings.AuthChannelMode)
+            AuthChannelMode = draft.KeepAuthChannelMode && existingSettings is not null
                 ? existingSettings.AuthChannelMode
                 : draft.AuthChannelMode
         };

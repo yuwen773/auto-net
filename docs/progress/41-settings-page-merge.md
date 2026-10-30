@@ -233,6 +233,60 @@
 - 完整 Release 构建：0 警告 / 0 错误；全量回归 **481/481**。
 - 首轮全量曾出现 4 条通道/进程用例超时，单独复跑与再次全量均通过（22/22、7/7、1/1、481/481），判定为环境瞬时失败，与本轮设置保存改动无关。
 
+## 代码审查修复（第六轮）
+
+基线仍为 `4699c24`，前五轮改动未提交；本轮处理 2026-10-30 两轴审查的硬违规与正确性缺陷。
+
+### 1. [硬违规] 新领域概念入词表
+
+`CONTEXT.md` 新增 **配置投影（ConfigProjection）** 与 **保存锁（SettingsWriteLock）** 两个条目，并把“设置凭据交接”里的“账号与密码永不回读”改为“密码永不回读；账号经配置投影预填”。`ConfigProjection`、`SettingsWriteLock`、`SettingsPage` 的注释引用词表用词。
+
+### 2. [硬违规] 无投影时 KeepProfile 无法保存
+
+`SettingsPage.ValidateLocally` 与 `ElevatedSettings.Save` 原先都要求 `Profile` 非空，与 `KeepProfile`“未选择时保留当前守护配置”的语义矛盾：旧服务或状态不可信时页面永远无法保存。现在 `Profile == null && KeepProfile` 走保留路径，由提权接收端在锁内用受限存储中的守护目标；只有既未选择、也没有保留语义时才返回 `MissingProfile`。QA 场景 `page-keep-profile` 改为提交 `null` 草稿，并新增隔离目录回归。
+
+### 3. [正确性] 账号预填与“保留账号”
+
+- `StatusSnapshot` 新增 `Username`，由 `MonitorWorker` 在读到凭据后写入配置投影；`SettingsModel` 把账号投影到页面，`ApplyProjection` 在用户未改动账号时预填。密码仍不显示、不回读。
+- `SettingsDraft.KeepUsername`（默认 false，页面草稿默认 true）让保存端在用户未改动账号时使用受限存储中的账号；无投影时只改其他字段也无需重输账号。
+- 诊断包契约是“不含账号”：`DiagnosticsPackage.ReadStatus` 在收录 `status.json` 前剔除 `Username`，无法解析的状态文件不再原样收录。新增回归覆盖字段剔除与完整导出。
+
+### 4. [正确性] 过期投影不再改写页面内容
+
+`SettingsPage.Update` 在采用投影前先判新鲜度：`ConfigProjected && ProjectedAt <= lastSavedAt` 的状态直接忽略，等下一次状态写入再采用，避免把只读事实与脱敏提示刷回保存前的值。
+
+### 5. [正确性] 完整显示的地址不再误报“无法读取配置”
+
+`hasKeptFields` 只统计“页面从未显示、由接收端保留”的字段：地址要求投影缺失或本身带隐藏标记，选项要求无投影；完整显示的地址即使带 `Keep*` 标记也不再让 `ConfigProjected` 变 false。
+
+### 6. [正确性] 无法识别的既有通道模式
+
+`ElevatedSettings.SaveLocked` 在用户未编辑通道模式且受限存储中的值不是已知三态时返回受控 `InvalidSettings`，零写入，而不是静默改写成页面默认值。拒绝原因经枚举跨进程传递，界面只显示接收端与页面共用的 `InvalidSettingsMessage`；文案已覆盖“认证通道设置”，不再让用户面对三个都未选中的单选项却只看到“检查账号、代理与 UU 地址”。
+
+### 7. [正确性] 零写入拒绝不再宣称“可能已写入”
+
+新增 `SettingsPageSaveState.SettingsChanged`，`SettingsSaveOutcome.SettingsChanged` 映射到“未写入任何内容”的独立状态与文案，不再落入 `OutcomeUnknown`。
+
+### 8. 便宜的 smell
+
+- `KeepKeepAwakeOnAc` → `KeepAwakeOnAcKept`；`AllowMissingSettingsForUnprojected` → `AllowFirstTimeSetup`（QA 报告字段名保持不变，脚本无需改动）。
+- 账号回写统一走 `SettingsPage.SetUsername`，视图不再直接改草稿。
+- 结果色调改由 `MessageIsSuccess` 决定，不再解析“已保存”前缀。
+- 地址与通道校验收敛到 `Settings.ValidateConnectionOptions`，设置页预检与保存端共用同一规则。
+- 删除已无读取方的 `SettingsContent.ContentKey` / `ContentFingerprint`。
+- `SettingsPage` 的 `InvalidSettingsMessage` / `SaveBusyMessage` / `SettingsChangedMessage` 改为引用 `ElevatedSettings` 的同名常量，去掉两处措辞漂移。
+- 诊断包遇到无法解析的 `status.json` 时记录说明并整份丢弃，而不是静默省略。
+
+### 明确不做
+
+- 七个 `Keep*` 布尔收敛为 `SettingsKeepFlags` 类型：结构性重构，留作跟进项。
+- 真实 UAC 点击/拒绝、真实受限目录保存：仍为 `NOT_RUN`，未声称实机验证。
+
+### 验证
+
+- 完整 Release 构建 **0 警告 / 0 错误**，全量回归 **488/488**；设置页专项 **53/53**。
+- 设置页窗口 QA 未在本轮重跑（需要发布与真实窗口）；其断言依赖的 `page-keep-profile` 场景已改为 `null` 草稿并由隔离目录回归覆盖。
+
 ## 验证结果
 
 - 完整 Release 构建：**0 警告 / 0 错误**；全量回归 **474/474**（第三轮新增 9 条：3 条地址脱敏/诊断包、3 条恢复选项保留与未知状态、3 条跨进程保存）。

@@ -127,7 +127,7 @@ internal static class SettingsView
         form.Children.Add(optionsNote);
         form.Children.Add(new TextBlock
         {
-            Text = SettingsModel.PasswordNote + "\n账号不会从受限存储回读，请重新输入；密码留空只在账号未变时保留旧密码。",
+            Text = SettingsModel.PasswordNote + "\n账号由后台投影预填；未改动账号时保存端保留已保存的账号，密码仍需输入或留空保留。",
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 20,
             FontSize = 12,
@@ -202,7 +202,7 @@ internal static class SettingsView
             enabledBox.IsChecked = SettingsModel.OptionKnown(page.Draft.KeepEnabled, projected) ? page.Draft.Enabled : null;
             disconnectBox.IsChecked = SettingsModel.OptionKnown(page.Draft.KeepAllowActiveDisconnect, projected)
                 ? page.Draft.AllowActiveDisconnect : null;
-            awakeBox.IsChecked = SettingsModel.OptionKnown(page.Draft.KeepKeepAwakeOnAc, projected) ? page.Draft.KeepAwakeOnAc : null;
+            awakeBox.IsChecked = SettingsModel.OptionKnown(page.Draft.KeepAwakeOnAcKept, projected) ? page.Draft.KeepAwakeOnAc : null;
             var channelKnown = SettingsModel.OptionKnown(page.Draft.KeepAuthChannelMode, projected);
             channelAuto.IsChecked = channelKnown && page.Draft.AuthChannelMode == AuthChannelModes.Automatic;
             channelManual.IsChecked = channelKnown && page.Draft.AuthChannelMode is not (AuthChannelModes.Automatic or AuthChannelModes.Off);
@@ -271,11 +271,11 @@ internal static class SettingsView
             SyncOptionsDeferred();
             optionsNote.IsVisible = !page.Content.ConfigProjected && (
                 page.Draft.KeepEnabled || page.Draft.KeepAllowActiveDisconnect ||
-                page.Draft.KeepKeepAwakeOnAc || page.Draft.KeepAuthChannelMode);
+                page.Draft.KeepAwakeOnAcKept || page.Draft.KeepAuthChannelMode);
             result.Text = page.Message;
             result.IsVisible = page.Message.Length > 0;
             var tone = page.MessageIsError ? "ToneProblem"
-                : page.Message.StartsWith("已保存", StringComparison.Ordinal) ? "ToneGood" : "ToneNeutral";
+                : page.MessageIsSuccess ? "ToneGood" : "ToneNeutral";
             if (Application.Current is { } app && app.TryFindResource(tone, out var brush) && brush is IBrush foreground)
                 result.Foreground = foreground;
             save.IsEnabled = !page.Saving;
@@ -302,10 +302,7 @@ internal static class SettingsView
         usernameBox.TextChanged += (_, _) =>
         {
             if (loading) return;
-            var text = usernameBox.Text ?? "";
-            if (text == page.Draft.Username) return;
-            page.Draft.Username = text;
-            page.MarkDirty();
+            page.SetUsername(usernameBox.Text ?? "");
         };
         passwordBox.TextChanged += (_, _) =>
         {

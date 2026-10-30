@@ -2,8 +2,11 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Reflection;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Unicode;
 
 namespace AutoNet.Core;
 
@@ -253,7 +256,7 @@ public static class DiagnosticsPackage
         "settings-snapshot.json" => "设置脱敏快照：不含凭据，不含代理与 UU 检测地址；保留网卡与 Wi-Fi 配置名。",
         "net_state.json" => "导出时的网络状态只读报告：Wi-Fi 链路、本机 IPv4、DNS、外网探测、门户状态、路由样本。",
         "portal_diagnostic.json" => "门户只读诊断：阶段、失败分类、HTTP 状态、参数存在性；未发送凭据。",
-        "status.json" => "后台服务最近一次发布的状态快照原文。",
+        "status.json" => "后台服务最近一次发布的状态快照（已剔除校园网账号）。",
         var logs when logs.StartsWith("logs/", StringComparison.Ordinal) => "结构化日志（JSONL，schemaVersion 2），按天一个文件。",
         _ => entry
     };
@@ -294,7 +297,8 @@ public static class DiagnosticsPackage
 
     private static string? ReadStatus(DiagnosticsPackageOptions options, List<string> notes)
     {
-        try { return Storage.ReadShared(options.StatusPath ?? Storage.StatusPath); }
+        string raw;
+        try { raw = Storage.ReadShared(options.StatusPath ?? Storage.StatusPath); }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
         {
             notes.Add("status.json 不存在；后台服务可能尚未发布状态。");
@@ -305,7 +309,37 @@ public static class DiagnosticsPackage
             notes.Add("status.json 读取失败（" + e.GetType().Name + "）。");
             return null;
         }
+
+        var redacted = RedactStatus(raw);
+        if (redacted is null)
+            notes.Add("status.json 无法解析；为遵守不含账号的契约，未收录。");
+        return redacted;
     }
+
+    /// <summary>
+    /// 诊断包契约是“不含校园网账号”。配置投影为了普通权限设置页预填会把账号写进 status.json，
+    /// 收录前必须剔除；其余字段保持原值，无法解析时保守丢弃整个状态文件而不是原样收录。
+    /// </summary>
+    internal static string? RedactStatus(string statusJson)
+    {
+        try
+        {
+            if (JsonNode.Parse(statusJson) is not JsonObject root) return null;
+            var accountKeys = root.Select(pair => pair.Key)
+                .Where(key => key.Equals(nameof(StatusSnapshot.Username), StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            foreach (var key in accountKeys) root.Remove(key);
+            // 保持中文可读（与快照的写入约定一致），只做字段剔除，不改动其余内容。
+            return root.ToJsonString(RedactedJson);
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static readonly JsonSerializerOptions RedactedJson = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.Create(UnicodeRanges.All)
+    };
 
     private static IReadOnlyList<(string EntryName, string Path)> ReadLogs(DiagnosticsPackageOptions options, DateTimeOffset exportedAt, List<string> notes)
     {

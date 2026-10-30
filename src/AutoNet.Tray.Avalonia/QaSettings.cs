@@ -251,7 +251,7 @@ internal static class QaSettings
             submittedKeepUuEndpoint = draft.KeepUuEndpoint;
             submittedKeepEnabled = draft.KeepEnabled;
             submittedKeepAllowActiveDisconnect = draft.KeepAllowActiveDisconnect;
-            submittedKeepKeepAwakeOnAc = draft.KeepKeepAwakeOnAc;
+            submittedKeepKeepAwakeOnAc = draft.KeepAwakeOnAcKept;
             submittedKeepAuthChannelMode = draft.KeepAuthChannelMode;
             submittedKeepProfile = draft.KeepProfile;
             existingSettingsFound = File.Exists(Path.Combine(directory, "settings.json"));
@@ -284,7 +284,8 @@ internal static class QaSettings
         string SeedAuthChannelMode = AuthChannelModes.ManualOnly,
         bool KeepOptions = false,
         WifiProfile? SeedProfile = null,
-        bool KeepProfile = false);
+        bool KeepProfile = false,
+        bool NullProfile = false);
 
     private static IEnumerable<SaveScenario> SaveScenarios()
     {
@@ -323,7 +324,7 @@ internal static class QaSettings
         // 未在页面选择 Wi-Fi（KeepProfile）：接收端保留受限存储中的守护目标，不被页面旧选择覆盖。
         yield return new("page-keep-profile", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1", "", "", "",
             false, false, false, "未选择 Wi-Fi：保留受限存储中的守护目标",
-            SeedProfile: OtherProfile, KeepProfile: true);
+            SeedProfile: OtherProfile, KeepProfile: true, NullProfile: true);
         // 保存忙态：保存期间禁用编辑，保存按钮可见文字与自动化名称同步。
         yield return new("page-busy-name", null, "", null, null, "TEST-USER-1", "TEST-PASSWORD-1", "", "",
             false, false, true, "保存期间禁用编辑且无障碍名称同步忙态");
@@ -357,7 +358,8 @@ internal static class QaSettings
         }
 
         page.ApplyForQa(new SettingsDraft(
-            FixtureProfile, scenario.Username, scenario.Password, scenario.ProxyUrl, scenario.UuEndpoint,
+            scenario.NullProfile ? null : FixtureProfile,
+            scenario.Username, scenario.Password, scenario.ProxyUrl, scenario.UuEndpoint,
             Enabled: true, AllowActiveDisconnect: true, KeepAwakeOnAc: true)
         {
             KeepProfile = scenario.KeepProfile,
@@ -365,13 +367,13 @@ internal static class QaSettings
             KeepUuEndpoint = scenario.KeepUuEndpoint,
             KeepEnabled = scenario.KeepOptions,
             KeepAllowActiveDisconnect = scenario.KeepOptions,
-            KeepKeepAwakeOnAc = scenario.KeepOptions,
+            KeepAwakeOnAcKept = scenario.KeepOptions,
             KeepAuthChannelMode = scenario.KeepOptions
         });
         await Task.Delay(160);
         var optionsUnknown = !page.Content.ConfigProjected &&
             (page.Draft.KeepEnabled || page.Draft.KeepAllowActiveDisconnect ||
-             page.Draft.KeepKeepAwakeOnAc || page.Draft.KeepAuthChannelMode);
+             page.Draft.KeepAwakeOnAcKept || page.Draft.KeepAuthChannelMode);
         var saveTask = page.SaveAsync();
         var nameDuringSave = "";
         if (scenario.DelayHandoff)
@@ -706,7 +708,7 @@ internal static class QaSettings
         // OptionsKnown=false 时脚本要求截图与说明同时存在。
         var optionsKnown = settings.ConfigProjected ||
             !(page.Draft.KeepEnabled || page.Draft.KeepAllowActiveDisconnect ||
-              page.Draft.KeepKeepAwakeOnAc || page.Draft.KeepAuthChannelMode);
+              page.Draft.KeepAwakeOnAcKept || page.Draft.KeepAuthChannelMode);
         return new QaSettingsStep(
             state,
             settings.Trusted,

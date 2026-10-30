@@ -1,7 +1,7 @@
 namespace AutoNet.Core;
 
 /// <summary>
-/// 设置保存的跨进程互斥（#41 审查修复）。settings.json 与 credentials.dpapi 的保存都是
+/// 保存锁（SettingsWriteLock，#41 审查修复）：设置保存的跨进程互斥。settings.json 与 credentials.dpapi 的保存都是
 /// “读取既有值 → 写凭据 → 写设置”；多个 Windows 会话、兼容提权入口或新的设置页同时保存时，
 /// 较早读取的旧值会覆盖另一方刚保存的新地址或新密码。这里用受限目录内的锁文件把整段读改写串行化：
 /// - 锁文件以 <see cref="FileShare.None"/> 打开，Windows 共享模式在整机范围内生效，跨进程、跨会话都互斥；

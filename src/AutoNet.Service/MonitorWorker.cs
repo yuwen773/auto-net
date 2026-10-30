@@ -72,8 +72,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private DateTimeOffset authChannelNotBefore;
     private string authChannelMode = AuthChannelModes.ManualOnly;
     // 非秘密配置投影：只把普通界面可安全展示的设置字段写进 status.json；
-    // 账号与密码永不进入快照。null 表示本轮没有读到设置。
+    // 密码永不进入快照，账号仅作为设置页预填的非秘密字段。null 表示本轮没有读到设置。
     private Settings? projectedSettings;
+    private string? projectedUsername;
     // One one-shot notification per cycle: a more specific event raised earlier in the
     // same cycle already tells the user authentication is paused, so the generic pause
     // announcement in Publish must not supersede it.
@@ -108,6 +109,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         // 本轮尚未读到并校验设置前，不得沿用上一轮的配置投影；读取失败时设置页必须降级，
         // 而不是把旧配置标成当前可信值。读取成功后即使后续检测失败，投影仍然有效。
         projectedSettings = null;
+        projectedUsername = null;
         authChannelMode = AuthChannelModes.ManualOnly;
         notifiedThisCycle = false;
         journal.BeginCycle();
@@ -208,6 +210,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         if (block?.State == AuthenticationState.SubmissionPending) submissionPendingSince ??= PolicyNow;
         else { submissionPendingSince = null; submissionRechecks = 0; }
         var credentials = ReadStep("CredentialsRead", environment.LoadCredentials);
+        projectedUsername = credentials?.Username;
         UpdatePower(settings.Enabled && settings.KeepAwakeOnAc);
         var link = ReadStep("WifiRead", () => environment.ReadWifi(settings));
         if (link.OtherProfile)
@@ -1051,11 +1054,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     }
 
     // 非秘密配置投影：主窗口设置页在普通权限下只能读 status.json，不能读 private 目录。
-    // 只投影界面需要预填、且不属于凭据的字段；账号与密码不在其中。
+    // 只投影界面需要预填、且不属于密码的字段；密码永不进入投影，账号仅用于预填。
     private StatusSnapshot ProjectSettings(StatusSnapshot status) => projectedSettings is { } settings
         ? status with
         {
             SettingsProjected = true,
+            Username = projectedUsername ?? "",
             InterfaceId = settings.InterfaceId,
             WifiProfile = settings.WifiProfile,
             ProxyUrlDisplay = ConfigProjection.Display(settings.ProxyUrl),

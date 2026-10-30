@@ -137,7 +137,7 @@ internal static class SettingsSaveRegression
         KeepUuEndpoint = true,
         KeepEnabled = true,
         KeepAllowActiveDisconnect = true,
-        KeepKeepAwakeOnAc = true,
+        KeepAwakeOnAcKept = true,
         KeepAuthChannelMode = true
     };
 

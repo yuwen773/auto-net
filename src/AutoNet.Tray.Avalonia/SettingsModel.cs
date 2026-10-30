@@ -6,7 +6,7 @@ namespace AutoNet.Tray.Avalonia;
 /// 设置页内容投影（#8 / #41）：普通权限界面对已保存配置的可编辑视图。
 /// 受限配置（settings.json、credentials.dpapi）位于仅管理员可读的 private 目录，
 /// 普通界面绝不读取；非秘密字段由后台写进 status.json 的配置投影提供，
-/// 账号与密码不在投影里，密码也不显示、不回读。保存经独立提权交接完成。
+/// 账号只用于预填，密码不显示、不回读。保存经独立提权交接完成。
 /// </summary>
 internal sealed record SettingsContent : PageContent
 {
@@ -27,6 +27,8 @@ internal sealed record SettingsContent : PageContent
     /// <summary>投影对应的状态更新时间；用于避免保存后旧快照回填草稿。</summary>
     public DateTimeOffset ProjectedAt { get; init; }
 
+    /// <summary>已保存的校园网账号，仅用于预填；密码永不进入投影。</summary>
+    public string Username { get; init; } = "";
     public string InterfaceId { get; init; } = "";
     public string WifiProfile { get; init; } = "";
     /// <summary>代理地址的安全展示值（完整地址或仅来源）；完整值永不进入状态。</summary>
@@ -43,15 +45,12 @@ internal sealed record SettingsContent : PageContent
 
     /// <summary>配置字段的稳定拼接；变化时才把投影应用到草稿。</summary>
     public string ProjectionKey { get; init; } = "";
-
-    /// <summary>渲染指纹：只读事实与配置投影的稳定拼接；不包含可编辑草稿。</summary>
-    public string ContentKey { get; init; } = "";
 }
 
 /// <summary>
 /// 设置页投影规则（#8 / #41）。只依赖状态读取，不读受限配置、无 I/O、无副作用。
 /// 只有后台明确提供了配置投影（<see cref="StatusSnapshot.SettingsProjected"/>）且状态可信时，
-/// 才把非秘密字段提供给页面预填；账号与密码永远不在投影中。
+/// 才把非秘密字段提供给页面预填；密码永远不在投影中，账号仅用于预填。
 /// </summary>
 internal static class SettingsModel
 {
@@ -83,7 +82,7 @@ internal static class SettingsModel
 
     /// <summary>没有配置投影时的受控说明：不把空白当成已保存值。</summary>
     public const string ProjectionUnavailableNote =
-        "暂时无法从后台读取已保存的配置。表单内容可能不是当前已保存值；未改动的地址会保留原值，首次设置没有原值时保持为空。可使用清空按钮明确删除地址。";
+        "暂时无法从后台读取已保存的配置。表单内容可能不是当前已保存值；未改动的账号与地址会保留原值，首次设置没有原值时保持为空。可使用清空按钮明确删除地址。";
 
     /// <summary>恢复选项在无投影且未编辑时对页面是未知值；说明与保存语义逐条对应。</summary>
     public const string OptionsUnknownNote =
@@ -118,6 +117,7 @@ internal static class SettingsModel
             GuardedNetwork = trusted ? snapshot!.Wifi : UnconfirmedNetwork,
             ConfigProjected = projected,
             ProjectedAt = projected ? snapshot!.UpdatedAt : default,
+            Username = projected ? snapshot!.Username : "",
             InterfaceId = projected ? snapshot!.InterfaceId : "",
             WifiProfile = projected ? snapshot!.WifiProfile : "",
             ProxyUrlDisplay = projected ? snapshot!.ProxyUrlDisplay : "",
@@ -131,19 +131,12 @@ internal static class SettingsModel
                 ? snapshot.AuthChannelMode
                 : AuthChannelModes.ManualOnly
         };
-        return content with
-        {
-            ProjectionKey = projected ? ConfigFingerprint(content) : "",
-            ContentKey = ContentFingerprint(content)
-        };
+        return content with { ProjectionKey = projected ? ConfigFingerprint(content) : "" };
     }
 
-    /// <summary>配置字段指纹：不含账号、密码或任何凭据。</summary>
+    /// <summary>配置字段指纹：不含密码或任何凭据内容；账号仅作为预填值参与变化检测。</summary>
     public static string ConfigFingerprint(SettingsContent content) => string.Join("\u001f",
-        content.InterfaceId, content.WifiProfile, content.ProxyUrlDisplay, content.ProxyUrlRedacted,
+        content.Username, content.InterfaceId, content.WifiProfile, content.ProxyUrlDisplay, content.ProxyUrlRedacted,
         content.UuEndpointDisplay, content.UuEndpointRedacted,
         content.Enabled, content.AllowActiveDisconnect, content.KeepAwakeOnAc, content.AuthChannelMode);
-
-    internal static string ContentFingerprint(SettingsContent content) => string.Join("\u001f",
-        content.Trusted, content.RecoveryState, content.GuardedNetwork, content.ProjectionKey);
 }

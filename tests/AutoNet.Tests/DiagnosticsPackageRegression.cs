@@ -36,6 +36,16 @@ internal static class DiagnosticsPackageRegression
             Require(DiagnosticsPackage.Snapshot(null) is null, "空设置应无快照");
             return Task.CompletedTask;
         }),
+        ("诊断包：状态快照剔除账号但保留其余字段", () =>
+        {
+            var redacted = DiagnosticsPackage.RedactStatus(
+                "{\"State\":\"校园网在线\",\"Username\":\"TEST-USER-1\",\"UpdatedAt\":\"2026-10-15T04:44:00Z\"}");
+            Require(redacted is not null, "有效状态不应被丢弃");
+            Require(!redacted!.Contains("TEST-USER-1", StringComparison.Ordinal), "状态快照泄露校园网账号");
+            Require(redacted.Contains("校园网在线", StringComparison.Ordinal), "剔除账号时丢失其他字段");
+            Require(DiagnosticsPackage.RedactStatus("not-json") is null, "无法解析的状态不应原样收录");
+            return Task.CompletedTask;
+        }),
         ("诊断包：日志按近3天窗口与文件名格式筛选", () =>
         {
             WithTemp(directory =>
@@ -84,7 +94,7 @@ internal static class DiagnosticsPackageRegression
                 File.WriteAllText(Path.Combine(logs, "autonet-2026-10-14.jsonl"), "{\"schemaVersion\":2,\"action\":\"yesterday\"}\n");
                 File.WriteAllText(Path.Combine(logs, "autonet-2026-10-01.jsonl"), "{\"schemaVersion\":2,\"action\":\"old\"}\n");
                 var statusPath = Path.Combine(directory, "status.json");
-                File.WriteAllText(statusPath, "{\"State\":\"校园网在线\",\"UpdatedAt\":\"2026-10-15T04:44:00Z\"}");
+                File.WriteAllText(statusPath, "{\"State\":\"校园网在线\",\"Username\":\"TEST-USER-1\",\"UpdatedAt\":\"2026-10-15T04:44:00Z\"}");
                 var settings = new Settings
                 {
                     InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST",
@@ -134,6 +144,7 @@ internal static class DiagnosticsPackageRegression
                 Require(portalJson.Stage == PortalStage.Status && portalJson.Failure == PortalFailure.None, "门户诊断应保留阶段与失败分类");
                 Require(portalJson.Evidence?.StatusAddress == "Valid", "门户诊断应保留参数存在性证据");
                 Require(Text("status.json").Contains("校园网在线", StringComparison.Ordinal), "status.json 应为快照原文");
+                Require(!Text("status.json").Contains("TEST-USER-1", StringComparison.Ordinal), "status.json 泄露校园网账号");
                 Require(Text("logs/autonet-2026-10-15.jsonl").Contains("today", StringComparison.Ordinal), "日志应原样包含");
                 var snapshot = JsonSerializer.Deserialize<SettingsSnapshot>(Text("settings-snapshot.json"), DiagnosticsPackage.PackageJson)!;
                 Require(snapshot.WifiProfile == "CSUST", "设置快照应保留配置名");

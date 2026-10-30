@@ -205,6 +205,11 @@ public sealed record StatusSnapshot
     /// 当成已保存的配置，也不得据此覆盖受限存储里的既有选项。
     /// </summary>
     public bool SettingsProjected { get; init; }
+    /// <summary>
+    /// 已保存的校园网账号，仅用于普通权限设置页预填（配置投影的一部分）；密码永不进入快照。
+    /// 诊断包收录 status.json 前会剔除该字段，保持“不含账号”的既有契约。
+    /// </summary>
+    public string Username { get; init; } = "";
     public string InterfaceId { get; init; } = "";
     public string WifiProfile { get; init; } = "";
     /// <summary>
