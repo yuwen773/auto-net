@@ -7,8 +7,9 @@ internal abstract record PageContent(ShellPage Page, string Title);
 internal sealed record PageScaffold(ShellPage Page, string Title, string Description, string Note) : PageContent(Page, Title);
 
 /// <summary>
-/// 页面内容加载接缝：尚未迁移的页面（#5–#8）返回静态脚手架；概览页内容由
-/// <see cref="OverviewModel"/> 按状态投影（不经此接缝）。取消、代次与销毁保护由
+/// 页面内容加载接缝：尚未迁移的页面返回静态脚手架；概览页内容由
+/// <see cref="OverviewModel"/> 按状态投影，认证页由 <see cref="AuthPageModel"/> 与
+/// <see cref="AuthPageCoordinator"/> 投影（二者均不经此接缝）。取消、代次与销毁保护由
 /// <see cref="PageLoadCoordinator"/> 统一提供。
 /// </summary>
 internal static class ShellContent
@@ -17,6 +18,15 @@ internal static class ShellContent
     {
         cancellationToken.ThrowIfCancellationRequested();
         var info = ShellPages.Info(page);
+        if (page == ShellPage.Authentication)
+        {
+            // 认证页由浏览器宿主承载；此处只保留受控说明，不创建浏览器、不读取任何配置。
+            return Task.FromResult<PageContent>(new PageScaffold(
+                info.Page,
+                info.Name,
+                info.Description,
+                "认证页由浏览器宿主承载；打开本页不会填表或提交凭据，后台认证继续独立运行。"));
+        }
         return Task.FromResult<PageContent>(new PageScaffold(
             info.Page,
             info.Name,

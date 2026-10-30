@@ -125,10 +125,12 @@ internal static class AvaloniaPrototypeRegression
         {
             var previousDirectory = Environment.GetEnvironmentVariable("AUTONET_QA_DIR");
             var previousMode = Environment.GetEnvironmentVariable("AUTONET_QA_MODE");
+            var previousSuffix = Environment.GetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX");
             try
             {
                 Environment.SetEnvironmentVariable("AUTONET_QA_DIR", null);
                 Environment.SetEnvironmentVariable("AUTONET_QA_MODE", null);
+                Environment.SetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX", null);
                 var inactive = QaEnvironment.FromProcess();
                 Require(!inactive.Active && inactive.Mode == QaMode.None, "未设置 QA 目录时不得激活 QA 场景");
                 Require(AutoNet.Tray.Avalonia.Program.MutexName == @"Local\AutoNet.Tray",
@@ -141,6 +143,16 @@ internal static class AvaloniaPrototypeRegression
                 Require(active.Active && active.Mode == QaMode.Lifecycle);
                 Require(AutoNet.Tray.Avalonia.Program.MutexName == @"Local\AutoNet.Tray.Avalonia",
                     "显式 QA 场景必须与已安装托盘隔离并保持报告契约");
+
+                // 可选后缀：并行 QA 工作树或与旧版候选托盘并存时隔离；非法后缀不生效。
+                Environment.SetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX", "abc-123-XYZ");
+                Require(AutoNet.Tray.Avalonia.Program.MutexName == @"Local\AutoNet.Tray.Avalonia.abc-123-XYZ",
+                    "QA 互斥后缀未生效");
+                Require(QaEnvironment.FromProcess().MutexSuffix == "abc-123-XYZ", "QA 互斥后缀未解析");
+                Environment.SetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX", "bad\\name");
+                Require(AutoNet.Tray.Avalonia.Program.MutexName == @"Local\AutoNet.Tray.Avalonia",
+                    "非法 QA 互斥后缀必须回落");
+                Environment.SetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX", null);
                 Require(active.Directory == Path.GetFullPath(directory));
                 Require(active.LifecycleReportPath.StartsWith(active.Directory, StringComparison.OrdinalIgnoreCase));
                 Require(active.ThemeLightPath != active.ThemeDarkPath, "明暗主题证据不得写入同一文件");
@@ -155,6 +167,7 @@ internal static class AvaloniaPrototypeRegression
             {
                 Environment.SetEnvironmentVariable("AUTONET_QA_DIR", previousDirectory);
                 Environment.SetEnvironmentVariable("AUTONET_QA_MODE", previousMode);
+                Environment.SetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX", previousSuffix);
             }
         })),
         ("原型验证：QA 证据报告为合法 JSON 且包含阶段字段", () => Sync(() =>

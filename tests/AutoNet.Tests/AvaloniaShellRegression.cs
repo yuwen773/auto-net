@@ -12,12 +12,12 @@ internal static class AvaloniaShellRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
-        ("壳回归：左侧导航固定四页且顺序与术语一致", () => Sync(() =>
+        ("壳回归：左侧导航固定五页且顺序与术语一致", () => Sync(() =>
         {
             Require(ShellPages.All.Select(info => info.Page).SequenceEqual(
-                [ShellPage.Overview, ShellPage.Diagnostics, ShellPage.Logs, ShellPage.Settings]), "导航顺序变化");
+                [ShellPage.Overview, ShellPage.Authentication, ShellPage.Diagnostics, ShellPage.Logs, ShellPage.Settings]), "导航顺序变化");
             Require(ShellPages.All.Select(info => info.Name).SequenceEqual(
-                ["概览", "网络诊断", "日志", "设置"]), "导航名称变化");
+                ["概览", "上网认证", "网络诊断", "日志", "设置"]), "导航名称变化");
             Require(ShellPages.All.All(info => info.Description.Length > 0), "页面说明缺失");
             Require(Enum.GetValues<ShellPage>().Length == ShellPages.All.Count, "存在未纳入导航的页面");
             Require(ShellPages.Default == ShellPage.Overview, "默认页必须为概览");

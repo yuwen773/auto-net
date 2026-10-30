@@ -30,7 +30,9 @@ internal enum QaMode
     /// <summary>诊断包导出 QA：普通界面选路径、提权交接与结果显示的逐场景证据（scripts/qa-avalonia-export.ps1 使用）。</summary>
     ExportDiagnostics,
     /// <summary>可访问性与缩放 QA：键盘导航/焦点/触发、可访问名称动态更新与受控缩放的逐项证据（scripts/qa-avalonia-accessibility.ps1 使用，迁移工单 #14）。</summary>
-    Accessibility
+    Accessibility,
+    /// <summary>认证页 QA：七种状态、宿主附着一次、刷新不丢输入与运行时缺失提示的逐场景证据（scripts/qa-avalonia-auth.ps1 使用，工单 #37）。</summary>
+    AuthPage
 }
 
 /// <summary>
@@ -62,12 +64,28 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "portal-open" => QaMode.PortalOpen,
             "export-diagnostics" => QaMode.ExportDiagnostics,
             "accessibility" => QaMode.Accessibility,
+            "auth-page" => QaMode.AuthPage,
             _ => QaMode.None
         };
-        return new QaEnvironment(mode, Path.GetFullPath(directory));
+        return new QaEnvironment(mode, Path.GetFullPath(directory)) { MutexSuffix = ParseMutexSuffix() };
     }
 
+    /// <summary>
+    /// 可选 QA 单实例后缀（AUTONET_QA_MUTEX_SUFFIX）。同一台机器上并行运行多个 QA 场景
+    /// （例如多个工作树）或与旧版候选托盘并存时，用它隔离互斥；未设置时保持既有 QA 互斥名。
+    /// 只接受 ASCII 字母、数字与连字符，最长 32 字符；非法值回落到空后缀，
+    /// 避免拼接出意外内核对象名。#41 在同一变量上采用相同字符集（未限长），集成时应合并为单一解析器。
+    /// </summary>
+    public string MutexSuffix { get; init; } = "";
+
     public bool Active => Directory.Length != 0;
+
+    private static string ParseMutexSuffix()
+    {
+        var suffix = Environment.GetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX");
+        if (string.IsNullOrEmpty(suffix) || suffix.Length > 32) return "";
+        return suffix.All(c => char.IsAsciiLetterOrDigit(c) || c == '-') ? suffix : "";
+    }
 
     public string LifecycleReportPath => Path.Combine(Directory, "lifecycle.json");
     public string ElevationRecordPath => Path.Combine(Directory, "elevation.json");
@@ -91,6 +109,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string ExportElevatedReportPath => Path.Combine(Directory, "export-elevated.json");
     public string ExportResultPath => Path.Combine(Directory, "export-result.json");
     public string AccessibilityReportPath => Path.Combine(Directory, "accessibility.json");
+    public string AuthPageReportPath => Path.Combine(Directory, "auth-page.json");
     public string ParseErrorReportPath => Path.Combine(Directory, "parse-error.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
@@ -110,6 +129,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string PortalOpenShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string AccessibilityShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string AuthPageShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>

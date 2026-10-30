@@ -2,7 +2,7 @@ namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 壳控制器：把导航选择、页面内容代次守卫与状态管道接到一起；不依赖 UI 类型，便于受控测试。
-/// 概览、诊断与设置页内容按状态投影同步重建（#4、#6、#8）；日志页经 <see cref="PageLoadCoordinator"/> 异步加载。
+/// 概览、认证、诊断与设置页内容按状态投影同步重建（#4、#37、#6、#8）；日志页经 <see cref="PageLoadCoordinator"/> 异步加载。
 /// 事件在触发线程上回调（状态事件来自读取线程，UI 侧负责调度到界面线程）。
 /// </summary>
 internal sealed class ShellController : IDisposable
@@ -11,12 +11,16 @@ internal sealed class ShellController : IDisposable
     private readonly PageLoadCoordinator coordinator = new();
     private readonly Func<ShellPage, CancellationToken, Task<PageContent>> load;
     private readonly PortalPageOpener? portalOpener;
+    private readonly AuthPageCoordinator? authPage;
 
-    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageContent>>? load = null, PortalPageOpener? portalOpener = null)
+    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageContent>>? load = null,
+        PortalPageOpener? portalOpener = null, AuthPageCoordinator? authPage = null)
     {
         this.pipe = pipe;
         this.load = load ?? ShellContent.LoadAsync;
         this.portalOpener = portalOpener;
+        this.authPage = authPage;
+        if (authPage is { } auth) auth.Updated += OnAuthPageUpdated;
         pipe.Updated += OnStatusUpdated;
     }
 
@@ -43,12 +47,25 @@ internal sealed class ShellController : IDisposable
     /// <summary>选中页面：立即更新选择；内容按代次守卫异步应用（旧读取不覆写当前页）。</summary>
     public Task SelectAsync(ShellPage page)
     {
+        var previous = SelectedPage;
+        if (previous == ShellPage.Authentication && page != ShellPage.Authentication)
+            authPage?.SetPageVisible(false);
         SelectedPage = page;
         SelectionChanged?.Invoke(page);
         if (page == ShellPage.Overview)
         {
             // 概览内容由当前状态投影而来：纯函数、无 I/O，同步应用，无需代次守卫。
             ApplyOverview(pipe.Current);
+            return Task.CompletedTask;
+        }
+
+        if (page == ShellPage.Authentication)
+        {
+            // 认证页（#37）：状态投影与浏览器宿主分离；普通刷新只重投影文案，
+            // 首次打开才附着固定门户地址，打开/切页本身不构成提交意图。
+            ApplyAuthentication(pipe.Current);
+            authPage?.SetPageVisible(true);
+            if (authPage is { } auth) _ = auth.EnsureAttachedAsync();
             return Task.CompletedTask;
         }
 
@@ -93,6 +110,28 @@ internal sealed class ShellController : IDisposable
         ContentChanged?.Invoke(Content);
     }
 
+    private void ApplyAuthentication(StatusReading? reading)
+    {
+        if (authPage is { } auth)
+        {
+            // 投影不发导航；宿主附着完成或受控失败时经 Updated 事件再应用一次。
+            auth.Update(reading);
+            return;
+        }
+        ApplyAuthContent(AuthPageModel.From(reading, AuthPageHostSnapshot.NotAttached));
+    }
+
+    private void ApplyAuthContent(AuthPageContent content)
+    {
+        Content = content;
+        ContentChanged?.Invoke(content);
+    }
+
+    private void OnAuthPageUpdated(AuthPageContent content)
+    {
+        if (SelectedPage == ShellPage.Authentication) ApplyAuthContent(content);
+    }
+
     private void ApplyContent(ShellPage page, PageContent content)
     {
         // 双保险：守卫之外的当前选择核对，防止任何路径把旧页面内容写进新页面。
@@ -125,14 +164,26 @@ internal sealed class ShellController : IDisposable
     private void OnStatusUpdated(StatusReading reading)
     {
         StatusChanged?.Invoke(reading);
-        // 概览、诊断与设置页跟随状态更新重建（三者都是纯投影）；其他页面不被状态更新改写。
+        // 概览、认证、诊断与设置页跟随状态更新重建（四者都是纯投影）；其他页面不被状态更新改写。
         if (SelectedPage == ShellPage.Overview) ApplyOverview(reading);
+        else if (SelectedPage == ShellPage.Authentication) ApplyAuthentication(reading);
         else if (SelectedPage == ShellPage.Diagnostics) ApplyDiagnostics(reading);
         else if (SelectedPage == ShellPage.Settings) ApplySettings(reading);
     }
 
+    /// <summary>
+    /// 窗口最小化/隐藏或恢复（#37）：只调整浏览器宿主可见性，不导航、不提交、不重试附着；
+    /// 后台服务与状态读取完全不受影响。
+    /// </summary>
+    public void SetWindowVisible(bool visible) => authPage?.SetWindowVisible(visible);
+
     public void Dispose()
     {
+        if (authPage is { } auth)
+        {
+            auth.Updated -= OnAuthPageUpdated;
+            auth.Dispose();
+        }
         pipe.Updated -= OnStatusUpdated;
         coordinator.Dispose();
         pipe.Dispose();
