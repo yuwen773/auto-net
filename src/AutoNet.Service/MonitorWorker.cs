@@ -44,6 +44,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private SubmissionBudget? activeSubmission;
     private SubmissionRetryDecision submissionDecision;
     private bool submissionExhaustedPublished;
+    private bool submissionNearLimitPublished;
+    private bool submissionResetPending;
+    // #35: the previous cycle's controlled budget level, so a reset is announced as a
+    // transition rather than replayed on every first observation (including restarts).
+    private string lastSubmissionBudgetCode = "";
     private bool retryingSubmission;
     private DateTimeOffset pendingRetryAfter;
     private DateTimeOffset nextSubmissionRecheck;
@@ -205,17 +210,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             CancelAuxiliary();
             journal.Suspend("OtherWifiSelected");
             var budgetCode = SubmissionBudgetCode();
-            return Publish(new StatusSnapshot
+            return Publish(WithSubmissionBudget(new StatusSnapshot
             {
                 Enabled = settings.Enabled, AuthChannelMode = settings.AuthChannelMode,
-                State = "已切换其他 Wi-Fi", Wifi = "其他配置", Detail = "保留你当前选择的网络，等待校园 Wi-Fi。",
-                SubmissionBudgetCode = budgetCode,
-                SubmissionAttempts = submissionBudget?.Attempts ?? (budgetCode == SubmissionBudgetCodes.Unused ? 0 : null),
-                SubmissionAttemptMax = SubmissionRetryPolicy.AttemptCap,
-                SubmissionBudgetExhausted = submissionBudget is null
-                    ? budgetCode == SubmissionBudgetCodes.Unused ? false : null
-                    : submissionBudget.Attempts >= SubmissionRetryPolicy.AttemptCap
-            });
+                State = "已切换其他 Wi-Fi", Wifi = "其他配置", WifiLinkCode = WifiLinkCodes.OtherProfile,
+                Detail = "保留你当前选择的网络，等待校园 Wi-Fi。"
+            }, budgetCode));
         }
         var direct = false;
         var portalState = PortalState.Unknown;
@@ -460,9 +460,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         // #35: project the budget again after the action so a reservation, result transition
         // or reset in this cycle is visible in the same snapshot. The pre-action decision
         // above still governs the action itself and the channel-fallback condition.
-        var displaySubmissionDecision = submissionRetry.Evaluate(
-            submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart), direct);
-        var submissionExhausted = submissionBudget is { Attempts: >= SubmissionRetryPolicy.AttemptCap };
+        // Preview is deliberately read-only: the display path must not advance the retry
+        // anchor that the next cycle's real decision uses.
+        var displaySubmissionDecision = submissionRetry.Preview(
+            submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart), direct, out var displayNextPossibleAt);
+        var submissionExhausted = submissionBudget?.Exhausted == true;
+        var submissionBudgetCode = SubmissionBudgetCode();
         // Only announce exhaustion when the quota is the operative stop reason: a terminal
         // authentication failure (bad password, binding rejected, interaction required) has
         // its own pause wording and must not be superseded by the generic budget message.
@@ -494,6 +497,33 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 diagnostic with { Stage = "Submission", Outcome = "Exhausted", AuthenticationAttempts = authentication?.Attempts ?? 0 });
         }
         if (!exhaustedStopsSubmission) submissionExhaustedPublished = false;
+        // #35 parent spec: near-limit and reset are also user-visible quota events. Only
+        // announce when the quota is the operative concern — an explicit portal refusal
+        // keeps its own pause wording. A suppressed event stays unpublished so a later
+        // cycle can still deliver it, and neither may steal a slot already used this cycle.
+        var nearLimitStops = submissionBudgetCode == SubmissionBudgetCodes.NearLimit && blockFailure == PortalFailure.None;
+        if (nearLimitStops && !submissionNearLimitPublished && !layoutWillPublish && !notifiedThisCycle)
+        {
+            submissionNearLimitPublished = true;
+            Notify(NotificationCodes.SubmissionBudgetNearLimit);
+            journal.Write("SubmissionBudgetNearLimit", "提交额度即将用尽：本次故障只剩最后一次自动提交机会；再失败后停止自动提交。",
+                diagnostic with { Stage = "Submission", Outcome = "NearLimit", AuthenticationAttempts = authentication?.Attempts ?? 0 });
+        }
+        if (!nearLimitStops) submissionNearLimitPublished = false;
+        // A reset is an event only when the controlled level actually changes to Reset from
+        // a previously observed level. The first observation after a restart is not replayed.
+        if (submissionBudgetCode == SubmissionBudgetCodes.Reset &&
+            lastSubmissionBudgetCode is { Length: > 0 } and not SubmissionBudgetCodes.Reset)
+            submissionResetPending = true;
+        if (submissionResetPending && !policy.CredentialsBlocked && !layoutWillPublish && !notifiedThisCycle)
+        {
+            submissionResetPending = false;
+            Notify(NotificationCodes.SubmissionBudgetReset);
+            journal.Write("SubmissionBudgetReset", "提交额度已重置：门户明确确认成功或已人工重新开始认证；重启和保存设置不会重置。",
+                diagnostic with { Stage = "Submission", Outcome = "Reset", AuthenticationAttempts = authentication?.Attempts ?? 0 });
+        }
+        if (submissionBudgetCode != SubmissionBudgetCodes.Reset) submissionResetPending = false;
+        lastSubmissionBudgetCode = submissionBudgetCode;
         if (layoutWillPublish)
         {
             portalLayoutPublished = true;
@@ -583,11 +613,16 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             NetworkCondition.InterfaceUnavailable => "网卡未就绪",
             _ => "正在恢复"
         };
-        var submissionBudgetCode = SubmissionBudgetCode();
         var status = new StatusSnapshot
         {
             Enabled = settings.Enabled, AuthChannelMode = settings.AuthChannelMode, State = state, Detail = detail,
             Wifi = link.State switch { WifiState.Ready => "已连接", WifiState.WaitingForAddress => "已关联，等待 IPv4", WifiState.Associating => "正在连接", WifiState.Unavailable => "网卡未就绪", _ => "未连接" },
+            WifiLinkCode = link.State switch
+            {
+                WifiState.Ready => WifiLinkCodes.Ready, WifiState.WaitingForAddress => WifiLinkCodes.WaitingForAddress,
+                WifiState.Associating => WifiLinkCodes.Associating, WifiState.Unavailable => WifiLinkCodes.Unavailable,
+                WifiState.OtherProfile => WifiLinkCodes.OtherProfile, _ => WifiLinkCodes.Disconnected
+            },
             Direct = direct ? "外网可达" : "外网不可达或未知",
             Portal = direct ? "未查询（外网检查已通过）" : portalState switch { PortalState.LoggedIn => "已认证", PortalState.NeedsLogin => "需认证", _ => "未知，不自动认证" },
             Tunnel = systemPath, Uu = uu, Attempts = policy.Attempts, DisconnectAttempts = policy.DisconnectAttempts, OutageSince = outageObservedAt,
@@ -604,16 +639,10 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             AuthenticationHttpStatus = lastAuthentication?.HttpStatus, CredentialRequestStarted = lastAuthentication?.CredentialRequestStarted ?? false,
             AuthenticationPersistentState = authentication?.State.ToString() ?? "Ready",
             CredentialsBlocked = policy.CredentialsBlocked,
-            SubmissionBudgetCode = submissionBudgetCode,
             SubmissionRetryCode = displaySubmissionDecision.ToString(),
-            SubmissionAttempts = submissionBudget?.Attempts ?? (submissionBudgetCode == SubmissionBudgetCodes.Unused ? 0 : null),
-            SubmissionAttemptMax = SubmissionRetryPolicy.AttemptCap,
-            SubmissionBudgetExhausted = submissionBudget is null
-                ? submissionBudgetCode == SubmissionBudgetCodes.Unused ? false : null
-                : submissionExhausted,
-            SubmissionNextPossibleAt = submissionRetry.NextPossibleAt
+            SubmissionNextPossibleAt = displayNextPossibleAt
         };
-        status = WithFallbackFlags(status);
+        status = WithSubmissionBudget(WithFallbackFlags(status), submissionBudgetCode);
         if (actionEvent is not null) Log(actionEvent, detail, snapshot: status with { LastError = lastError });
         return Publish(status);
     }
@@ -1098,11 +1127,26 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         if (submissionBudget is null)
             return authentication?.State == AuthenticationState.SubmissionPending
                 ? SubmissionBudgetCodes.Unknown : SubmissionBudgetCodes.Unused;
-        if (submissionBudget.Attempts >= SubmissionRetryPolicy.AttemptCap) return SubmissionBudgetCodes.Exhausted;
+        if (submissionBudget.Exhausted) return SubmissionBudgetCodes.Exhausted;
         if (submissionBudget is { Attempts: 0, State: SubmissionBudgetState.Concluded }) return SubmissionBudgetCodes.Reset;
         if (submissionBudget.Attempts >= SubmissionRetryPolicy.AttemptCap - 1) return SubmissionBudgetCodes.NearLimit;
         return SubmissionBudgetCodes.Available;
     }
+
+    // #35: single projection for the controlled submission-budget fields, shared by the
+    // early "other Wi-Fi" snapshot and the main snapshot so the two cannot drift. The
+    // retry code and next-possible time are projected separately because the early return
+    // deliberately publishes neither.
+    private StatusSnapshot WithSubmissionBudget(StatusSnapshot status, string code) => status with
+    {
+        SubmissionBudgetCode = code,
+        SubmissionAttempts = submissionBudget?.Attempts ?? (code == SubmissionBudgetCodes.Unused ? 0 : null),
+        SubmissionAttemptMax = SubmissionRetryPolicy.AttemptCap,
+        SubmissionBudgetExhausted = submissionBudget is null
+            ? code == SubmissionBudgetCodes.Unused ? false : null
+            : submissionBudget.Exhausted,
+        SubmissionCooldownSeconds = SubmissionRetryPolicy.SubmissionIntervalSeconds
+    };
 
     // Single projection for the B5 status flags, used by both the main construction and
     // Publish so an early-return snapshot carries the same durable signal values.

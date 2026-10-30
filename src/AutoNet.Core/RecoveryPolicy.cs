@@ -246,6 +246,16 @@ public sealed record StatusSnapshot
     public bool? SubmissionBudgetExhausted { get; init; }
     /// <summary>#35 最早下次允许提交的墙钟时刻；null 表示当前没有可信的下次时刻。</summary>
     public DateTimeOffset? SubmissionNextPossibleAt { get; init; }
+    /// <summary>
+    /// #35 相邻两次可能发出凭据的提交至少间隔的秒数；旧版服务不写该字段时缺省为 0，
+    /// 托盘不得把它当成“无需间隔”，只在确有正数时展示。
+    /// </summary>
+    public int SubmissionCooldownSeconds { get; init; }
+    /// <summary>
+    /// #35 链路状态的受控码（见 <see cref="WifiLinkCodes"/>）。旧版服务不写该字段时缺省为空，
+    /// 托盘必须按“链路不可确认”降级，不得从 <see cref="Wifi"/> 的显示文字猜测是否就绪。
+    /// </summary>
+    public string WifiLinkCode { get; init; } = "";
     /// <summary>ADR-0005: the latest portal observation fell in the structural failure set; the portal's shape is suspected to have changed.</summary>
     public bool PortalLayoutSuspected { get; init; }
     /// <summary>
@@ -286,10 +296,15 @@ public static class NotificationCodes
     public const string AuthChannelNeedsHuman = "AuthChannelNeedsHuman";
     /// <summary>#35 提交额度用尽、自动提交已停止的一次性提示。</summary>
     public const string SubmissionBudgetExhausted = "SubmissionBudgetExhausted";
+    /// <summary>#35 提交额度即将用尽、只剩最后一次自动提交机会的一次性提示。</summary>
+    public const string SubmissionBudgetNearLimit = "SubmissionBudgetNearLimit";
+    /// <summary>#35 提交额度已由门户确认成功或人工重新开始认证重置的一次性提示。</summary>
+    public const string SubmissionBudgetReset = "SubmissionBudgetReset";
 
     public static bool IsKnown(string? code) => code is InternetRecovered or AuthenticationPaused
         or SubmissionRechecking or SubmissionUnresolved or BrowserFallbackRequested or PortalLayoutChanged
-        or AuthChannelStarted or AuthChannelResult or AuthChannelNeedsHuman or SubmissionBudgetExhausted;
+        or AuthChannelStarted or AuthChannelResult or AuthChannelNeedsHuman
+        or SubmissionBudgetExhausted or SubmissionBudgetNearLimit or SubmissionBudgetReset;
 }
 
 /// <summary>

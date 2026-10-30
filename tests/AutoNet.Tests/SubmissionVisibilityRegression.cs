@@ -35,7 +35,9 @@ internal static class SubmissionVisibilityRegression
                         "其他 Wi-Fi 不得推断重试授权或时刻");
                     var content = OverviewModel.From(Reading(status));
                     Require(content.Submission.Value.Contains($"{count}/3"), "概览未展示已用次数");
-                    Require(!content.Submission.Value.Contains("可提交"), "其他 Wi-Fi 上不能称可提交");
+                    Require(!content.Submission.Value.Contains("额度与间隔条件满足") &&
+                        !content.Submission.Value.Contains("等待重试"),
+                        "其他 Wi-Fi 上不能给出提交授权或等待暗示：" + content.Submission.Value);
                     Require(content.Submission.Note.Contains("其他 Wi-Fi") && !content.Submission.Note.Contains("继续低频只读复检"),
                         "其他 Wi-Fi 上不能声称正在继续校园网只读复检");
                 });
@@ -63,7 +65,10 @@ internal static class SubmissionVisibilityRegression
             };
             var content = OverviewModel.From(Reading(snapshot));
             Require(content.Submission.Value.Contains("额度与间隔条件满足"), "未限定额度与间隔条件");
-            Require(!content.Submission.Value.Contains("可提交"), "额度满足被误认为整体提交授权");
+            Require(content.Auth.Visible && content.Auth.Kind == OverviewAuthKind.Suspended &&
+                content.Auth.Note.Contains("凭据"), "额度满足被误认为认证已获授权");
+            Require(content.Recovery.State == "已关闭", "自动恢复关闭事实缺失");
+            Require(content.Submission.Note.Contains("是否提交仍取决于认证状态"), "额度满足未说明仍需其他条件");
             return Task.CompletedTask;
         }),
         ("额度可见：无额度记录时快照提供未使用而非不可确认", async () =>
@@ -116,7 +121,8 @@ internal static class SubmissionVisibilityRegression
                     "耗尽事实或下次提交时刻不符");
                 Require(third.SubmissionRetryCode == nameof(SubmissionRetryDecision.Exhausted), "耗尽后未停止自动提交");
                 Require(third.Detail.Contains("已停止自动提交"), "耗尽后未说明停止自动提交");
-                Require(third.Notification is { Code: NotificationCodes.SubmissionBudgetExhausted }, "耗尽通知缺失");
+                Require(third.Notification is { Code: NotificationCodes.SubmissionBudgetExhausted },
+                    "耗尽通知缺失：" + third.Notification?.Code);
 
                 // 门户明确成功：复检消解并重置额度；投影必须显示“已重置”，而不是继续沿用耗尽。
                 fixture.Http.PortalResult = "1";
@@ -125,6 +131,42 @@ internal static class SubmissionVisibilityRegression
                 Require(reset.SubmissionAttempts == 0 && reset.SubmissionBudgetCode == SubmissionBudgetCodes.Reset,
                     "门户确认成功后未显示额度已重置");
                 Require(reset.SubmissionBudgetExhausted == false && !reset.CredentialsBlocked, "重置后仍显示耗尽或认证暂停");
+                // 同轮只读复检事件可能先占用一次性通知槽（托盘不显示复检事件）；重置通知必须补发。
+                var resetNotified = reset.Notification is { Code: NotificationCodes.SubmissionBudgetReset };
+                for (var i = 0; i < 3 && !resetNotified; i++)
+                {
+                    fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+                    resetNotified = (await worker.RunOnceAsync(default)).Notification is
+                        { Code: NotificationCodes.SubmissionBudgetReset };
+                }
+                Require(resetNotified, "额度已重置通知缺失");
+            });
+        }),
+        ("额度可见：即将用尽通知在额度达到上限前送达且只提醒一次", async () =>
+        {
+            await WithStore(async (fixture, store) =>
+            {
+                for (var i = 0; i < 2; i++)
+                {
+                    var reservation = store.TryReserveSubmissionBudget(store.LoadSubmissionBudget(), fixture.Clock.GetUtcNow());
+                    Require(reservation.Budget is not null, "准备额度预留失败");
+                    Require(store.TryTransitionSubmissionBudget(reservation.Budget!, SubmissionBudgetState.PossiblySent), "准备未知提交失败");
+                    fixture.Clock.Advance(TimeSpan.FromSeconds(SubmissionRetryPolicy.SubmissionIntervalSeconds));
+                }
+                store.BlockAuthentication(new AuthenticationBlock
+                { State = AuthenticationState.SubmissionPending, Attempts = 2, Revision = Guid.NewGuid() });
+                // 链路不可用：只观察额度，不触发新的提交。
+                fixture.Link = fixture.Link with { Connected = false, Address = null };
+                using var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store), fixture.Clock);
+                var first = await worker.RunOnceAsync(default);
+                Require(first.SubmissionBudgetCode == SubmissionBudgetCodes.NearLimit, "即将用尽额度级别不符");
+                Require(first.Notification is { Code: NotificationCodes.SubmissionBudgetNearLimit },
+                    "即将用尽通知缺失：" + first.Notification?.Code);
+                var at = first.Notification!.At;
+                fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+                var second = await worker.RunOnceAsync(default);
+                Require(second.Notification is { Code: NotificationCodes.SubmissionBudgetNearLimit } same && same.At == at,
+                    "即将用尽通知被重复发布");
             });
         }),
         ("额度可见：第三次被明确拒绝时耗尽不覆盖认证暂停提示", async () =>
@@ -345,15 +387,15 @@ internal static class SubmissionVisibilityRegression
             };
 
             // 提交结果待决但校园 Wi-Fi 不可用：服务会跳过复检，界面只能说明等待网络条件恢复。
-            foreach (var (wifi, label) in new[]
+            foreach (var (wifi, linkCode, label) in new[]
             {
-                ("未连接", "Wi-Fi 未连接"),
-                ("已关联，等待 IPv4", "等待 IPv4"),
-                ("网卡未就绪", "网卡未就绪"),
-                ("正在连接", "正在连接")
+                ("未连接", WifiLinkCodes.Disconnected, "Wi-Fi 未连接"),
+                ("已关联，等待 IPv4", WifiLinkCodes.WaitingForAddress, "等待 IPv4"),
+                ("网卡未就绪", WifiLinkCodes.Unavailable, "网卡未就绪"),
+                ("正在连接", WifiLinkCodes.Associating, "正在连接")
             })
             {
-                var waiting = OverviewModel.From(Reading(pending with { Wifi = wifi }));
+                var waiting = OverviewModel.From(Reading(pending with { Wifi = wifi, WifiLinkCode = linkCode }));
                 Require(waiting.Submission.Note.Contains("校园 Wi-Fi") &&
                     waiting.Submission.Note.Contains("待网络条件恢复") &&
                     !waiting.Submission.Note.Contains("继续低频只读复检"),
@@ -478,7 +520,9 @@ internal static class SubmissionVisibilityRegression
             Require(inflight.Value.Contains("上次提交执行中") && inflight.Note.Contains("不重复发送凭据"), "执行中文案不符");
             var concluded = OverviewModel.SubmissionBudget(Budget(SubmissionBudgetCodes.Available, 1, false,
                 SubmissionRetryDecision.Concluded));
-            Require(concluded.Value.Contains("本次提交已明确结束") && concluded.Note.Contains("已停止自动提交"), "明确结束文案不符");
+            Require(concluded.Value.Contains("自动提交已停止") && !concluded.Value.Contains("仍有剩余") &&
+                concluded.Note.Contains("已明确结束") && concluded.Note.Contains("已停止自动提交"),
+                "明确结束文案不符：" + concluded.Value + " / " + concluded.Note);
             var online = OverviewModel.SubmissionBudget(Budget(SubmissionBudgetCodes.Available, 1, false,
                 SubmissionRetryDecision.InternetOnline));
             Require(online.Value.Contains("外网已恢复，暂停提交") && online.Note.Contains("不证明门户接受"), "外网暂停文案不符");
@@ -529,6 +573,55 @@ internal static class SubmissionVisibilityRegression
             Require(unknownCode.Kind == OverviewSubmissionBudgetKind.Unknown &&
                 unknownCode.Value == "额度状态不可确认" && !unknownCode.Value.Contains("已重置"),
                 "未知额度码被渲染为已重置：" + unknownCode.Value);
+
+            // 每一类“级别与数值互相矛盾”的组合都必须降级，不能宣称可用或已耗尽。
+            var contradictions = new (string Name, StatusSnapshot Snapshot)[]
+            {
+                ("耗尽却只用了 1 次", Budget(SubmissionBudgetCodes.Exhausted, 1, true, SubmissionRetryDecision.Exhausted)),
+                ("可用却已用满 3 次", Budget(SubmissionBudgetCodes.Available, 3, false, SubmissionRetryDecision.Authorized)),
+                ("可用却已用满且标耗尽", Budget(SubmissionBudgetCodes.Available, 3, true, SubmissionRetryDecision.Authorized)),
+                ("已重置却已用 2 次", Budget(SubmissionBudgetCodes.Reset, 2, false, SubmissionRetryDecision.Authorized)),
+                ("已重置却标耗尽", Budget(SubmissionBudgetCodes.Reset, 0, true, SubmissionRetryDecision.Authorized)),
+                ("即将用尽却只用了 1 次", Budget(SubmissionBudgetCodes.NearLimit, 1, false, SubmissionRetryDecision.Waiting)),
+                ("耗尽却未标耗尽", Budget(SubmissionBudgetCodes.Exhausted, 3, false, SubmissionRetryDecision.Exhausted)),
+                ("上限与策略常量不符", Budget(SubmissionBudgetCodes.Available, 1, false, SubmissionRetryDecision.Authorized) with { SubmissionAttemptMax = 5 }),
+                ("未使用却给出其他上限", Budget(SubmissionBudgetCodes.Unused, 0, false, SubmissionRetryDecision.Authorized) with { SubmissionAttemptMax = 5 })
+            };
+            foreach (var (name, snapshot) in contradictions)
+            {
+                var projection = OverviewModel.SubmissionBudget(snapshot);
+                Require(projection.Kind == OverviewSubmissionBudgetKind.Unknown && projection.Value == "额度状态不可确认",
+                    name + "：矛盾数值未降级：" + projection.Value);
+                Require(!projection.Value.Contains("仍有剩余") && !projection.Value.Contains("已耗尽") &&
+                    !projection.Value.Contains("已重置") && !projection.Value.Contains("剩余 1 次") &&
+                    !projection.Note.Contains("下一次自动提交"),
+                    name + "：矛盾数值仍给出可用或已耗尽暗示：" + projection.Value + " / " + projection.Note);
+            }
+
+            // 矛盾的原始耗尽事实也不得进入附加标签或认证列。
+            var contradictorySnapshot = Budget(SubmissionBudgetCodes.Available, 3, true, SubmissionRetryDecision.Authorized) with
+            {
+                State = "需要处理认证", Direct = "外网不可达或未知", CredentialsBlocked = true,
+                AuthenticationPersistentState = nameof(AuthenticationState.SubmissionPending)
+            };
+            var contradictoryContent = OverviewModel.From(Reading(contradictorySnapshot));
+            Require(contradictoryContent.Submission.Kind == OverviewSubmissionBudgetKind.Unknown, "矛盾额度未在概览降级");
+            Require(!contradictoryContent.Chips.Any(chip => chip.Text == "认证提交额度已耗尽"),
+                "矛盾额度仍在附加标签宣称已耗尽");
+            Require(contradictoryContent.Auth.Visible && !contradictoryContent.Auth.Note.Contains("额度已耗尽") &&
+                !contradictoryContent.Auth.Note.Contains("额度即将用尽"),
+                "矛盾额度仍在认证列宣称额度原因：" + contradictoryContent.Auth.Note);
+
+            // 终态 Concluded 且仍有次数：自动提交已永久停止，不能再说“仍有剩余”。
+            var concludedAvailable = OverviewModel.SubmissionBudget(Budget(SubmissionBudgetCodes.Available, 1, false,
+                SubmissionRetryDecision.Concluded));
+            Require(concludedAvailable.Value.Contains("自动提交已停止") && !concludedAvailable.Value.Contains("仍有剩余") &&
+                concludedAvailable.Note.Contains("已明确结束"), "终态仍宣称可用：" + concludedAvailable.Value + " / " + concludedAvailable.Note);
+            var concludedNearLimit = OverviewModel.SubmissionBudget(Budget(SubmissionBudgetCodes.NearLimit, 2, false,
+                SubmissionRetryDecision.Concluded));
+            Require(concludedNearLimit.Value.Contains("即将用尽") && !concludedNearLimit.Value.Contains("剩余 1 次") &&
+                !concludedNearLimit.Value.Contains("仍有剩余") && concludedNearLimit.Note.Contains("已停止自动提交"),
+                "终态即将用尽仍给出剩余次数暗示：" + concludedNearLimit.Value + " / " + concludedNearLimit.Note);
             return Task.CompletedTask;
         }),
         ("额度可见：耗尽通知进入受控词表且只提醒一次", () =>
@@ -588,7 +681,8 @@ internal static class SubmissionVisibilityRegression
                 var at = DateTimeOffset.UtcNow;
                 router.Observe(Reading(Online() with
                 {
-                    Wifi = "未连接", Direct = "外网不可达或未知", Portal = "需认证",
+                    Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Disconnected,
+                    Direct = "外网不可达或未知", Portal = "需认证",
                     Notification = new StatusNotification(NotificationCodes.SubmissionBudgetExhausted, at)
                 }));
                 Require(presented.Count == 1, "耗尽通知未提醒");
@@ -596,9 +690,11 @@ internal static class SubmissionVisibilityRegression
                     !presented[0].Body.Contains("继续只读复检", StringComparison.Ordinal),
                     "Wi-Fi 未就绪的耗尽通知仍声称继续复检：" + presented[0].Body);
 
-                // 对照：Wi-Fi 已就绪时服务确实执行复检，保留原词表文案。
+                // 对照：受控码说链路就绪时服务确实执行复检，保留原词表文案；
+                // 即使显示文字仍是“未连接”，判定也只接受受控码。
                 router.Observe(Reading(Online() with
                 {
+                    Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Ready,
                     Notification = new StatusNotification(NotificationCodes.SubmissionBudgetExhausted, at.AddSeconds(1))
                 }));
                 Require(presented.Count == 2 && presented[1].Body.Contains("继续只读复检", StringComparison.Ordinal),
@@ -668,6 +764,124 @@ internal static class SubmissionVisibilityRegression
                 Require(ready.Detail.Contains("继续低频只读复检", StringComparison.Ordinal),
                     "Wi-Fi 就绪时丢失复检说明：" + ready.Detail);
             });
+        }),
+        ("额度可见：复检判据只接受链路受控码", () =>
+        {
+            var pending = Budget(SubmissionBudgetCodes.Exhausted, 3, true, SubmissionRetryDecision.Exhausted) with
+            {
+                CredentialsBlocked = true,
+                AuthenticationPersistentState = nameof(AuthenticationState.SubmissionPending)
+            };
+            // 显示文字说“已连接”，但旧版快照没有受控码：不能声称正在复检。
+            var legacy = OverviewModel.SubmissionBudget(pending with { Wifi = "已连接", WifiLinkCode = "" });
+            Require(!legacy.Note.Contains("继续低频只读复检") && legacy.Note.Contains("待网络条件恢复"),
+                "缺少受控码时仍声称继续复检：" + legacy.Note);
+            // 显示文字说“未连接”，但受控码说就绪：以受控码为准，不读显示文字。
+            var ready = OverviewModel.SubmissionBudget(pending with { Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Ready });
+            Require(ready.Note.Contains("继续低频只读复检"),
+                "受控码就绪时仍按显示文字降级：" + ready.Note);
+            return Task.CompletedTask;
+        }),
+        ("额度可见：额度事件进入净化摘要与认证分类", () =>
+        {
+            var entry = new ActivityLog
+            {
+                Time = DateTimeOffset.UtcNow,
+                Action = "提交额度已耗尽",
+                Detail = "fixture-secret-detail",
+                EventCode = "SubmissionBudgetExhausted"
+            };
+            var summary = LogSummary.Format([entry]);
+            Require(summary.Contains("事件 SubmissionBudgetExhausted", StringComparison.Ordinal),
+                "净化摘要丢弃了耗尽事件：" + summary);
+            Require(!summary.Contains("fixture-secret-detail", StringComparison.Ordinal), "净化摘要泄露了自由文本");
+            Require(LogEventClassifier.Classify(entry) == LogEventCategory.Authentication, "耗尽事件未归入认证分类");
+            return Task.CompletedTask;
+        }),
+        ("额度可见：即将用尽与重置通知进入受控词表且只提醒一次", () =>
+        {
+            Require(NotificationCodes.IsKnown(NotificationCodes.SubmissionBudgetNearLimit), "即将用尽通知码未进入受控词表");
+            Require(NotificationCodes.IsKnown(NotificationCodes.SubmissionBudgetReset), "重置通知码未进入受控词表");
+            var directory = Path.Combine(Path.GetTempPath(), "autonet-issue35-notify-budget-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var presented = new List<NotificationAlert>();
+                var router = new NotificationRouter(new NotificationConsumptionStore(Path.Combine(directory, "consumption.json")), alert =>
+                {
+                    presented.Add(alert);
+                    return true;
+                });
+                router.Observe(Reading(Online()));
+                var at = DateTimeOffset.UtcNow;
+                router.Observe(Reading(Online() with
+                {
+                    Notification = new StatusNotification(NotificationCodes.SubmissionBudgetNearLimit, at)
+                }));
+                Require(presented.Count == 1 && presented[0].Code == NotificationCodes.SubmissionBudgetNearLimit,
+                    "即将用尽通知未按词表提醒");
+                Require(presented[0].Heading.Contains("即将用尽") && presented[0].Warning, "即将用尽通知文案或级别不符");
+                router.Observe(Reading(Online() with
+                {
+                    Notification = new StatusNotification(NotificationCodes.SubmissionBudgetNearLimit, at)
+                }));
+                Require(presented.Count == 1, "同一即将用尽事件被重复提醒");
+
+                router.Observe(Reading(Online() with
+                {
+                    Notification = new StatusNotification(NotificationCodes.SubmissionBudgetReset, at.AddSeconds(1))
+                }));
+                Require(presented.Count == 2 && presented[1].Code == NotificationCodes.SubmissionBudgetReset,
+                    "额度重置通知未按词表提醒");
+                Require(presented[1].Heading.Contains("已重置") && !presented[1].Warning, "额度重置通知文案或级别不符");
+                router.Observe(Reading(Online() with
+                {
+                    Notification = new StatusNotification(NotificationCodes.SubmissionBudgetReset, at.AddSeconds(1))
+                }));
+                Require(presented.Count == 2, "同一额度重置事件被重复提醒");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+            return Task.CompletedTask;
+        }),
+        ("额度可见：只读预演不推进重试锚点", () =>
+        {
+            var start = new DateTimeOffset(2026, 10, 30, 0, 0, 0, TimeSpan.Zero);
+            var budget = new SubmissionBudget
+            {
+                State = SubmissionBudgetState.PossiblySent, Attempts = 1,
+                ReservedAt = start, NextPossibleAt = start.AddSeconds(SubmissionRetryPolicy.SubmissionIntervalSeconds),
+                Revision = Guid.NewGuid()
+            };
+            var policy = new SubmissionRetryPolicy();
+            policy.Evaluate(null, start, TimeSpan.Zero);
+            var decision = policy.Preview(budget, start.AddSeconds(30), TimeSpan.FromSeconds(30), false, out var previewNext);
+            Require(decision == SubmissionRetryDecision.Waiting && previewNext is not null, "预演未给出等待判定");
+            Require(policy.NextPossibleAt is null, "预演改写了策略的公开下次提交时刻");
+            // 预演不提交 observed：下一次真实判定仍会按新预算重新锚定，不会提前。
+            var actual = policy.Evaluate(budget, start.AddSeconds(32), TimeSpan.FromSeconds(32), false);
+            Require(actual == SubmissionRetryDecision.Waiting && policy.NextPossibleAt is { } actualNext &&
+                actualNext >= previewNext, "真实判定在预演后前移了下次提交时刻");
+            return Task.CompletedTask;
+        }),
+        ("额度可见：动作后的下次提交时刻不被展示路径前移", async () =>
+        {
+            await WithStore(async (fixture, store) =>
+            {
+                fixture.Http.LoginResult = "unparseable";
+                // 让登录请求真实耗时：动作期间推进时钟，暴露“展示路径重新锚定”的副作用。
+                fixture.Http.BeforeLogin = () => fixture.Clock.Advance(TimeSpan.FromSeconds(30));
+                using var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(fixture, store), fixture.Clock);
+                var first = await worker.RunOnceAsync(default);
+                var firstAt = first.SubmissionNextPossibleAt;
+                Require(first.SubmissionAttempts == 1 && firstAt is not null, "首次提交后缺少下次提交时刻");
+                var persisted = store.LoadSubmissionBudget();
+                Require(persisted is { Attempts: 1 } && firstAt >= persisted.NextPossibleAt,
+                    "展示的下次提交时刻早于持久额度下限");
+                fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+                var second = await worker.RunOnceAsync(default);
+                var secondAt = second.SubmissionNextPossibleAt;
+                Require(secondAt is not null && secondAt >= firstAt, "展示路径把下次提交时刻前移了");
+            });
         })
     ];
 
@@ -694,10 +908,12 @@ internal static class SubmissionVisibilityRegression
         Enabled = true,
         State = "校园网在线",
         Wifi = "已连接",
+        WifiLinkCode = WifiLinkCodes.Ready,
         Direct = "外网可达",
         Portal = "未查询（外网检查已通过）",
         Tunnel = "系统路径可达，出口未核验",
-        Uu = "未核验"
+        Uu = "未核验",
+        SubmissionCooldownSeconds = SubmissionRetryPolicy.SubmissionIntervalSeconds
     };
 
     private static async Task WithStore(Func<MonitorFixture, SafetyStateStore, Task> test)

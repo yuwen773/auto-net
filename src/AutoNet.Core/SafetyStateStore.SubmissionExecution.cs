@@ -67,11 +67,11 @@ public sealed partial class SafetyStateStore
             if (budget is not { Attempts: > 0 }) return false;
             var now = DateTimeOffset.UtcNow;
             if (now < budget.ReservedAt) now = budget.ReservedAt;
-            if (now == default || now > DateTimeOffset.MaxValue.AddSeconds(-120)) return false;
+            if (now == default || now > DateTimeOffset.MaxValue.AddSeconds(-SubmissionRetryPolicy.SubmissionIntervalSeconds)) return false;
             var next = budget with
             {
                 State = budget.State == SubmissionBudgetState.Reserved ? SubmissionBudgetState.PossiblySent : budget.State,
-                ReservedAt = now, NextPossibleAt = now.AddSeconds(120), Revision = Guid.NewGuid()
+                ReservedAt = now, NextPossibleAt = now.AddSeconds(SubmissionRetryPolicy.SubmissionIntervalSeconds), Revision = Guid.NewGuid()
             };
             Storage.AtomicWrite(SubmissionBudgetPath, JsonSerializer.Serialize(next, SubmissionJson));
             File.Delete(ChannelSessionPath);

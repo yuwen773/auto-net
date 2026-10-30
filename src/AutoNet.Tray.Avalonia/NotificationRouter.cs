@@ -159,6 +159,16 @@ internal sealed class NotificationRouter
             "AutoNet · 提交额度已耗尽",
             "首次提交后的两次额外自动提交已用尽，已停止自动提交；继续只读复检。门户确认成功或手动重新开始认证后重置额度。",
             Warning: true),
+        [NotificationCodes.SubmissionBudgetNearLimit] = new(
+            NotificationCodes.SubmissionBudgetNearLimit,
+            "AutoNet · 提交额度即将用尽",
+            "本次故障只剩最后一次自动提交机会；再失败后停止自动提交。",
+            Warning: true),
+        [NotificationCodes.SubmissionBudgetReset] = new(
+            NotificationCodes.SubmissionBudgetReset,
+            "AutoNet · 提交额度已重置",
+            "门户确认成功或已手动重新开始认证，提交额度已重置；重启和保存设置不会重置。",
+            Warning: false),
         [NotificationCodes.PortalLayoutChanged] = new(
             NotificationCodes.PortalLayoutChanged,
             "AutoNet · 门户结构疑似变化",
@@ -241,6 +251,10 @@ internal sealed class NotificationRouter
         Remember(current);
     }
 
+    /// <summary>词表耗尽正文中的复检子句；只替换这一句，其余措辞保持单一来源。</summary>
+    private const string ActiveRecheckClause = "继续只读复检。";
+    private const string SuspendedRecheckClause = "校园 Wi-Fi 当前不可用，暂不发起只读复检，恢复连接后继续。";
+
     /// <summary>
     /// 耗尽通知的复检说明跟随网络条件：服务只在校园 Wi-Fi 就绪时执行低频只读复检，
     /// Wi-Fi 未连接、等待 IPv4 或网卡未就绪时复检被跳过，通知不能声称正在继续复检。
@@ -248,11 +262,8 @@ internal sealed class NotificationRouter
     /// </summary>
     private static NotificationAlert ForSnapshot(NotificationAlert alert, StatusSnapshot snapshot)
     {
-        if (alert.Code != NotificationCodes.SubmissionBudgetExhausted || snapshot.Wifi == "已连接") return alert;
-        return alert with
-        {
-            Body = "首次提交后的两次额外自动提交已用尽，已停止自动提交；校园 Wi-Fi 当前不可用，暂不发起只读复检，恢复连接后继续。门户确认成功或手动重新开始认证后重置额度。"
-        };
+        if (alert.Code != NotificationCodes.SubmissionBudgetExhausted || snapshot.WifiLinkCode == WifiLinkCodes.Ready) return alert;
+        return alert with { Body = alert.Body.Replace(ActiveRecheckClause, SuspendedRecheckClause, StringComparison.Ordinal) };
     }
 
     /// <summary>把事件记入内存与持久消费记录；保存失败只放弃持久化（会话内仍然防重弹）。</summary>

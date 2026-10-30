@@ -12,6 +12,10 @@ public sealed record SubmissionBudget
     public DateTimeOffset ReservedAt { get; init; }
     public DateTimeOffset NextPossibleAt { get; init; }
     public Guid Revision { get; init; }
+
+    /// <summary>额度是否已用尽；上限是策略常量，不随记录变化，也不参与持久化。</summary>
+    [JsonIgnore]
+    public bool Exhausted => Attempts >= SubmissionRetryPolicy.AttemptCap;
 }
 
 public enum SubmissionReservationOutcome { Reserved, StateChanged, Waiting, WaitClock, Exhausted, InFlight, Concluded, InvalidState, StorageUnavailable }
@@ -50,7 +54,7 @@ public sealed partial class SafetyStateStore
             if (budget is null || budget.Version != 1 || budget.Revision == Guid.Empty || budget.Attempts is < 0 or > 3 ||
                 !Enum.IsDefined(budget.State) || root.GetProperty("State").GetString() != budget.State.ToString() ||
                 (budget.Attempts == 0 ? budget.State != SubmissionBudgetState.Concluded || budget.ReservedAt != default || budget.NextPossibleAt != default :
-                    budget.ReservedAt == default || budget.NextPossibleAt - budget.ReservedAt < TimeSpan.FromSeconds(120)))
+                    budget.ReservedAt == default || budget.NextPossibleAt - budget.ReservedAt < TimeSpan.FromSeconds(SubmissionRetryPolicy.SubmissionIntervalSeconds)))
                 throw InvalidSubmissionBudget();
             return budget;
         }
@@ -146,7 +150,7 @@ public sealed partial class SafetyStateStore
             State = SubmissionBudgetState.Reserved,
             Attempts = (current?.Attempts ?? 0) + 1,
             ReservedAt = now.ToUniversalTime(),
-            NextPossibleAt = now.ToUniversalTime().AddSeconds(120),
+            NextPossibleAt = now.ToUniversalTime().AddSeconds(SubmissionRetryPolicy.SubmissionIntervalSeconds),
             Revision = Guid.NewGuid()
         };
         Storage.AtomicWrite(SubmissionBudgetPath, JsonSerializer.Serialize(next, SubmissionJson));

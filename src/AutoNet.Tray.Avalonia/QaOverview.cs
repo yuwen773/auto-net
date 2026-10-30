@@ -208,7 +208,7 @@ internal static class QaOverview
         // 提交待决但校园 Wi-Fi 未连接：复检被跳过，文案必须说明等待网络条件恢复。
         yield return ("budget-exhausted-wifi-down", OfflinePending() with
         {
-            Wifi = "未连接",
+            Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Disconnected,
             SubmissionBudgetCode = SubmissionBudgetCodes.Exhausted,
             SubmissionRetryCode = nameof(SubmissionRetryDecision.Exhausted),
             SubmissionAttempts = 3, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = true
@@ -253,7 +253,7 @@ internal static class QaOverview
         });
         yield return ("budget-other-wifi", Online() with
         {
-            State = "已切换其他 Wi-Fi", Wifi = "其他配置", Direct = "未检查",
+            State = "已切换其他 Wi-Fi", Wifi = "其他配置", WifiLinkCode = WifiLinkCodes.OtherProfile, Direct = "未检查",
             SubmissionBudgetCode = SubmissionBudgetCodes.Exhausted,
             SubmissionAttempts = 3, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = true
         });
@@ -295,6 +295,7 @@ internal static class QaOverview
         State = "校园网在线",
         Direct = "外网可达",
         Wifi = "已连接",
+        WifiLinkCode = WifiLinkCodes.Ready,
         Portal = "未查询（外网检查已通过）",
         Tunnel = "系统路径可达，出口未核验",
         Uu = "未核验"
