@@ -73,19 +73,20 @@ internal static class AuthPageModel
         var snapshot = trusted ? reading!.Snapshot : null;
         var phase = PhaseFor(reading);
         var cause = phase == AuthPagePhase.NeedsManual ? ManualCauseFor(snapshot) : ManualCause.None;
-        var (title, explanation, nextStep) = Copy(phase, cause, snapshot);
+        var copy = Copy(phase, cause, snapshot);
+        var hostCopy = HostCopyFor(host.Status);
         var content = new AuthPageContent
         {
             Trusted = trusted,
             Phase = phase,
             Tone = ToneFor(phase),
-            StatusTitle = title,
-            StatusExplanation = explanation,
-            NextStep = nextStep,
+            StatusTitle = copy.Title,
+            StatusExplanation = copy.Explanation,
+            NextStep = copy.NextStep,
             BackgroundNote = BackgroundNote(trusted, snapshot),
             HostStatus = host.Status,
-            HostTitle = HostTitle(host.Status),
-            HostDetail = host.Detail.Length > 0 ? host.Detail : HostDetail(host.Status),
+            HostTitle = hostCopy.Title,
+            HostDetail = host.Detail.Length > 0 ? host.Detail : hostCopy.Detail,
             HostAvailable = host.Status == AuthPageHostStatus.Attached,
             HostRetryVisible = host.Status is AuthPageHostStatus.RuntimeMissing
                 or AuthPageHostStatus.NetworkBoundaryUnavailable
@@ -95,17 +96,19 @@ internal static class AuthPageModel
     }
 
     /// <summary>
-    /// 阶段判定顺序固定：联网 > 已认证 > 需要人工 > 已暂停 > 提交结果未知 > 等待重试 > 不可确认。
+    /// 阶段判定顺序固定：联网 > 已认证 > 需要人工 > 已暂停 > 结果未知（含内嵌通道授予）> 等待重试 > 不可确认。
     /// 联网事实优先于认证暂停，避免把已恢复的链路说成仍有问题；明确的人工信号
     /// （结构变化、存储故障、终止性暂停、提交额度用尽）优先于“结果未知”。
     /// 恢复开关关闭时服务仍会观测到“门户需认证”，但不会仅因等待而自动提交，
     /// 因此必须排在“等待重试”之前，且不能把待消解提交说成会自动重试。
+    /// 内嵌通道授予（ADR-0015）只是启动意图，不是认证重试：它不携带服务已发布的重试节奏，
+    /// 只能按“结果未知/待确认”呈现，具体区分留给 #39。
     /// </summary>
     public static AuthPagePhase PhaseFor(StatusReading? reading)
     {
         if (reading is not { Trusted: true }) return AuthPagePhase.Unconfirmed;
         var snapshot = reading.Snapshot!;
-        if (snapshot.Direct == "外网可达" || reading.Display.Primary == NetworkPrimaryState.Online)
+        if (reading.Display.Primary == NetworkPrimaryState.Online)
             return AuthPagePhase.Online;
         if (snapshot.Portal == "已认证") return AuthPagePhase.Authenticated;
         if (ManualCauseFor(snapshot) != ManualCause.None)
@@ -113,10 +116,10 @@ internal static class AuthPageModel
         if (IsRecoveryPaused(snapshot)) return AuthPagePhase.Paused;
         if (snapshot.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending))
             return AuthPagePhase.OutcomeUnknown;
+        if (snapshot.AuthChannelRequested) return AuthPagePhase.OutcomeUnknown;
         if (snapshot.Portal == "需认证" ||
             reading.Display.Primary == NetworkPrimaryState.NeedsAuthentication ||
             snapshot.AuthenticationPersistentState == nameof(AuthenticationState.RetryCoolingDown) ||
-            snapshot.AuthChannelRequested ||
             NextAttemptIsAuthentication(snapshot, reading))
             return AuthPagePhase.WaitingRetry;
         return AuthPagePhase.Unconfirmed;
@@ -126,6 +129,9 @@ internal static class AuthPageModel
     /// 恢复开关关闭的可证实形态：服务在关闭恢复且外网不可达时发布“已暂停恢复”。
     /// 只认这个状态，不把 Enabled 缺省为 false 的“等待设置”“检测异常”等快照误读为暂停；
     /// 外网可达时即使开关关闭也按联网展示，不在此处判定。
+    /// 这里不能改用 <see cref="NetworkDisplay.Primary"/> 的 <c>RecoveryPaused</c>：映射规则在
+    /// 状态串之前先看 <c>!Enabled</c>，而服务发布的“等待设置”“检测异常”快照也缺省 <c>Enabled=false</c>，
+    /// 会把“未保存设置”和观测异常误说成用户关闭了恢复。
     /// </summary>
     private static bool IsRecoveryPaused(StatusSnapshot? snapshot) =>
         snapshot is { Enabled: false, State: "已暂停恢复" };
@@ -179,12 +185,18 @@ internal static class AuthPageModel
         if (snapshot.CredentialsBlocked && state != nameof(AuthenticationState.SubmissionPending))
             return ManualCause.TerminalBlock;
         // 缺少设置或凭据时服务不会发出认证请求；这类快照不能落到“等待重试”。
-        if (snapshot.State == "等待设置") return ManualCause.MissingSettings;
+        if (IsSettingsMissing(snapshot)) return ManualCause.MissingSettings;
         if (MissingCredentials(snapshot)) return ManualCause.MissingCredentials;
         if (state == nameof(AuthenticationState.SubmissionPending) && SubmissionQuotaExhausted(snapshot))
             return ManualCause.QuotaExhausted;
         return ManualCause.None;
     }
+
+    /// <summary>
+    /// 缺少设置的可证实形态。不能用 <see cref="NetworkDisplay.Primary"/> 的 <c>SettingsMissing</c>：
+    /// 服务发布的“等待设置”快照缺省 <c>Enabled=false</c>，映射会先判成 <c>RecoveryPaused</c>。
+    /// </summary>
+    private static bool IsSettingsMissing(StatusSnapshot? snapshot) => snapshot is { State: "等待设置" };
 
     /// <summary>
     /// 缺少凭据的可证实形态：服务在 Wi-Fi 就绪、外网不可达且没有凭据时发布的受控文案
@@ -213,41 +225,65 @@ internal static class AuthPageModel
         _ => OverviewTone.Neutral
     };
 
-    private static (string Title, string Explanation, string NextStep) Copy(
+    /// <summary>状态卡的受控文案：标题、说明与下一步，三者在所有分支中成组出现。</summary>
+    private readonly record struct AuthPageCopy(string Title, string Explanation, string NextStep);
+
+    private static AuthPageCopy Copy(
         AuthPagePhase phase, ManualCause cause, StatusSnapshot? snapshot) => phase switch
     {
         AuthPagePhase.Online => OnlineCopy(snapshot),
         AuthPagePhase.Authenticated =>
-            ("认证成功", "门户状态显示已认证，但外网检查尚未通过；AutoNet 会继续检测。", "请稍候观察；持续失败时查看网络诊断。"),
-        AuthPagePhase.OutcomeUnknown =>
-            ("提交结果未知",
+            new("认证成功", "门户状态显示已认证，但外网检查尚未通过；AutoNet 会继续检测。", "请稍候观察；持续失败时查看网络诊断。"),
+        AuthPagePhase.OutcomeUnknown => OutcomeUnknownCopy(snapshot),
+        AuthPagePhase.Paused => PausedCopy(snapshot),
+        AuthPagePhase.WaitingRetry =>
+            new("等待重试", "自动认证将在额度与退避条件满足后继续；打开、关闭或刷新本页不会改变重试节奏。", "请等待自动重试，无需反复打开页面。"),
+        AuthPagePhase.NeedsManual => ManualCopy(cause, snapshot),
+        _ =>
+            new("状态待确认", "当前没有可信的后台状态，本页不会据此提交任何凭据。", "请确认 AutoNet 后台服务正在运行，然后等待下一次检测。")
+    };
+
+    /// <summary>
+    /// 结果未知分两种：待消解提交按只读复检与有限重试陈述；内嵌通道授予只是启动意图
+    /// （ADR-0015），没有服务端已发布的重试节奏，只按“待确认”中性呈现，区分留给 #39。
+    /// </summary>
+    private static AuthPageCopy OutcomeUnknownCopy(StatusSnapshot? snapshot) =>
+        snapshot is { AuthChannelRequested: true }
+            && snapshot.AuthenticationPersistentState != nameof(AuthenticationState.SubmissionPending)
+            ? ChannelRequestedCopy(snapshot)
+            : new("提交结果未知",
                 "上次凭据提交的结果尚未确认。" + RecheckClause(snapshot,
                     "后台继续只读复检；",
                     "校园 Wi-Fi 当前不可用，后台暂不发起只读复检，恢复连接后再继续；") +
                 "只有在外网不可达且共享提交额度与最短间隔仍允许时，才可能进行有限自动重试，否则不会重发凭据。打开或刷新本页本身不会提交凭据。",
-                "保持观察；若网络诊断显示额度用尽或需要人工处理，请按指引操作，不要重复提交。"),
-        AuthPagePhase.Paused => PausedCopy(snapshot),
-        AuthPagePhase.WaitingRetry =>
-            ("等待重试", "自动认证将在额度与退避条件满足后继续；打开、关闭或刷新本页不会改变重试节奏。", "请等待自动重试，无需反复打开页面。"),
-        AuthPagePhase.NeedsManual => ManualCopy(cause, snapshot),
-        _ =>
-            ("状态待确认", "当前没有可信的后台状态，本页不会据此提交任何凭据。", "请确认 AutoNet 后台服务正在运行，然后等待下一次检测。")
-    };
+                "保持观察；若网络诊断显示额度用尽或需要人工处理，请按指引操作，不要重复提交。");
+
+    /// <summary>
+    /// 内嵌通道授予是启动意图，不是提交授权，也不代表服务已安排自动认证重试；
+    /// 因此只陈述“结果待确认”，不承诺任何重试节奏，也不暗示本页会代为提交。
+    /// </summary>
+    private static AuthPageCopy ChannelRequestedCopy(StatusSnapshot? snapshot) =>
+        new("认证结果待确认",
+            "后台已请求内嵌认证通道；通道授予只是启动意图，实际提交仍需独立授权，结果尚未确认。" + RecheckClause(snapshot,
+                "后台继续只读复检；",
+                "校园 Wi-Fi 当前不可用，后台暂不发起只读复检，恢复连接后再继续；") +
+            "打开、关闭或刷新本页不会提交凭据，也不会改变后台节奏。",
+            "请等待后台报告结果；不要重复提交。");
 
     /// <summary>
     /// 外网已恢复时不再按“结果未知”展示；若快照同时保留待消解的提交记录，
     /// 只补充“当前不会重新提交”的事实，不把联网恢复说成认证已成功。
     /// </summary>
-    private static (string Title, string Explanation, string NextStep) OnlineCopy(StatusSnapshot? snapshot) =>
+    private static AuthPageCopy OnlineCopy(StatusSnapshot? snapshot) =>
         snapshot?.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending)
-            ? ("已联网", "外网内容检查已通过；上次提交结果仍由后台只读复检，当前不会重新提交。", "无需操作；如需了解认证状态，可查看网络诊断。")
-            : ("已联网", "外网内容检查已通过；查看本页不会改变认证状态。", "无需操作，保持当前连接即可。");
+            ? new("已联网", "外网内容检查已通过；上次提交结果仍由后台只读复检，当前不会重新提交。", "无需操作；如需了解认证状态，可查看网络诊断。")
+            : new("已联网", "外网内容检查已通过；查看本页不会改变认证状态。", "无需操作，保持当前连接即可。");
 
     /// <summary>
     /// 恢复开关关闭：后台仍检测，但不会重连或自动提交；待消解的提交只由只读复检处理。
     /// 明确告知用户暂停是开关状态，并给出恢复入口（概览页），页面本身不提供提交或开关动作。
     /// </summary>
-    private static (string Title, string Explanation, string NextStep) PausedCopy(StatusSnapshot? snapshot)
+    private static AuthPageCopy PausedCopy(StatusSnapshot? snapshot)
     {
         var pending = snapshot?.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending);
         var explanation = "自动恢复已关闭，AutoNet 仍会检测网络，但不会重连校园网或自动提交凭据。"
@@ -256,10 +292,10 @@ internal static class AuthPageModel
                     "后台只做只读复检，不会重新提交。",
                     "校园 Wi-Fi 当前不可用，后台暂不发起只读复检；恢复连接后只做只读复检，不会重新提交。")
                 : "");
-        return ("自动恢复已关闭", explanation, "如需恢复自动处理，请在概览页开启自动恢复；本页不会提交凭据。");
+        return new("自动恢复已关闭", explanation, "如需恢复自动处理，请在概览页开启自动恢复；本页不会提交凭据。");
     }
 
-    private static (string Title, string Explanation, string NextStep) ManualCopy(
+    private static AuthPageCopy ManualCopy(
         ManualCause cause, StatusSnapshot? snapshot)
     {
         var pending = snapshot?.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending);
@@ -269,13 +305,13 @@ internal static class AuthPageModel
         return cause switch
         {
             ManualCause.QuotaExhausted =>
-                ("提交额度已用尽", "上次凭据提交的结果仍未确认，且自动提交额度已用尽；" + RecheckClause(snapshot,
+                new("提交额度已用尽", "上次凭据提交的结果仍未确认，且自动提交额度已用尽；" + RecheckClause(snapshot,
                         "后台只做低频只读复检，不会自动重发凭据。",
                         "校园 Wi-Fi 当前不可用，后台暂不发起只读复检，恢复连接后只做低频只读复检，不会自动重发凭据。")
                     + (paused ? "自动恢复当前已关闭；即使开启自动恢复也不会自动重发凭据。" : ""),
                     "按网络诊断指引人工核实；不要重复提交。"),
             ManualCause.StorageFault =>
-                ("认证状态需检查", pending
+                new("认证状态需检查", pending
                     ? "认证消解记录写入失败，上次提交结果仍未确认；" + RecheckClause(snapshot,
                             "后台继续只读复检，",
                             "校园 Wi-Fi 当前不可用，后台暂不发起只读复检，恢复连接后再继续；")
@@ -284,7 +320,7 @@ internal static class AuthPageModel
                         + (paused ? "自动恢复当前已关闭，不会自动重试。" : "自动提交仍受认证状态、网络与额度约束。"),
                     "检查本地存储与诊断日志后再操作；不要删除状态文件或重复提交。"),
             ManualCause.PortalLayout =>
-                ("门户结构疑似变化", (pending
+                new("门户结构疑似变化", (pending
                         ? "上次提交结果仍未确认，同时门户结构疑似变化；该信号本身不代表认证已暂停。"
                         : snapshot?.CredentialsBlocked == true
                             ? "门户结构疑似变化，认证已暂停。"
@@ -292,19 +328,19 @@ internal static class AuthPageModel
                     + (paused ? "自动恢复当前也已关闭。" : ""),
                     "导出诊断包反馈给网管；不要重复提交。"),
             ManualCause.BrowserFallback =>
-                ("需要人工处理", (pending
+                new("需要人工处理", (pending
                         ? "连续自动认证失败已达上限；请人工确认门户页面。上次提交结果仍未确认，页面不会代为提交。"
                         : "连续自动认证失败已达上限；请人工确认门户页面。打开本页不会代为提交凭据。")
                     + (paused ? "自动恢复当前也已关闭。" : ""),
                     "按网络诊断指引人工确认；不要重复提交。"),
             ManualCause.MissingSettings =>
-                ("尚未保存设置", "AutoNet 还没有保存校园 Wi-Fi 或认证信息，不会发出认证请求。",
+                new("尚未保存设置", "AutoNet 还没有保存校园 Wi-Fi 或认证信息，不会发出认证请求。",
                     "请在设置中填写并保存校园 Wi-Fi 与账号密码；保存后后台会按策略尝试。"),
             ManualCause.MissingCredentials =>
-                ("需要保存认证信息", "后台没有可用的认证凭据，不会发出认证请求，也无法自动认证。",
+                new("需要保存认证信息", "后台没有可用的认证凭据，不会发出认证请求，也无法自动认证。",
                     "请在设置中填写并保存账号密码；保存后后台会按策略尝试。"),
             _ =>
-                ("需要人工处理", "自动提交已暂停或门户要求人工处理；继续自动提交不会解决问题。"
+                new("需要人工处理", "自动提交已暂停或门户要求人工处理；继续自动提交不会解决问题。"
                     + (paused ? "自动恢复当前也已关闭。" : ""),
                     "请按网络诊断的指引处理，必要时在门户页面人工确认。")
         };
@@ -324,7 +360,7 @@ internal static class AuthPageModel
             if (snapshot.SubmissionResolutionStorageFault) facts += "认证消解记录存储写入失败。";
             return "自动恢复已关闭；后台仅检测网络。" + facts + "本页不会提交凭据。";
         }
-        if (snapshot.State == "等待设置")
+        if (IsSettingsMissing(snapshot))
             return "后台尚未保存设置；本页不会提交凭据，也不会启动新的认证会话。";
         if (MissingCredentials(snapshot))
             return "后台没有可用的认证凭据，不会发出认证请求；本页只显示状态，不会提交凭据。";
@@ -353,22 +389,30 @@ internal static class AuthPageModel
         return "后台按协议认证运行；本页只显示状态，不代表发生过网页操作，打开或刷新本页不会提交凭据。";
     }
 
-    private static string HostTitle(AuthPageHostStatus status) => status switch
-    {
-        AuthPageHostStatus.Attached => "门户页面",
-        AuthPageHostStatus.RuntimeMissing => "浏览器运行时不可用",
-        AuthPageHostStatus.NetworkBoundaryUnavailable => "认证页网络边界未就绪",
-        AuthPageHostStatus.Failed => "门户页面加载失败",
-        _ => "门户页面尚未加载"
-    };
+    /// <summary>宿主状态对应的受控文案：标题、说明与空表面占位文本，全部集中在这一处映射。</summary>
+    internal readonly record struct AuthPageHostCopy(string Title, string Detail, string Placeholder);
 
-    private static string HostDetail(AuthPageHostStatus status) => status switch
+    /// <summary>
+    /// 宿主状态文案的单一来源：模型、生产骨架宿主、协调器与视图都从这里取，
+    /// 避免三处近似文案各自漂移。
+    /// </summary>
+    internal static AuthPageHostCopy HostCopyFor(AuthPageHostStatus status) => status switch
     {
-        AuthPageHostStatus.Attached => "已加载固定门户根地址；本页不填表、不提交，后台认证继续独立运行。",
-        AuthPageHostStatus.RuntimeMissing => "未检测到 Microsoft Edge WebView2 Runtime；认证页无法显示门户页面。安装运行时后可重试。",
-        AuthPageHostStatus.NetworkBoundaryUnavailable => "受控网络边界尚未接入，认证页不会连接门户，也不会回退直连。",
-        AuthPageHostStatus.Failed => "浏览器宿主未能加载门户页面；可手动重试，后台认证不受影响。",
-        _ => "打开本页会加载固定门户地址；本页不会填表或提交凭据。"
+        AuthPageHostStatus.Attached => new("门户页面",
+            "已加载固定门户根地址；本页不填表、不提交，后台认证继续独立运行。",
+            "浏览器宿主已附着，但没有可显示的表面。"),
+        AuthPageHostStatus.RuntimeMissing => new("浏览器运行时不可用",
+            "未检测到 Microsoft Edge WebView2 Runtime；认证页无法显示门户页面。安装运行时后可重试。",
+            "浏览器运行时缺失，无法显示门户页面。"),
+        AuthPageHostStatus.NetworkBoundaryUnavailable => new("认证页网络边界未就绪",
+            "受控网络边界尚未接入，认证页不会连接门户，也不会回退直连。",
+            "受控网络边界未接入，门户页面不会加载。"),
+        AuthPageHostStatus.Failed => new("门户页面加载失败",
+            "浏览器宿主未能加载门户页面；可手动重试，后台认证不受影响。",
+            "门户页面加载失败，可点击下方按钮重试。"),
+        _ => new("门户页面尚未加载",
+            "打开本页会加载固定门户地址；本页不会填表或提交凭据。",
+            "打开本页后在此显示门户页面；本页不会填表或提交凭据。")
     };
 
     private static string Fingerprint(AuthPageContent content) => string.Join("\u001f",

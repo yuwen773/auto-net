@@ -56,6 +56,18 @@
 - **QA 状态数统一为七种**：`QaEnvironment` 的枚举注释与 `AGENTS.md` 的 `qa-avalonia-auth.ps1` 描述由“六种/six-phase”改为“七种/seven-phase”，与 `QaAuthPage` 及 `AuthPageModel` 一致。
 - 验证：完整 Release 构建 0 警告 / 0 错误，全量回归 **468/468**；`scripts/qa-avalonia-auth.ps1` 复跑 **PASS**（`publish` / `auth-page-fixture` / `boundaries`），渲染跳过未影响切页与输入保留证据。
 
+## 六审修复（2026-10-30，Standards + Spec 复审）
+
+- **内嵌通道授予不再说成自动认证重试**：`AuthChannelRequested` 按 ADR-0015 只是启动意图，不含服务端已发布的重试节奏。投影改到“结果未知”，文案为“认证结果待确认”，不再出现“自动认证将在额度与退避条件满足后继续”；与提交待消解共用 `OutcomeUnknown` 相位，更细的区分留给 #39。新增回归钉住该映射，并保留“等待重试”对照。
+- **线程契约显式化**：`IAuthPageBrowserHost` 注明 `AttachAsync`/`SetVisible`/`Dispose`/`Surface` 必须在界面线程，`Snapshot` 可跨线程读取且必须不可变；`AuthPageCoordinator.Updated` 总是在界面线程触发。协调器新增可注入的界面线程调度器（默认同步，生产装配 `Dispatcher.UIThread`），`Update` 可从状态读取线程调用，附着在线程池完成时也经调度器回写，不再在后台线程改写 `current` 或触发事件。协调器仍不引用任何 UI 类型。新增回归验证调度前不生效、调度后才更新并触发事件（含异步附着）。
+- **验收条件 4 的机制可回归**：新增 `AuthPageRenderGate<TView>`（无 UI 依赖）承载“指纹相同跳过渲染、视图实例始终复用、切页只清指纹”的判定，`MainView` 改为使用它；新增回归用假视图验证相同内容重复投影不重建且保留输入、切页返回复用同一实例、内容变化才重新渲染。原 `host.Input` 断言没有任何代码路径会修改它，已移除。
+- **死代码清理**：删除 `ShellContent.LoadAsync` 中不可达的认证页分支（`ShellController.SelectAsync` 在认证页直接返回，不会进入该接缝）；删除 `AuthPageCoordinator` 无调用方的 `portal` 构造参数。
+- **`NextAttemptAction` 保留并说明**：它是 Core 状态契约的新增字段，但确有消费方——认证页只在动作为 `Authenticate` 时才把通用退避时间投影为“等待重试”，避免把 Wi-Fi 重连/主动断线退避误报为认证重试（五审回归已钉住）。因此保留字段，不改 ADR 体系。
+- **文案与映射收敛**：宿主状态文案（标题/说明/空表面占位）集中到 `AuthPageModel.HostCopyFor`，生产骨架宿主、协调器与视图不再各自维护近似字符串；状态卡文案改为 `AuthPageCopy` record，四个投影方法共用。
+- **状态来源统一**：联网判定改用 `reading.Display.Primary == Online`，不再从 `Direct` 原始字符串重新推导。`IsRecoveryPaused` 与“等待设置”保留状态串判定：`NetworkDisplayMap` 在状态串之前先看 `!Enabled`，会把服务缺省 `Enabled=false` 的“等待设置”“检测异常”快照映射成 `RecoveryPaused`，改用 `Display.Primary` 会破坏既有“不得误报暂停”的回归。
+- **文档如实化**：`docs/VALIDATION.md` 修正“其他既有 QA 脚本未改”的不实表述，列明 `qa-avalonia-shell.ps1`（四页→五页截图与导航计数）与 `qa-avalonia-accessibility.ps1`（`Down`→`Down*`、4→5 Tab/导航项、12→15 缩放记录）的同步改动及原因。
+- **测试名称与断言**：用例名由“五种状态”改为“七种状态”并补齐暂停/待确认标题；切页回归由只断类型改为断言实际 `Phase`/标题。
+
 ## QA 互斥接口（供 #41 统一集成）
 
 - 环境变量：`AUTONET_QA_MUTEX_SUFFIX`。
@@ -68,6 +80,7 @@
 
 - 前置 #29 的 GitHub 工单仍为 OPEN；基线 `4699c24` 已包含本地状态投影实现，相关回归在全量套件中通过，但这不代表远端验收、发布或实网结论。
 - 真实 WebView2 窗口、真实门户页面、TLS/重定向/新窗口/Service Worker 与允许列表代理：#38/#39 范围，未验证。
+- **工单归属缺口**：真实 WebView2 宿主的创建目前没有任何工单明确承接。唯一生产宿主是 `UnavailableAuthPageBrowserHost`（`Surface => null`，失败关闭）；#38 只承诺受控网络边界、#39 只承诺后台会话附着，都不包含“创建并承载真实 WebView2 控件”。本工单不补这一实现，需要单独建单承接。
 - 认证页与后台内嵌通道的同一会话附着：#39，未验证。
 - 真实校园网凭据提交、真实断网恢复与真实 UAC：需单独授权与现场验证。
 - 本轮改动已提交在 `codex/37-auth-page` 分支，未推送、未合并。

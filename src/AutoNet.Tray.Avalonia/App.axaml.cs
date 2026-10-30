@@ -271,7 +271,13 @@ public sealed class App : Application
         IAuthPageBrowserHost authHost = tray.Qa.Mode == QaMode.AuthPage
             ? new QaAuthPageHost()
             : AuthPageBrowserHostFactory.Production();
-        var authPage = new AuthPageCoordinator(authHost);
+        // 状态投影在读取线程上发起，协调器经此调度器把内容与事件交给界面线程；
+        // 已在界面线程时同步执行，避免 QA 驱动时多一次排队。
+        var authPage = new AuthPageCoordinator(authHost, action =>
+        {
+            if (Dispatcher.UIThread.CheckAccess()) action();
+            else Dispatcher.UIThread.Post(action);
+        });
         var shell = new ShellController(pipe, (page, token) =>
             page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener, authPage);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。

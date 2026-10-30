@@ -27,7 +27,7 @@ public partial class MainView : UserControl
     private DiagnosticsExporter? diagnosticsExporter;
     private AuthChannelLauncher? authChannelLauncher;
     private AuthPageCoordinator? authPage;
-    private AuthPageView? authView;
+    private readonly AuthPageRenderGate<AuthPageView> authGate = new();
     private DiagnosticsExportState? exportStateShown;
     private Func<ThemePreference>? themeProvider;
     private Action<ThemePreference>? themeSelectedHandler;
@@ -35,7 +35,6 @@ public partial class MainView : UserControl
     private DiagnosticsContent? diagnosticsShown;
     private LogsContent? logsShown;
     private SettingsContent? settingsShown;
-    private AuthPageContent? authShown;
     private bool technicalExpanded;
     private bool syncingSelection;
 
@@ -243,17 +242,16 @@ public partial class MainView : UserControl
             case AuthPageContent auth:
                 // 认证页（#37）：视图与浏览器表面只创建一次，状态刷新只更新文字与宿主表面。
                 // 切走再回来复用同一实例，因此不会重新导航，也不会丢失页面内已填内容。
-                // 指纹未变化时跳过重复渲染；切页会清空缓存，返回时仍会重新挂载同一实例。
-                if (authShown is { } shownAuth && shownAuth.ContentKey == auth.ContentKey) return;
-                authShown = auth;
+                // 指纹未变化时跳过重复渲染；切页会清空指纹缓存，返回时仍会重新渲染同一实例。
+                if (!authGate.ShouldRender(auth)) return;
                 ClearShown(except: auth);
-                authView ??= new AuthPageView(
+                var authView = authGate.View(() => new AuthPageView(
                     () => RunActionSafelyAsync(async () =>
                     {
                         if (authPage is { } coordinator) await coordinator.RetryAsync();
                         return true;
                     }),
-                    () => authPage?.Surface);
+                    () => authPage?.Surface));
                 authView.Render(auth);
                 pageHost.Content = authView.Root;
                 break;
@@ -271,7 +269,8 @@ public partial class MainView : UserControl
         if (!ReferenceEquals(except, diagnosticsShown)) diagnosticsShown = null;
         if (!ReferenceEquals(except, logsShown)) logsShown = null;
         if (!ReferenceEquals(except, settingsShown)) settingsShown = null;
-        if (!ReferenceEquals(except, authShown)) authShown = null;
+        // 认证页切走时只清指纹缓存，视图实例保留在渲染门里，返回时继续复用。
+        if (except is not AuthPageContent) authGate.Detach();
     }
 
     private async Task<bool> SelectDateAsync(string? date)

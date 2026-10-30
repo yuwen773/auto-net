@@ -134,18 +134,36 @@ internal sealed class AuthPageView
         retry.IsVisible = content.HostRetryVisible;
         // 受控降级时不显示旧宿主表面，并压缩宿主区高度，保证重试入口留在首屏。
         hostSlot.MinHeight = content.HostAvailable ? 360 : 140;
-        hostPlaceholder.Text = content.HostStatus switch
-        {
-            AuthPageHostStatus.Attached => "浏览器宿主已附着，但没有可显示的表面。",
-            AuthPageHostStatus.RuntimeMissing => "浏览器运行时缺失，无法显示门户页面。",
-            AuthPageHostStatus.NetworkBoundaryUnavailable => "受控网络边界未接入，门户页面不会加载。",
-            AuthPageHostStatus.Failed => "门户页面加载失败，可点击下方按钮重试。",
-            _ => "打开本页后在此显示门户页面；本页不会填表或提交凭据。"
-        };
+        // 宿主状态文案与模型共用同一映射（#37 审查：避免三处 switch 各自漂移）。
+        hostPlaceholder.Text = AuthPageModel.HostCopyFor(content.HostStatus).Placeholder;
 
         var surface = content.HostAvailable ? surfaceProvider() : null;
         if (ReferenceEquals(surface, surfaceShown)) return;
         surfaceShown = surface;
         hostSlot.Child = surface as Control ?? hostPlaceholder;
     }
+}
+
+/// <summary>
+/// 认证页渲染门（#37 验收条件 4）：决定一次内容投影是否需要重新渲染，并始终复用同一个视图实例。
+/// 纯逻辑、不依赖 Avalonia，因此可以用假视图直接回归“相同内容不重建、切页返回不丢输入”。
+/// </summary>
+internal sealed class AuthPageRenderGate<TView> where TView : class
+{
+    private TView? view;
+    private string? renderedKey;
+
+    /// <summary>指纹未变化时返回 false，调用方跳过本次渲染；内容变化时才返回 true。</summary>
+    public bool ShouldRender(AuthPageContent content)
+    {
+        if (renderedKey == content.ContentKey) return false;
+        renderedKey = content.ContentKey;
+        return true;
+    }
+
+    /// <summary>视图实例只在首次创建，之后的状态刷新与切页都复用同一实例。</summary>
+    public TView View(Func<TView> create) => view ??= create();
+
+    /// <summary>切到其他页面：只清指纹缓存、保留视图实例；返回认证页时会重新渲染同一实例。</summary>
+    public void Detach() => renderedKey = null;
 }

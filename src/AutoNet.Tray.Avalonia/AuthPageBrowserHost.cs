@@ -41,6 +41,11 @@ internal sealed record AuthPageHostSnapshot(
 /// 安全边界：本接口只有“加载固定门户根地址、显示/隐藏、销毁”三类能力，**没有**填表、
 /// 脚本执行或提交凭据的入口。打开、关闭、切换页面或刷新状态都不得触发导航或提交；
 /// 真实网络边界由 #38 接入，会话附着由 #39 接入，二者都不在本工单内声称完成。
+///
+/// 线程契约：<see cref="AttachAsync"/>、<see cref="SetVisible"/>、<see cref="Dispose"/> 与
+/// <see cref="Surface"/> 的读取必须在界面线程（由 <see cref="AuthPageCoordinator"/> 负责调度）；
+/// <see cref="Snapshot"/> 可从任意线程读取，实现必须返回不可变快照。真实 WebView2 宿主
+/// （#38/#39）依赖这一约束，不得在实现里假设其他线程。
 /// </summary>
 internal interface IAuthPageBrowserHost : IDisposable
 {
@@ -88,11 +93,11 @@ internal sealed class UnavailableAuthPageBrowserHost : IAuthPageBrowserHost
             return Task.FromResult(snapshot);
         }
 
-        snapshot = runtimeProbe()
-            ? new(AuthPageHostStatus.NetworkBoundaryUnavailable, AuthPageModel.PortalAddress, false,
-                "受控网络边界尚未接入，认证页不会连接门户，也不会回退直连。")
-            : new(AuthPageHostStatus.RuntimeMissing, AuthPageModel.PortalAddress, false,
-                "未检测到 Microsoft Edge WebView2 Runtime；认证页无法显示门户页面。安装运行时后可重试。");
+        // 文案与模型共用同一来源，避免宿主与页面各自维护近似说明。
+        var status = runtimeProbe()
+            ? AuthPageHostStatus.NetworkBoundaryUnavailable
+            : AuthPageHostStatus.RuntimeMissing;
+        snapshot = new(status, AuthPageModel.PortalAddress, false, AuthPageModel.HostCopyFor(status).Detail);
         return Task.FromResult(snapshot);
     }
 

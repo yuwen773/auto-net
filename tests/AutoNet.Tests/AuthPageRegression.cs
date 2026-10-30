@@ -4,8 +4,8 @@ using AutoNet.Core;
 using AutoNet.Tray.Avalonia;
 
 /// <summary>
-/// 认证页回归（迁移工单 #37）：导航单一来源、五种状态投影、打开/切页/最小化不导航或提交、
-/// 普通刷新不丢输入、运行时缺失/边界未就绪/加载失败的受控提示，以及宿主抽象的只读边界。
+/// 认证页回归（迁移工单 #37）：导航单一来源、七种状态投影、打开/切页/最小化不导航或提交、
+/// 普通刷新不丢输入、运行时缺失/边界未就绪/加载失败的受控提示、宿主抽象的只读边界与线程契约。
 /// 全部使用假宿主与隔离状态文件；不连接真实门户、不读取真实凭据、不安装 WebView2。
 /// </summary>
 internal static class AuthPageRegression
@@ -26,7 +26,7 @@ internal static class AuthPageRegression
                 "认证页说明未声明只读边界");
             Require(ShellPages.Default == ShellPage.Overview, "默认页必须为概览");
         })),
-        ("认证页回归：五种状态清楚区分且优先顺序稳定", () => Sync(() =>
+        ("认证页回归：七种状态清楚区分且优先顺序稳定", () => Sync(() =>
         {
             var online = Reading(Online());
             Require(AuthPageModel.PhaseFor(online) == AuthPagePhase.Online, "联网状态未识别");
@@ -69,15 +69,25 @@ internal static class AuthPageRegression
             Require(AuthPageModel.PhaseFor(Reading(Online() with { CredentialsBlocked = true, AuthenticationPersistentState = "SubmissionPending" })) ==
                 AuthPagePhase.Online, "联网时仍按认证暂停投影");
 
+            var paused = Reading(Online() with
+            {
+                Enabled = false, State = "已暂停恢复", Direct = "外网不可达或未知", Portal = "需认证",
+                Detail = "自动恢复已暂停；仅检测网络，不重连或认证。"
+            });
+            Require(AuthPageModel.PhaseFor(paused) == AuthPagePhase.Paused, "已暂停状态未识别");
+            Require(AuthPageModel.PhaseFor(Reading(null)) == AuthPagePhase.Unconfirmed, "待确认状态未识别");
+
             var titles = new[]
             {
                 AuthPageModel.From(online, AuthPageHostSnapshot.NotAttached).StatusTitle,
                 AuthPageModel.From(authenticated, AuthPageHostSnapshot.NotAttached).StatusTitle,
                 AuthPageModel.From(unknown, AuthPageHostSnapshot.NotAttached).StatusTitle,
                 AuthPageModel.From(waiting, AuthPageHostSnapshot.NotAttached).StatusTitle,
-                AuthPageModel.From(manual, AuthPageHostSnapshot.NotAttached).StatusTitle
+                AuthPageModel.From(manual, AuthPageHostSnapshot.NotAttached).StatusTitle,
+                AuthPageModel.From(paused, AuthPageHostSnapshot.NotAttached).StatusTitle,
+                AuthPageModel.From(Reading(null), AuthPageHostSnapshot.NotAttached).StatusTitle
             };
-            Require(titles.Distinct().Count() == 5, "五种状态标题未清楚区分：" + string.Join("、", titles));
+            Require(titles.Distinct().Count() == 7, "七种状态标题未清楚区分：" + string.Join("、", titles));
             Require(AuthPageModel.From(online, AuthPageHostSnapshot.NotAttached).PortalAddress == AuthPageModel.PortalAddress,
                 "页面未显示固定门户地址");
         })),
@@ -520,18 +530,113 @@ internal static class AuthPageRegression
             await coordinator.RetryAsync();
             Require(host.AttachCount == 1, "普通刷新、切页或最小化触发了重复导航：" + host.AttachCount);
         }),
-        ("认证页回归：普通刷新不重新导航且不丢已填内容", async () =>
+        ("认证页回归：普通刷新不重新导航且复用宿主表面", async () =>
         {
             var host = new FakeAuthHost();
             using var coordinator = new AuthPageCoordinator(host);
             coordinator.Update(Reading(Online()));
             await coordinator.EnsureAttachedAsync();
             var surface = coordinator.Surface;
-            host.Input = "已填写但未提交的测试内容";
             for (var i = 0; i < 5; i++) coordinator.Update(Reading(Online() with { Detail = "刷新 " + i }));
             Require(host.AttachCount == 1, "状态刷新触发了重新导航");
             Require(ReferenceEquals(surface, coordinator.Surface), "状态刷新替换了宿主表面");
-            Require(host.Input == "已填写但未提交的测试内容", "状态刷新清空了已填内容");
+        }),
+        ("认证页回归：相同内容重复投影复用视图且切页不丢输入", () => Sync(() =>
+        {
+            // 验收条件 4 的真正机制在渲染门：指纹未变时跳过渲染，视图实例始终复用。
+            var gate = new AuthPageRenderGate<FakeAuthView>();
+            var content = AuthPageModel.From(Reading(Online()), AuthPageHostSnapshot.NotAttached);
+            Require(gate.ShouldRender(content), "首次投影未触发渲染");
+            var view = gate.View(() => new FakeAuthView());
+            view.Render(content);
+            view.Input = "已填写但未提交的测试内容";
+
+            // 相同指纹重复投影：跳过渲染，实例与输入都不变。
+            for (var i = 0; i < 3; i++)
+            {
+                if (gate.ShouldRender(content)) view.Render(content);
+            }
+            Require(view.Renders == 1, "相同内容重复投影仍重建了页面");
+            Require(ReferenceEquals(view, gate.View(() => throw new Exception("相同内容不应重建视图"))),
+                "相同内容重复投影替换了视图实例");
+            Require(view.Input == "已填写但未提交的测试内容", "重复投影清空了已填内容");
+
+            // 切页只清指纹、保留实例；返回后重新渲染同一实例，输入仍在。
+            gate.Detach();
+            Require(gate.ShouldRender(content), "切页返回后未重新渲染");
+            Require(ReferenceEquals(view, gate.View(() => new FakeAuthView())), "切页返回后重建了视图实例");
+            view.Render(content);
+            Require(view.Input == "已填写但未提交的测试内容", "切页返回后丢失已填内容");
+
+            // 内容变化：必须重新渲染。
+            var changed = AuthPageModel.From(
+                Reading(Online() with { State = "已认证但外网不可达", Direct = "外网不可达或未知", Portal = "已认证" }),
+                AuthPageHostSnapshot.NotAttached);
+            Require(changed.ContentKey != content.ContentKey, "夹具内容指纹未变化");
+            Require(gate.ShouldRender(changed), "内容变化未触发重新渲染");
+            view.Render(changed);
+            Require(view.Renders == 3 && ReferenceEquals(view.Shown, changed), "内容变化后未渲染新内容");
+        })),
+        ("认证页回归：内嵌通道授予不被说成自动认证重试", () => Sync(() =>
+        {
+            // ADR-0015：通道授予只是启动意图，不是提交授权，也没有服务端已发布的重试节奏。
+            var channel = Reading(Online() with
+            {
+                State = "认证状态未知", Wifi = "已连接", Direct = "外网不可达或未知", Portal = "未知，不自动认证",
+                CredentialsBlocked = false, AuthenticationPersistentState = "Ready", AuthenticationFailure = "None",
+                AuthChannelMode = AuthChannelModes.Automatic, AuthChannelRequested = true
+            });
+            var content = AuthPageModel.From(channel, AuthPageHostSnapshot.NotAttached);
+            Require(content.Phase == AuthPagePhase.OutcomeUnknown, "通道授予未按结果未知投影：" + content.Phase);
+            Require(content.StatusTitle == "认证结果待确认", "通道授予标题不符：" + content.StatusTitle);
+            Require(!content.StatusExplanation.Contains("自动认证将在", StringComparison.Ordinal) &&
+                !content.StatusExplanation.Contains("重试节奏", StringComparison.Ordinal),
+                "通道授予被说成自动认证重试");
+            Require(content.StatusExplanation.Contains("启动意图", StringComparison.Ordinal) &&
+                content.StatusExplanation.Contains("不会提交凭据", StringComparison.Ordinal),
+                "通道授予未说明启动意图与只读边界");
+
+            var waiting = AuthPageModel.From(Reading(Online() with
+            {
+                State = "需要处理认证", Direct = "外网不可达或未知", Portal = "需认证",
+                CredentialsBlocked = false, AuthenticationPersistentState = "Ready"
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(waiting.Phase == AuthPagePhase.WaitingRetry, "对照快照未投影为等待重试");
+            Require(content.StatusTitle != waiting.StatusTitle, "通道授予与等待重试未区分");
+        })),
+        ("认证页回归：状态投影与附着结果经界面线程调度后才生效", async () =>
+        {
+            var host = new FakeAuthHost();
+            var pending = new Queue<Action>();
+            using var coordinator = new AuthPageCoordinator(host, pending.Enqueue);
+            var raised = 0;
+            AuthPageContent? last = null;
+            coordinator.Updated += content => { raised++; last = content; };
+
+            var returned = coordinator.Update(Reading(Online()));
+            Require(raised == 0, "状态投影未调度到界面线程就触发了 Updated");
+            Require(pending.Count == 1, "状态投影未交给注入的界面线程调度器");
+            Require(coordinator.Current.Phase == AuthPagePhase.Unconfirmed, "调度前内容已被改写");
+            Require(returned.Phase == AuthPagePhase.Unconfirmed, "调度前返回了尚未应用的内容");
+
+            pending.Dequeue()();
+            Require(raised == 1 && last is { Phase: AuthPagePhase.Online }, "界面线程调度后未更新内容或未触发事件");
+            Require(coordinator.Current.Phase == AuthPagePhase.Online, "界面线程调度后内容未应用");
+
+            // 附着在线程池上完成时同样不能在后台线程改写状态或触发事件。
+            var asyncHost = new AsyncFakeAuthHost();
+            var attachQueue = new Queue<Action>();
+            using var page = new AuthPageCoordinator(asyncHost, attachQueue.Enqueue);
+            var attachRaised = 0;
+            page.Updated += _ => attachRaised++;
+            var attach = page.EnsureAttachedAsync();
+            asyncHost.Complete();
+            await attach;
+            Require(attachRaised == 0, "附着完成未调度到界面线程就触发了事件");
+            Require(attachQueue.Count > 0, "附着完成未交给界面线程调度器");
+            while (attachQueue.Count > 0) attachQueue.Dequeue()();
+            Require(attachRaised >= 1 && page.Current.HostStatus == AuthPageHostStatus.Attached,
+                "界面线程调度后未投影附着结果");
         }),
         ("认证页回归：切页、最小化不增加导航且状态读取继续", async () =>
         {
@@ -561,7 +666,8 @@ internal static class AuthPageRegression
                 await controller.SelectAsync(ShellPage.Authentication);
                 await Task.Delay(50);
                 Require(host.AttachCount == 1, "切页或最小化触发了重复附着：" + host.AttachCount);
-                Require(controller.Content is AuthPageContent, "切回认证页后内容未应用");
+                Require(controller.Content is AuthPageContent { Phase: AuthPagePhase.Online, StatusTitle: "已联网" },
+                    "切回认证页后内容未应用");
             }
             finally { Directory.Delete(directory, recursive: true); }
         }),
@@ -790,8 +896,6 @@ internal static class AuthPageRegression
 
         public List<Uri> Addresses { get; } = [];
 
-        public string Input { get; set; } = "";
-
         public void Simulate(AuthPageHostSnapshot value) => snapshot = value;
 
         public Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default)
@@ -810,6 +914,47 @@ internal static class AuthPageRegression
         public void SetVisible(bool visible) { }
 
         public void Dispose() { }
+    }
+
+    /// <summary>附着在线程池上异步完成的假宿主：用于验证协调器把结果调度回界面线程。</summary>
+    private sealed class AsyncFakeAuthHost : IAuthPageBrowserHost
+    {
+        private readonly TaskCompletionSource<AuthPageHostSnapshot> completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private AuthPageHostSnapshot snapshot = AuthPageHostSnapshot.NotAttached;
+
+        public object? Surface { get; } = new object();
+
+        public AuthPageHostSnapshot Snapshot => snapshot;
+
+        public void Complete()
+        {
+            snapshot = new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true, "夹具：异步附着完成。");
+            completion.SetResult(snapshot);
+        }
+
+        public Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default) =>
+            completion.Task;
+
+        public void SetVisible(bool visible) { }
+
+        public void Dispose() { }
+    }
+
+    /// <summary>渲染门的假视图：只记录渲染次数与最后一次内容，并保留“已填输入”。</summary>
+    private sealed class FakeAuthView
+    {
+        public int Renders { get; private set; }
+
+        public AuthPageContent? Shown { get; private set; }
+
+        public string Input { get; set; } = "";
+
+        public void Render(AuthPageContent content)
+        {
+            Renders++;
+            Shown = content;
+        }
     }
 
     private static Task Sync(Action action) { action(); return Task.CompletedTask; }

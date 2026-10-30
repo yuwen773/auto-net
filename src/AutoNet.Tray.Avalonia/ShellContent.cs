@@ -18,15 +18,7 @@ internal static class ShellContent
     {
         cancellationToken.ThrowIfCancellationRequested();
         var info = ShellPages.Info(page);
-        if (page == ShellPage.Authentication)
-        {
-            // 认证页由浏览器宿主承载；此处只保留受控说明，不创建浏览器、不读取任何配置。
-            return Task.FromResult<PageContent>(new PageScaffold(
-                info.Page,
-                info.Name,
-                info.Description,
-                "认证页由浏览器宿主承载；打开本页不会填表或提交凭据，后台认证继续独立运行。"));
-        }
+        // 认证页在 ShellController.SelectAsync 中直接投影并交给浏览器宿主，不会到达本接缝。
         return Task.FromResult<PageContent>(new PageScaffold(
             info.Page,
             info.Name,

@@ -9,11 +9,17 @@ namespace AutoNet.Tray.Avalonia;
 /// - 只有页面首次打开或用户明确重试才调用 <see cref="IAuthPageBrowserHost.AttachAsync"/>；
 ///   同一地址重复附着由宿主自身去重。
 /// - 宿主失败被转换为受控状态，异常不逃逸到界面事件循环。
+///
+/// 线程契约：<see cref="Update"/> 可从任意线程调用（状态管道在读取线程上回调），它会把
+/// 投影与 <see cref="Updated"/> 交给注入的界面线程调度器；<see cref="EnsureAttachedAsync"/>、
+/// <see cref="RetryAsync"/>、<see cref="SetPageVisible"/>、<see cref="SetWindowVisible"/> 与
+/// <see cref="Dispose"/> 必须在界面线程调用，因此宿主只会收到界面线程上的
+/// <c>AttachAsync</c>/<c>SetVisible</c>/<c>Dispose</c>。
 /// </summary>
 internal sealed class AuthPageCoordinator : IDisposable
 {
     private readonly IAuthPageBrowserHost host;
-    private readonly Uri portal;
+    private readonly Action<Action> dispatch;
     private StatusReading? lastReading;
     private AuthPageHostSnapshot? failureOverride;
     private AuthPageHostSnapshot? failureObserved;
@@ -23,10 +29,14 @@ internal sealed class AuthPageCoordinator : IDisposable
     private bool windowVisible = true;
     private bool disposed;
 
-    public AuthPageCoordinator(IAuthPageBrowserHost host, Uri? portal = null)
+    /// <param name="dispatch">
+    /// 界面线程调度器。默认同步执行，便于无 UI 的回归；生产装配传入 Avalonia 的
+    /// <c>Dispatcher.UIThread</c>。协调器自身不引用任何 UI 类型。
+    /// </param>
+    public AuthPageCoordinator(IAuthPageBrowserHost host, Action<Action>? dispatch = null)
     {
         this.host = host;
-        this.portal = portal ?? new Uri(AuthPageModel.PortalAddress);
+        this.dispatch = dispatch ?? (action => action());
         current = AuthPageModel.From(null, host.Snapshot);
     }
 
@@ -38,16 +48,23 @@ internal sealed class AuthPageCoordinator : IDisposable
     /// <summary>宿主界面表面；未就绪时为 null。模型不读取它。</summary>
     public object? Surface => host.Surface;
 
-    /// <summary>页面内容变化（状态投影或宿主附着完成）；由壳调度到界面线程。</summary>
+    /// <summary>页面内容变化（状态投影或宿主附着完成）；总是在界面线程触发。</summary>
     public event Action<AuthPageContent>? Updated;
 
-    /// <summary>重新投影状态；不触发导航或提交。</summary>
+    /// <summary>
+    /// 重新投影状态；不触发导航或提交。可在任意线程调用：投影与事件都经界面线程调度器执行，
+    /// 因此返回的可能是调度前的旧内容（壳只依赖 <see cref="Updated"/>）。
+    /// </summary>
     public AuthPageContent Update(StatusReading? reading)
     {
-        lastReading = reading;
-        current = AuthPageModel.From(reading, Snapshot());
-        if (!disposed) Updated?.Invoke(current);
-        return current;
+        var content = current;
+        dispatch(() =>
+        {
+            lastReading = reading;
+            content = current = AuthPageModel.From(reading, Snapshot());
+            if (!disposed) Updated?.Invoke(current);
+        });
+        return content;
     }
 
     /// <summary>
@@ -104,27 +121,41 @@ internal sealed class AuthPageCoordinator : IDisposable
     {
         try
         {
-            await host.AttachAsync(portal, cancellationToken).ConfigureAwait(false);
-            current = AuthPageModel.From(lastReading, Snapshot());
+            await host.AttachAsync(new Uri(AuthPageModel.PortalAddress), cancellationToken).ConfigureAwait(false);
+            return Publish(() => AuthPageModel.From(lastReading, Snapshot()));
         }
         catch (OperationCanceledException)
         {
-            // 取消不是失败：保留当前投影，下一次打开页面仍可附着。
-            attachAttempted = false;
+            // 取消不是失败：保留当前投影，下一次打开页面仍可附着。状态只在界面线程上改写。
+            dispatch(() => attachAttempted = false);
         }
         catch (Exception)
         {
             // 受控失败：只披露宿主失败分类，不携带异常文本、URL 或页面内容。
-            failureObserved = host.Snapshot;
-            failureOverride = new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false,
-                "浏览器宿主未能完成加载；可手动重试，后台认证不受影响。");
-            current = AuthPageModel.From(lastReading, failureOverride);
-        }
-        finally
-        {
-            if (!disposed) Updated?.Invoke(current);
+            return Publish(() =>
+            {
+                failureObserved = host.Snapshot;
+                failureOverride = new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false,
+                    AuthPageModel.HostCopyFor(AuthPageHostStatus.Failed).Detail);
+                return AuthPageModel.From(lastReading, failureOverride);
+            });
         }
         return current;
+    }
+
+    /// <summary>
+    /// 在界面线程上应用一次投影并触发 <see cref="Updated"/>；附着可能在线程池上完成，
+    /// 因此这里不能直接改写状态。返回调度前的旧内容（同步调度时即为新内容）。
+    /// </summary>
+    private AuthPageContent Publish(Func<AuthPageContent> project)
+    {
+        var content = current;
+        dispatch(() =>
+        {
+            content = current = project();
+            if (!disposed) Updated?.Invoke(current);
+        });
+        return content;
     }
 
     private void ApplyVisibility() => host.SetVisible(pageVisible && windowVisible);
