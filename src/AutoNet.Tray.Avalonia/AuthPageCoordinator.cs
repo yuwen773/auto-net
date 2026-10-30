@@ -5,9 +5,11 @@ namespace AutoNet.Tray.Avalonia;
 ///
 /// 关键不变量：
 /// - 状态刷新只重新投影文案，**不**调用宿主导航；因此普通轮询不会重建页面或丢输入。
+/// - 每次状态刷新先让宿主核对后台会话（#39）：会话进行中不保留第二个浏览器，会话结束后
+///   只对本页打开过的情况恢复一次只读附着，不重放页面操作。
 /// - 打开、关闭、切换页面与最小化只改变宿主可见性，**不**导航、不提交。
-/// - 只有页面首次打开或用户明确重试才调用 <see cref="IAuthPageBrowserHost.AttachAsync"/>；
-///   同一地址重复附着由宿主自身去重。
+/// - 只有页面首次打开、用户明确重试，或通道会话结束后恢复一个成功附着过的页面，才调用
+///   <see cref="IAuthPageBrowserHost.AttachAsync"/>；同一地址重复附着由宿主自身去重。
 /// - 宿主失败被转换为受控状态，异常不逃逸到界面事件循环。
 ///
 /// 线程契约：<see cref="Update"/> 可从任意线程调用（状态管道在读取线程上回调），它会把
@@ -25,6 +27,8 @@ internal sealed class AuthPageCoordinator : IDisposable
     private AuthPageHostSnapshot? failureObserved;
     private AuthPageContent current;
     private bool attachAttempted;
+    // 只有成功附着过才允许会话结束后自动恢复；受控失败仍要求用户显式重试。
+    private bool hadAttached;
     private bool pageVisible;
     private bool windowVisible = true;
     private bool disposed;
@@ -61,10 +65,42 @@ internal sealed class AuthPageCoordinator : IDisposable
         dispatch(() =>
         {
             lastReading = reading;
+            // 先核对后台会话：会话开始时宿主会丢弃自己的浏览器与代理，只投影会话状态。
+            // 核对失败不阻断投影：保留上一次状态，下一次刷新再试。
+            if (!disposed)
+            {
+                try { host.Refresh(); }
+                catch (Exception) { }
+            }
             content = current = AuthPageModel.From(reading, Snapshot());
+            NoteHostState();
             if (!disposed) Updated?.Invoke(current);
+            ResumeAfterChannelSession();
         });
         return content;
+    }
+
+    /// <summary>
+    /// 记录“本页曾经成功附着过”：只有它才允许会话结束后自动恢复。受控失败会清掉这个事实，
+    /// 未附着与会话进行中都不改变它——前者是恢复的起点，后者不是失败。
+    /// </summary>
+    private void NoteHostState()
+    {
+        if (host.Snapshot.Attached) hadAttached = true;
+        else if (host.Snapshot.Status is AuthPageHostStatus.RuntimeMissing
+            or AuthPageHostStatus.NetworkBoundaryUnavailable or AuthPageHostStatus.Failed)
+            hadAttached = false;
+    }
+
+    /// <summary>
+    /// 后台通道会话结束（工单 #39）：宿主回到未附着时，只有成功附着过的页面才恢复一次只读附着；
+    /// 从未打开过、或上次附着受控失败的页面都不会被自动拉起。恢复不重放页面操作，也不提交凭据。
+    /// </summary>
+    private void ResumeAfterChannelSession()
+    {
+        if (disposed || !hadAttached || host.Snapshot.Status != AuthPageHostStatus.NotAttached) return;
+        attachAttempted = false;
+        _ = EnsureAttachedAsync();
     }
 
     /// <summary>
@@ -122,7 +158,11 @@ internal sealed class AuthPageCoordinator : IDisposable
         try
         {
             await host.AttachAsync(new Uri(AuthPageModel.PortalAddress), cancellationToken).ConfigureAwait(false);
-            return Publish(() => AuthPageModel.From(lastReading, Snapshot()));
+            return Publish(() =>
+            {
+                NoteHostState();
+                return AuthPageModel.From(lastReading, Snapshot());
+            });
         }
         catch (OperationCanceledException)
         {
@@ -137,6 +177,7 @@ internal sealed class AuthPageCoordinator : IDisposable
                 failureObserved = host.Snapshot;
                 failureOverride = new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false,
                     AuthPageModel.HostCopyFor(AuthPageHostStatus.Failed).Detail);
+                hadAttached = false;
                 return AuthPageModel.From(lastReading, failureOverride);
             });
         }

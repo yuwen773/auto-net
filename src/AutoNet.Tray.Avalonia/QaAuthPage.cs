@@ -80,6 +80,9 @@ internal sealed class QaAuthPageHost : IAuthPageBrowserHost
         else VisibleFalseCount++;
     }
 
+    /// <summary>QA 假宿主没有真实会话可核对：状态只由 <see cref="SimulateForQa"/> 与附着决定。</summary>
+    public void Refresh() { }
+
     public void Dispose() { }
 
     /// <summary>QA 驱动输入后核验刷新未覆盖已填内容。</summary>

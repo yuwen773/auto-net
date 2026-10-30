@@ -11,6 +11,8 @@ internal enum AuthPageHostStatus
     NotAttached,
     /// <summary>已加载固定门户根地址。</summary>
     Attached,
+    /// <summary>后台内嵌认证通道会话进行中：本页只投影该会话的状态，不创建第二个浏览器（工单 #39）。</summary>
+    ChannelSessionActive,
     /// <summary>本机没有可用的浏览器运行时。</summary>
     RuntimeMissing,
     /// <summary>受控网络边界不可用（校园 Wi-Fi 未就绪或允许列表代理未能启动），宿主拒绝连接门户（绝不回退直连）。</summary>
@@ -30,6 +32,11 @@ internal sealed record AuthPageHostSnapshot(
 {
     public static readonly AuthPageHostSnapshot NotAttached =
         new(AuthPageHostStatus.NotAttached, AuthPageModel.PortalAddress, false, "");
+
+    /// <summary>后台通道会话进行中的受控快照；文案与模型同源，避免各宿主各写一份。</summary>
+    public static AuthPageHostSnapshot ChannelSession() => new(
+        AuthPageHostStatus.ChannelSessionActive, AuthPageModel.PortalAddress, false,
+        AuthPageModel.HostCopyFor(AuthPageHostStatus.ChannelSessionActive).Detail);
 }
 
 /// <summary>
@@ -38,12 +45,12 @@ internal sealed record AuthPageHostSnapshot(
 /// 页面模型只依赖本接口，不依赖 WebView2 或其他浏览器类型，因此回归可用假宿主验证
 /// 打开、关闭、切换、最小化与刷新行为，而不需要安装浏览器运行时。
 ///
-/// 安全边界：本接口只有“加载固定门户根地址、显示/隐藏、销毁”三类能力，**没有**填表、
+/// 安全边界：本接口只有“加载固定门户根地址、显示/隐藏、核对会话、销毁”四类能力，**没有**填表、
 /// 脚本执行或提交凭据的入口。打开、关闭、切换页面或刷新状态都不得触发导航或提交；
-/// 真实网络边界由 #38 接入，会话附着由 #39 接入，二者都不在本工单内声称完成。
+/// 真实网络边界由 #38 接入，同一会话附着由 #39 接入。
 ///
-/// 线程契约：<see cref="AttachAsync"/>、<see cref="SetVisible"/>、<see cref="Dispose"/> 与
-/// <see cref="Surface"/> 的读取必须在界面线程（由 <see cref="AuthPageCoordinator"/> 负责调度）；
+/// 线程契约：<see cref="AttachAsync"/>、<see cref="Refresh"/>、<see cref="SetVisible"/>、<see cref="Dispose"/>
+/// 与 <see cref="Surface"/> 的读取必须在界面线程（由 <see cref="AuthPageCoordinator"/> 负责调度）；
 /// <see cref="Snapshot"/> 可从任意线程读取，实现必须返回不可变快照。真实 WebView2 宿主
 /// （#38/#39）依赖这一约束，不得在实现里假设其他线程。
 /// </summary>
@@ -58,8 +65,16 @@ internal interface IAuthPageBrowserHost : IDisposable
     /// <summary>
     /// 只加载固定门户根地址。同一地址重复调用不得重新导航；调用方不得传入其他来源。
     /// 不抛出未受控异常：运行时缺失、边界未就绪与加载失败都转成受控状态。
+    /// 后台会话进行中时只投影会话状态，不创建第二个浏览器。
     /// </summary>
     Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 重新核对后台会话状态（工单 #39）：会话开始后不再保留本页自己的浏览器与代理，只投影
+    /// “内嵌通道会话进行中”；会话结束后回到未附着，由协调器决定是否恢复只读附着。
+    /// 只改宿主状态，不导航、不提交。
+    /// </summary>
+    void Refresh();
 
     /// <summary>页面是否可见；仅影响呈现，不触发导航、提交或后台状态变更。</summary>
     void SetVisible(bool visible);
@@ -106,17 +121,24 @@ internal sealed class UnavailableAuthPageBrowserHost : IAuthPageBrowserHost
     /// <summary>可见性只用于未来的真实宿主；当前实现没有可显示的浏览器表面。</summary>
     public void SetVisible(bool visible) { }
 
+    /// <summary>本实现不创建浏览器，也没有会话可核对；状态只由附着结果决定。</summary>
+    public void Refresh() { }
+
     public void Dispose() { }
 }
 
 /// <summary>
-/// 浏览器宿主的生产装配（工单 #38）：真实 WebView2 宿主 + 允许列表代理。
+/// 浏览器宿主的生产装配（工单 #38 / #39）：真实 WebView2 宿主 + 允许列表代理。
 /// <paramref name="readLink"/> 从可信状态投影读取校园网卡；读不到时宿主失败关闭，绝不回退直连。
+/// <paramref name="channelSessionActive"/> 报告后台内嵌认证通道是否正在进行（#39）；会话期间
+/// 宿主不创建第二个浏览器。
 /// </summary>
 internal static class AuthPageBrowserHostFactory
 {
-    public static IAuthPageBrowserHost Production(Func<WifiLink?> readLink) =>
-        new AuthPageWebViewHost(readLink, AuthPageBrowserRuntime.IsWebView2RuntimePresent);
+    public static IAuthPageBrowserHost Production(
+        Func<WifiLink?> readLink, Func<bool>? channelSessionActive = null) =>
+        new AuthPageWebViewHost(readLink, AuthPageBrowserRuntime.IsWebView2RuntimePresent,
+            channelSessionActive: channelSessionActive);
 }
 
 /// <summary>

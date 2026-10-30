@@ -1,3 +1,4 @@
+using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using AutoNet.Core;
@@ -759,6 +760,7 @@ internal static class AuthPageRegression
                 Require(!methods.Any(name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase)),
                     "认证页宿主抽象包含提交类入口：" + forbidden);
             Require(methods.Contains(nameof(IAuthPageBrowserHost.AttachAsync)), "宿主抽象缺少受控附着入口");
+            Require(methods.Contains(nameof(IAuthPageBrowserHost.Refresh)), "宿主抽象缺少会话核对入口");
             Require(methods.Contains(nameof(IAuthPageBrowserHost.SetVisible)), "宿主抽象缺少可见性入口");
         })),
         ("认证页回归：校园 Wi-Fi 未就绪时不声称继续只读复检", () => Sync(() =>
@@ -854,7 +856,157 @@ internal static class AuthPageRegression
             }), AuthPageHostSnapshot.NotAttached);
             Require(content.Phase == AuthPagePhase.OutcomeUnknown, "Detail 缺失时未按提交结果未知投影");
             Require(content.ContentKey.Length > 0 && content.BackgroundNote.Length > 0, "Detail 缺失时投影为空");
-        }))
+        })),
+        ("认证页会话回归：通道会话进行中真实宿主不创建第二个浏览器", async () =>
+        {
+            var sessionActive = false;
+            var probes = 0;
+            var links = 0;
+            var proxies = 0;
+            using var host = new AuthPageWebViewHost(
+                () => { links++; return Link(); },
+                () => { probes++; return true; },
+                (link, job) => { proxies++; return AuthChannelProxy.StartAsync(link, job); },
+                () => sessionActive);
+            using var coordinator = new AuthPageCoordinator(host);
+            coordinator.Update(Reading(Online()));
+            await coordinator.EnsureAttachedAsync();
+            Require(host.Snapshot.Status == AuthPageHostStatus.Attached, "首次附着未进入已附着：" + host.Snapshot.Status);
+            Require(proxies == 1, "首次附着未启动代理");
+
+            // 后台内嵌通道会话开始：本页拆掉自己的代理与浏览器，只投影会话状态。
+            sessionActive = true;
+            coordinator.Update(Reading(Online()));
+            Require(host.Snapshot.Status == AuthPageHostStatus.ChannelSessionActive,
+                "通道会话进行中未投影会话状态：" + host.Snapshot.Status);
+            Require(coordinator.Current is
+                { HostStatus: AuthPageHostStatus.ChannelSessionActive, HostTitle: "内嵌通道会话进行中" },
+                "页面未投影会话状态：" + coordinator.Current.HostTitle);
+            Require(!coordinator.Current.HostAvailable && !coordinator.Current.HostRetryVisible,
+                "会话状态被当成已附着或可重试失败");
+
+            // 会话进行中再次附着：既不检查运行时、不读网卡，也不启动第二个代理。
+            var (probesBefore, linksBefore, proxiesBefore) = (probes, links, proxies);
+            await coordinator.RetryAsync();
+            Require(host.Snapshot.Status == AuthPageHostStatus.ChannelSessionActive, "会话进行中重试改写了宿主状态");
+            Require(probes == probesBefore && links == linksBefore && proxies == proxiesBefore,
+                "会话进行中仍检查运行时、读取网卡或启动代理");
+
+            // 会话结束：宿主回到未附着，协调器只恢复一次只读附着，不重复重建。
+            sessionActive = false;
+            coordinator.Update(Reading(Online()));
+            await WaitUntilAsync(() => host.Snapshot.Status == AuthPageHostStatus.Attached);
+            Require(host.Snapshot.Status == AuthPageHostStatus.Attached, "会话结束后未恢复只读附着：" + host.Snapshot.Status);
+            Require(proxies == proxiesBefore + 1, "会话结束后未重建唯一代理：" + proxies);
+            coordinator.Update(Reading(Online()));
+            // 否定断言：留出足够时间让错误的重建暴露出来。
+            await Task.Delay(50);
+            Require(proxies == proxiesBefore + 1, "重复刷新重建了代理：" + proxies);
+        }),
+        ("认证页会话回归：受控附着失败后不因会话结束自动重试", async () =>
+        {
+            var sessionActive = false;
+            var probes = 0;
+            using var host = new AuthPageWebViewHost(
+                Link,
+                () => { probes++; return false; },
+                (link, job) => throw new InvalidOperationException("运行时缺失时不应启动代理"),
+                () => sessionActive);
+            using var coordinator = new AuthPageCoordinator(host);
+            coordinator.Update(Reading(Online()));
+            await coordinator.EnsureAttachedAsync();
+            Require(host.Snapshot.Status == AuthPageHostStatus.RuntimeMissing,
+                "受控失败未进入运行时缺失：" + host.Snapshot.Status);
+            Require(probes == 1, "受控失败未检查运行时");
+
+            // 通道会话开始再结束：受控失败仍要求用户显式重试，不能被会话结束顺手重试。
+            sessionActive = true;
+            coordinator.Update(Reading(Online()));
+            Require(host.Snapshot.Status == AuthPageHostStatus.ChannelSessionActive, "会话开始未投影会话状态");
+            sessionActive = false;
+            coordinator.Update(Reading(Online()));
+            Require(host.Snapshot.Status == AuthPageHostStatus.NotAttached,
+                "会话结束未回到未附着：" + host.Snapshot.Status);
+            Require(probes == 1, "会话结束自动重试了受控失败的附着：" + probes);
+        }),
+        ("认证页会话回归：从未打开过的页面不因后台会话凭空附着", async () =>
+        {
+            var host = new SessionAuthHost();
+            using var coordinator = new AuthPageCoordinator(host);
+            host.SessionActive = true;
+            coordinator.Update(Reading(Online()));
+            Require(coordinator.Current.HostStatus == AuthPageHostStatus.ChannelSessionActive, "未打开页面未投影会话状态");
+            Require(host.AttachCount == 0, "未打开页面在会话中创建了浏览器");
+
+            host.SessionActive = false;
+            coordinator.Update(Reading(Online()));
+            Require(coordinator.Current.HostStatus == AuthPageHostStatus.NotAttached,
+                "会话结束后为未打开的页面凭空附着：" + coordinator.Current.HostStatus);
+            Require(host.AttachCount == 0, "会话结束后为未打开的页面启动了浏览器");
+
+            await coordinator.EnsureAttachedAsync();
+            Require(host.AttachCount == 1 && coordinator.Current.HostStatus == AuthPageHostStatus.Attached,
+                "打开页面后未正常附着");
+        }),
+        ("认证页会话回归：会话期间切页与最小化不改变会话投影", () => Sync(() =>
+        {
+            var host = new SessionAuthHost();
+            using var coordinator = new AuthPageCoordinator(host);
+            coordinator.Update(Reading(Online()));
+            host.SessionActive = true;
+            coordinator.Update(Reading(Online()));
+            Require(coordinator.Current.HostStatus == AuthPageHostStatus.ChannelSessionActive, "会话状态未投影");
+            var key = coordinator.Current.ContentKey;
+
+            coordinator.SetPageVisible(false);
+            coordinator.SetWindowVisible(false);
+            coordinator.Update(Reading(Online()));
+            coordinator.SetWindowVisible(true);
+            coordinator.SetPageVisible(true);
+            Require(coordinator.Current.HostStatus == AuthPageHostStatus.ChannelSessionActive,
+                "切页或最小化改变了会话投影");
+            Require(coordinator.Current.ContentKey == key, "切页或最小化改变了页面内容");
+            Require(host.VisibleCalls == 4, "可见性没有完整传给宿主：" + host.VisibleCalls);
+        })),
+        ("认证页会话回归：会话状态与协议认证的说明互不冒充", async () =>
+        {
+            var copy = AuthPageModel.HostCopyFor(AuthPageHostStatus.ChannelSessionActive);
+            Require(copy.Title == "内嵌通道会话进行中", "会话状态标题不符：" + copy.Title);
+            Require(copy.Detail.Contains("不会另起", StringComparison.Ordinal), "会话状态未声明不另起会话");
+            Require(!copy.Detail.Contains("已加载", StringComparison.Ordinal), "会话状态被说成已加载页面");
+
+            var content = AuthPageModel.From(Reading(Online()),
+                new(AuthPageHostStatus.ChannelSessionActive, AuthPageModel.PortalAddress, false, ""));
+            Require(content.HostTitle == copy.Title && content.HostDetail == copy.Detail, "会话状态文案未走单一来源");
+            Require(!content.HostAvailable && !content.HostRetryVisible, "会话状态被当成已附着或可重试失败");
+            Require(content.BackgroundNote.Contains("内嵌认证通道会话进行中", StringComparison.Ordinal) &&
+                !content.BackgroundNote.Contains("按协议认证运行", StringComparison.Ordinal),
+                "通道会话进行中仍声称后台按协议认证运行：" + content.BackgroundNote);
+
+            // 协议载体：后台按协议认证运行，页面只投影状态，不声称发生过网页操作。
+            var protocolReading = Reading(Online() with
+            {
+                State = "需要处理认证", Direct = "外网不可达或未知", Portal = "需认证",
+                AuthChannelMode = AuthChannelModes.ManualOnly, AuthChannelRequested = false
+            });
+            var protocol = AuthPageModel.From(protocolReading, AuthPageHostSnapshot.NotAttached);
+            Require(protocol.BackgroundNote.Contains("协议认证", StringComparison.Ordinal) &&
+                protocol.BackgroundNote.Contains("不代表发生过网页操作", StringComparison.Ordinal),
+                "协议认证说明缺失或被改成网页操作");
+
+            // 两条载体的附着与投影差异：协议认证下页面照常附着固定门户地址，但仍只投影状态。
+            var host = new FakeAuthHost();
+            using var coordinator = new AuthPageCoordinator(host);
+            coordinator.Update(protocolReading);
+            await coordinator.EnsureAttachedAsync();
+            Require(host.AttachCount == 1 && coordinator.Current.HostStatus == AuthPageHostStatus.Attached,
+                "协议认证下页面未附着固定门户地址");
+            Require(host.Addresses is [{ } address] && address.ToString() == AuthPageModel.PortalAddress,
+                "协议认证下页面附着了其他地址");
+            Require(coordinator.Current.BackgroundNote.Contains("不代表发生过网页操作", StringComparison.Ordinal) &&
+                !coordinator.Current.BackgroundNote.Contains("内嵌认证通道会话进行中", StringComparison.Ordinal),
+                "协议载体被说成通道会话或网页操作：" + coordinator.Current.BackgroundNote);
+        })
     ];
 
     private static StatusReading Reading(StatusSnapshot? snapshot, TimeSpan? age = null)
@@ -865,6 +1017,10 @@ internal static class AuthPageRegression
         return new StatusReading(snapshot, NetworkDisplayMap.Map(snapshot, effectiveAge), valid,
             valid && NetworkDisplayMap.IsFresh(effectiveAge), effectiveAge, now);
     }
+
+    /// <summary>已就绪的校园网卡夹具：只含文档地址，不触碰真实网卡。</summary>
+    private static WifiLink Link() =>
+        new(true, null, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
 
     private static StatusSnapshot Online() => new()
     {
@@ -913,7 +1069,51 @@ internal static class AuthPageRegression
 
         public void SetVisible(bool visible) { }
 
+        /// <summary>本夹具没有后台会话：核对不改变宿主状态。</summary>
+        public void Refresh() { }
+
         public void Dispose() { }
+    }
+
+    /// <summary>
+    /// 模拟后台内嵌认证通道的假宿主（工单 #39）：会话开始时丢弃本页的附着状态，只保留
+    /// “内嵌通道会话进行中”；会话结束时回到未附着，由协调器决定是否恢复只读附着。
+    /// </summary>
+    private sealed class SessionAuthHost : IAuthPageBrowserHost
+    {
+        private AuthPageHostSnapshot snapshot = AuthPageHostSnapshot.NotAttached;
+
+        public bool SessionActive { get; set; }
+
+        public int AttachCount { get; private set; }
+
+        public int VisibleCalls { get; private set; }
+
+        public object? Surface { get; } = new object();
+
+        public AuthPageHostSnapshot Snapshot => snapshot;
+
+        public Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default)
+        {
+            AttachCount++;
+            snapshot = SessionActive ? SessionSnapshot() : AttachedSnapshot();
+            return Task.FromResult(snapshot);
+        }
+
+        public void Refresh()
+        {
+            if (SessionActive) snapshot = SessionSnapshot();
+            else if (snapshot.Status == AuthPageHostStatus.ChannelSessionActive) snapshot = AuthPageHostSnapshot.NotAttached;
+        }
+
+        public void SetVisible(bool visible) => VisibleCalls++;
+
+        public void Dispose() { }
+
+        private static AuthPageHostSnapshot SessionSnapshot() => AuthPageHostSnapshot.ChannelSession();
+
+        private static AuthPageHostSnapshot AttachedSnapshot() => new(
+            AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true, "夹具：已附着固定门户地址。");
     }
 
     /// <summary>附着在线程池上异步完成的假宿主：用于验证协调器把结果调度回界面线程。</summary>
@@ -938,6 +1138,8 @@ internal static class AuthPageRegression
 
         public void SetVisible(bool visible) { }
 
+        public void Refresh() { }
+
         public void Dispose() { }
     }
 
@@ -958,6 +1160,15 @@ internal static class AuthPageRegression
     }
 
     private static Task Sync(Action action) { action(); return Task.CompletedTask; }
+
+    /// <summary>
+    /// 等待条件成立（最多约 2 秒）：会话结束后的恢复附着是 fire-and-forget，
+    /// 不能用固定睡眠赌时序，否则测试会随机器负载抖动。
+    /// </summary>
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (var attempt = 0; attempt < 200 && !condition(); attempt++) await Task.Delay(10);
+    }
 
     private static void Require(bool condition, string message = "断言失败")
     {

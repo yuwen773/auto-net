@@ -125,6 +125,7 @@ Only one action runs per tick, and every action goes through `policy.Attempted()
 - Outbound connections go through `DirectNetwork.ConnectAsync`, which pins `IP_UNICAST_IF` and the source address to the selected campus adapter, so traffic cannot leak onto the default route's TUN. `AuthChannelProxy.StartAsync` exposes that connector internally for regression only; there is no host-to-address mapping hook.
 - `AuthPageNetworkBoundary` fails closed: missing runtime, unready campus link, or a proxy that will not start yields `RuntimeMissing`/`NetworkBoundaryUnavailable`, never a direct connection. The browser is launched with `--proxy-server` + `--proxy-bypass-list=<-loopback>`; QUIC and WebRTC non-proxied UDP are disabled. System proxy settings are never read or written.
 - The campus link comes from the trusted status projection (`App.ReadProjectedLink`), not `Storage.LoadSettings` — the non-elevated tray cannot read `private/`. Browser and tray share a `ChannelProcessJob`; the proxy rejects loopback clients outside that job.
+- The page never runs a second browser (ADR-0017): while an embedded auth-channel session is active (`AuthChannelLauncher.SessionActive`), `IAuthPageBrowserHost.Refresh()` tears down the page's own proxy and browser and projects `ChannelSessionActive`; when the session ends the coordinator re-attaches once, and only if the page was opened before. The page's carrier is projection only — it never submits credentials.
 
 ### Auxiliary checks are advisory
 

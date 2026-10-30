@@ -102,18 +102,24 @@ internal sealed class AuthChannelLauncher
         return outcome;
     }
 
+    /// <summary>
+    /// 内嵌认证通道会话是否正在进行（工单 #39）：本进程发起的辅助进程仍存活，或外部启动锁
+    /// 仍被持有（例如托盘重启后由上一实例启动的通道）。认证页据此不另起第二个浏览器。
+    /// </summary>
+    public bool SessionActive => IsProcessActive() || launchActive?.Invoke() == true;
+
     /// <summary>诊断页投影：模式/信号/最近结论。</summary>
     public AuthChannelLaunchState Describe(StatusSnapshot? reading) => new(
         Mode: reading?.AuthChannelMode ?? AuthChannelModes.ManualOnly,
         SignalPresent: reading?.PortalLayoutSuspected ?? false,
         Requested: reading?.AuthChannelRequested ?? false,
         LastConclusion: lastConclusion,
-        Busy: IsProcessActive() || launchActive?.Invoke() == true);
+        Busy: SessionActive);
     private ObserveOutcome Launch(StatusSnapshot reading)
     {
         if (reading.AuthChannelMode == AuthChannelModes.Off) return ObserveOutcome.ModeOff;
         lastConclusion = null;
-        if (IsProcessActive() || launchActive?.Invoke() == true) return ObserveOutcome.Busy;
+        if (SessionActive) return ObserveOutcome.Busy;
         launchedAt = DateTimeOffset.UtcNow;
         try { File.Delete(resultPath); } catch (IOException) { }
         catch (UnauthorizedAccessException) { }

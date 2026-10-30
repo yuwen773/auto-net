@@ -83,7 +83,7 @@ internal static class AuthPageModel
             StatusTitle = copy.Title,
             StatusExplanation = copy.Explanation,
             NextStep = copy.NextStep,
-            BackgroundNote = BackgroundNote(trusted, snapshot),
+            BackgroundNote = BackgroundNote(trusted, snapshot, host.Status),
             HostStatus = host.Status,
             HostTitle = hostCopy.Title,
             HostDetail = host.Detail.Length > 0 ? host.Detail : hostCopy.Detail,
@@ -346,10 +346,13 @@ internal static class AuthPageModel
         };
     }
 
-    private static string BackgroundNote(bool trusted, StatusSnapshot? snapshot)
+    private static string BackgroundNote(bool trusted, StatusSnapshot? snapshot, AuthPageHostStatus hostStatus)
     {
         if (!trusted || snapshot is null)
             return "后台状态不可确认；本页不会提交凭据，也不会启动新的认证会话。";
+        // 通道会话进行中时不能再说“后台按协议认证运行”：会话是本地事实，不依赖快照里的授予字段。
+        if (hostStatus == AuthPageHostStatus.ChannelSessionActive)
+            return "后台内嵌认证通道会话进行中；本页只显示该会话的状态，不会另起会发送密码的会话。";
         if (IsRecoveryPaused(snapshot))
         {
             var facts = snapshot.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending)
@@ -401,6 +404,9 @@ internal static class AuthPageModel
         AuthPageHostStatus.Attached => new("门户页面",
             "已加载固定门户根地址；本页不填表、不提交，后台认证继续独立运行。",
             "浏览器宿主已附着，但没有可显示的表面。"),
+        AuthPageHostStatus.ChannelSessionActive => new("内嵌通道会话进行中",
+            "后台内嵌认证通道正在运行；本页只显示该会话的状态，不会另起会发送密码的会话。",
+            "内嵌通道会话进行中；本页不显示第二个门户页面。"),
         AuthPageHostStatus.RuntimeMissing => new("浏览器运行时不可用",
             "未检测到 Microsoft Edge WebView2 Runtime；认证页无法显示门户页面。安装运行时后可重试。",
             "浏览器运行时缺失，无法显示门户页面。"),

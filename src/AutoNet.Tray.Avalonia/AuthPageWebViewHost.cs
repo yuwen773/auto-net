@@ -22,14 +22,20 @@ namespace AutoNet.Tray.Avalonia;
 /// - 系统代理设置不被读取或改写，代理只作为本 WebView 的启动参数传入。
 ///
 /// 浏览器进程与托盘同属一个 <see cref="ChannelProcessJob"/>，代理据此拒绝会话外进程的环回连接。
-/// 线程契约：<see cref="AttachAsync"/>、<see cref="SetVisible"/>、<see cref="Dispose"/> 在界面线程调用；
-/// <see cref="Snapshot"/> 可任意线程读取。
+///
+/// 同一会话（工单 #39）：后台内嵌认证通道会话进行中时，本宿主不创建第二个浏览器、也不保留
+/// 自己的代理，只投影“内嵌通道会话进行中”；会话结束后回到未附着，由协调器决定是否恢复
+/// 只读附着。这样同一门户同一时刻只有一条会发送凭据的会话。
+///
+/// 线程契约：<see cref="AttachAsync"/>、<see cref="Refresh"/>、<see cref="SetVisible"/>、<see cref="Dispose"/>
+/// 在界面线程调用；<see cref="Snapshot"/> 可任意线程读取。
 /// </summary>
 internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
 {
     private readonly Func<WifiLink?> readLink;
     private readonly Func<bool> runtimeProbe;
     private readonly Func<WifiLink, ChannelProcessJob, Task<AuthChannelProxy>> startProxy;
+    private readonly Func<bool> channelSessionActive;
     private readonly AuthPageWebViewSurface surface;
     private AuthPageHostSnapshot snapshot = AuthPageHostSnapshot.NotAttached;
     private AuthChannelProxy? proxy;
@@ -44,11 +50,13 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     public AuthPageWebViewHost(
         Func<WifiLink?> readLink,
         Func<bool>? runtimeProbe = null,
-        Func<WifiLink, ChannelProcessJob, Task<AuthChannelProxy>>? startProxy = null)
+        Func<WifiLink, ChannelProcessJob, Task<AuthChannelProxy>>? startProxy = null,
+        Func<bool>? channelSessionActive = null)
     {
         this.readLink = readLink;
         this.runtimeProbe = runtimeProbe ?? AuthPageBrowserRuntime.IsWebView2RuntimePresent;
         this.startProxy = startProxy ?? ((link, processJob) => AuthChannelProxy.StartAsync(link, processJob));
+        this.channelSessionActive = channelSessionActive ?? (static () => false);
         surface = new AuthPageWebViewSurface(this);
     }
 
@@ -61,6 +69,12 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         if (Volatile.Read(ref disposed) != 0) return Snapshot;
         // 浏览器正在创建时不要重入：重试会拆掉正在初始化的会话。
         if (browserStarting) return Snapshot;
+        if (channelSessionActive())
+        {
+            // 后台通道会话进行中：不创建第二个浏览器，也不保留自己的代理。
+            EnterChannelSession();
+            return Snapshot;
+        }
         if (Snapshot.Status == AuthPageHostStatus.Attached)
         {
             // 已附着但浏览器还没起来（例如首次附着时原生表面尚未创建）：补一次初始化。
@@ -81,6 +95,12 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         }
 
         proxy = boundary!.Proxy;
+        // 后台会话可能在准备边界期间开始：丢弃刚启动的代理，只投影会话状态。
+        if (channelSessionActive())
+        {
+            EnterChannelSession();
+            return Snapshot;
+        }
         // 先发布 Attached：视图只在 HostAvailable（即 Attached）时挂载原生表面，
         // 表面创建后由 OnSurfaceCreated 再启动浏览器。浏览器启动失败会经 FailBrowser 降级为 Failed。
         Publish(new AuthPageHostSnapshot(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
@@ -90,18 +110,46 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         return Snapshot;
     }
 
+    public void Refresh()
+    {
+        if (Volatile.Read(ref disposed) != 0) return;
+        if (channelSessionActive())
+        {
+            EnterChannelSession();
+            return;
+        }
+        // 会话结束后不自行附着：本页是否恢复只读附着由协调器按“是否打开过”决定，
+        // 未打开过的页面不会因为一次后台会话凭空拉起代理。
+        if (Snapshot.Status == AuthPageHostStatus.ChannelSessionActive)
+            Publish(AuthPageHostSnapshot.NotAttached);
+    }
+
+    /// <summary>
+    /// 后台通道会话开始：丢弃本页自己的浏览器与代理，只保留受控状态。
+    /// 同一门户同一时刻只允许一条会话，避免两个 WebView2 用户目录/两条凭据会话并存。
+    /// </summary>
+    private void EnterChannelSession()
+    {
+        // 每次都尝试拆除：会话可能在附着、初始化或失败处理中途开始，重复调用是安全的空操作。
+        ResetBrowser();
+        _ = StopProxyAsync();
+        if (Snapshot.Status == AuthPageHostStatus.ChannelSessionActive) return;
+        Publish(AuthPageHostSnapshot.ChannelSession());
+    }
+
     public void SetVisible(bool visible)
     {
         surface.IsVisible = visible;
         // 每次切回本页时补一次初始化：OnSurfaceCreated 只触发一次，错过就再没有入口。
-        if (visible && proxy is not null && !browserStarted && !browserStarting && surface.IsCreated)
+        if (visible && !channelSessionActive() && proxy is not null && !browserStarted && !browserStarting
+            && surface.IsCreated)
             _ = InitializeBrowserAsync(CancellationToken.None);
     }
 
     /// <summary>原生表面创建后回调：此时才有 HWND 可承载 WebView2。</summary>
     internal void OnSurfaceCreated()
     {
-        if (proxy is not null) _ = InitializeBrowserAsync(CancellationToken.None);
+        if (proxy is not null && !channelSessionActive()) _ = InitializeBrowserAsync(CancellationToken.None);
     }
 
     private ChannelProcessJob EnsureJob() => job ??= ChannelProcessJob.CreateForCurrentProcess();
@@ -122,6 +170,12 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
             webView = new WebView { Dock = WinForms.DockStyle.Fill };
             surface.Add(webView);
             await webView.EnsureCoreWebView2Async(environment).WaitAsync(cancellationToken).ConfigureAwait(true);
+            // 后台会话可能在初始化等待期间开始：不再导航，立即拆除并投影会话状态，避免第二条会话。
+            if (channelSessionActive())
+            {
+                EnterChannelSession();
+                return;
+            }
             var core = webView.CoreWebView2;
             if (!job.Contains(checked((int)core.BrowserProcessId)) ||
                 environment.GetProcessInfos().Any(info => !job.Contains(checked((int)info.ProcessId))))
@@ -171,6 +225,12 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     private void FailBrowser(Exception e)
     {
         if (Volatile.Read(ref disposed) != 0) return;
+        // 会话进行中的失败不该把状态改回“可重试的加载失败”：只投影会话状态。
+        if (channelSessionActive())
+        {
+            EnterChannelSession();
+            return;
+        }
         var status = e is WebView2RuntimeNotFoundException
             ? AuthPageHostStatus.RuntimeMissing
             : AuthPageHostStatus.Failed;

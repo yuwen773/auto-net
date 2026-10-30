@@ -266,14 +266,18 @@ public sealed class App : Application
         var portalOpener = new PortalPageOpener(PortalOpenStore.Create(tray.Qa), pipe.RefreshAsync, browserLaunch);
         // 日志页（#7）：读取既有日志目录；QA 夹具模式只在 logs 模式下重定向到证据目录内的夹具。
         var logsPage = LogsPage.Production(tray.Qa);
-        // 认证页（#37/#38）：浏览器宿主抽象。生产宿主经允许列表代理连接固定门户，
+        // 认证页（#37/#38/#39）：浏览器宿主抽象。生产宿主经允许列表代理连接固定门户，
         // 网卡从可信状态投影读取；读不到时失败关闭，绝不回退直连。auth-page QA 用假宿主验证页面生命周期。
+        // 内嵌认证通道发起器在后面装配，这里用延迟绑定读取它的会话状态（#39）：
+        // 通道会话进行中时认证页不创建第二个浏览器。
+        AuthChannelLauncher? authChannel = null;
         IAuthPageBrowserHost authHost = tray.Qa.Mode switch
         {
             QaMode.AuthPage => new QaAuthPageHost(),
             // 其他 QA 模式不打开真实浏览器或代理：认证页导航到受控降级，证据仍来自真实窗口。
             _ when tray.Qa.Active => new UnavailableAuthPageBrowserHost(AuthPageBrowserRuntime.IsWebView2RuntimePresent),
-            _ => AuthPageBrowserHostFactory.Production(() => ReadProjectedLink(pipe.Current))
+            _ => AuthPageBrowserHostFactory.Production(
+                () => ReadProjectedLink(pipe.Current), () => authChannel?.SessionActive == true)
         };
         // 状态投影在读取线程上发起，协调器经此调度器把内容与事件交给界面线程；
         // 已在界面线程时同步执行，避免 QA 驱动时多一次排队。
@@ -347,7 +351,7 @@ public sealed class App : Application
         Func<Task>? authChannelFallback = tray.Qa.Mode == QaMode.Accessibility
             ? null
             : () => portalOpener.OpenManuallyAsync();
-        var authChannelLauncher = new AuthChannelLauncher(
+        authChannel = new AuthChannelLauncher(
             async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart, authChannelPresent, authChannelFallback,
             launchActive: () => new AutoNet.Core.SafetyStateStore(AutoNet.Core.Storage.Root).IsChannelLaunchActive());
         // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
@@ -355,7 +359,7 @@ public sealed class App : Application
             ? QaAccessibility.RecordPortalOpen
             : () => _ = portalOpener.OpenManuallyAsync();
         window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, settingsPage,
-            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannelLauncher, authPage);
+            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
@@ -373,7 +377,7 @@ public sealed class App : Application
         // portal-open 仍由 QaPortal 手工驱动受控记录器，不受此订阅边界影响。
         AttachAutomaticActions(pipe, tray.Qa,
             reading => _ = portalOpener.EvaluateAsync(reading),
-            reading => _ = authChannelLauncher.ObserveAsync(reading.Snapshot));
+            reading => _ = authChannel.ObserveAsync(reading.Snapshot));
         desktop.Exit += (_, _) =>
         {
             trayHost.Dispose();
