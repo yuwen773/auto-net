@@ -9,10 +9,16 @@ namespace AutoNet.Tray.Avalonia;
 /// </summary>
 internal static class ElevatedRecovery
 {
-    public static void Apply(bool enabled) => Apply(enabled, Storage.LoadSettings, Storage.SaveSettings);
+    public static void Apply(bool enabled) =>
+        Apply(enabled, Storage.LoadSettings, Storage.SaveSettings, SettingsWriteLock.Production);
 
-    internal static void Apply(bool enabled, Func<Settings?> load, Action<Settings> save)
+    /// <summary>
+    /// 读取与写入在保存锁内完成：与设置页、兼容提权编辑器共享同一跨进程互斥，
+    /// 避免用较早读取的旧设置覆盖另一方刚保存的地址、密码或选项。
+    /// </summary>
+    internal static void Apply(bool enabled, Func<Settings?> load, Action<Settings> save, Func<IDisposable>? acquireLock = null)
     {
+        using var writeLock = acquireLock?.Invoke();
         var settings = load() ?? throw new InvalidOperationException("请先保存校园网设置。");
         save(settings with { Enabled = enabled });
     }

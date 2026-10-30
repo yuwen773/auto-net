@@ -278,8 +278,17 @@ public sealed class App : Application
             _ => Elevation.Launch
         };
         var actions = new OverviewActions(pipe.RefreshAsync, launcher);
-        // 设置修改入口（#8）走同一条提权路径；设置页与可访问性 QA 模式下替换为受控空操作（不弹 UAC）。
-        Action modifySettings = tray.Qa.Mode is QaMode.Settings or QaMode.Accessibility ? QaSettings.RecordModify : LaunchSettingsEditor;
+        // 设置页（#8 / #41）：普通权限下直接编辑非秘密字段；保存经独立提权交接。
+        // 受限配置不从普通进程读取，非秘密值来自 status.json 的配置投影。
+        Func<IReadOnlyList<WifiProfile>> loadProfiles = tray.Qa.Active
+            ? () => QaSettings.Profiles
+            : () => Wifi.Profiles().Where(profile => profile.AllUsers).ToList();
+        Func<SettingsDraft, CancellationToken, Task<HandoffResult>> saveSettings = tray.Qa.Mode == QaMode.Settings
+            ? QaSettings.SaveForQaAsync
+            : tray.Qa.Active
+                ? (_, _) => Task.FromResult(new HandoffResult(HandoffOutcome.Rejected))
+                : SettingsHandoffLauncher.SaveAsync;
+        var settingsPage = new SettingsPage(loadProfiles, saveSettings, () => pipe.RefreshAsync());
         // 主题（#9 / 故事 27–29）：设置页外观分区直接读写偏好并当场应用（不走状态投影，
         // 轮询重建不打断选择）；跟随模式下响应系统主题变化，手动选择保持优先。
         // 订阅挂在长驻的托盘进程；提权/提示窗口是短生命周期进程，跟随语义由框架对
@@ -329,7 +338,7 @@ public sealed class App : Application
         Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility
             ? QaAccessibility.RecordPortalOpen
             : () => _ = portalOpener.OpenManuallyAsync();
-        window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings,
+        window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, settingsPage,
             portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannelLauncher);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
@@ -380,7 +389,7 @@ public sealed class App : Application
                 QaLogs.Run(shell, logsPage, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
             case QaMode.Settings:
-                QaSettings.Run(shell, window, modifySettings, tray.Qa, code => desktop.Shutdown(code));
+                QaSettings.Run(shell, window, settingsPage, tray.Qa, code => desktop.Shutdown(code));
                 break;
             case QaMode.ThemePrefs:
                 QaThemePrefs.Run(shell, window, theme!, tray.Qa, code => desktop.Shutdown(code));
@@ -414,9 +423,6 @@ public sealed class App : Application
         else if (qa.Mode == QaMode.Settings) fixture();
         else stopProbe();
     }
-
-    /// <summary>生产路径：设置修改入口发起独立提权操作（--settings）；拒绝 UAC 时什么都不发生（故事 43）。</summary>
-    private static void LaunchSettingsEditor() => Elevation.Launch(ElevatedOperationKind.Settings);
 
     /// <summary>
     /// 生产路径：诊断包导出的保存位置选择（故事 72、78）。默认当前用户桌面 + 默认文件名；

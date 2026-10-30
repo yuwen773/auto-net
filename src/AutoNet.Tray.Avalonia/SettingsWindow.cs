@@ -31,6 +31,7 @@ internal sealed class SettingsWindow : Window
     private readonly Button save = new() { Content = "保存设置", MinWidth = 108 };
     private readonly Button cancel = new() { Content = "取消", MinWidth = 96, IsCancel = true };
     private IReadOnlyList<WifiProfile> available = [];
+    private Settings? loaded;
 
     internal SettingsWindow(ElevatedSettings editor)
     {
@@ -109,6 +110,8 @@ internal sealed class SettingsWindow : Window
         available = state.Profiles;
         foreach (var profile in available) profiles.Items.Add(profile);
         var existing = state.Settings;
+        // 兼容编辑器没有“保留原值”标记：保存时必须在锁内确认这份快照仍然有效。
+        loaded = existing;
         var selected = available.FirstOrDefault(profile => existing is null
             ? profile.Connected
             : profile.InterfaceId == existing.InterfaceId && profile.Name == existing.WifiProfile);
@@ -141,18 +144,19 @@ internal sealed class SettingsWindow : Window
             channelAuto.IsChecked == true ? AuthChannelModes.Automatic
                 : channelOff.IsChecked == true ? AuthChannelModes.Off
                 : AuthChannelModes.ManualOnly);
-        ApplySave(draft);
+        ApplySave(draft, new SettingsSaveGuard(loaded));
     }
 
     /// <summary>
     /// QA 接缝（仅 AUTONET_QA_MODE=settings 激活路径调用）：以给定草稿驱动与用户保存
     /// 完全相同的交互路径，让窗口内的真实结果文本进入视觉证据；生产交互从不经过这里。
+    /// QA 草稿自带夹具设置，不附带快照守卫。
     /// </summary>
-    internal void RunSaveForQa(SettingsDraft draft) => ApplySave(draft);
+    internal void RunSaveForQa(SettingsDraft draft) => ApplySave(draft, null);
 
-    private void ApplySave(SettingsDraft draft)
+    private void ApplySave(SettingsDraft draft, SettingsSaveGuard? guard)
     {
-        var outcome = editor.Save(draft);
+        var outcome = editor.Save(draft, guard);
         if (outcome.Saved)
         {
             // 与既有表单同语义：保存成功给出确认反馈（WinForms 为 MessageBox），密码不留存于

@@ -17,7 +17,7 @@ public partial class MainWindow : Window
         LogsPage? logs = null,
         Func<string, Task>? copy = null,
         Action? openFolder = null,
-        Action? modifySettings = null,
+        SettingsPage? settings = null,
         Action? portalOpen = null,
         Func<ThemePreference>? themeProvider = null,
         Action<ThemePreference>? themeSelected = null,
@@ -30,7 +30,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         if (controller is not null)
         {
-            view.Attach(controller, actions, logs, copy, openFolder, modifySettings, portalOpen, themeProvider, themeSelected, diagnosticsExporter, authChannel);
+            view.Attach(controller, actions, logs, copy, openFolder, settings, portalOpen, themeProvider, themeSelected, diagnosticsExporter, authChannel);
             // 窗口每次激活时刷新一次状态；定期轮询仍由状态管道负责。
             Activated += (_, _) => _ = RefreshStatusSafelyAsync();
         }

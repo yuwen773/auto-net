@@ -777,6 +777,7 @@ internal sealed class MonitorFixture : IMonitorEnvironment
     public bool HasCredentials { get; set; } = true;
     public Credentials Credentials { get; set; } = new("test", "never-real");
     public Action? BeforeDisconnect { get; set; }
+    public Action? BeforeSettingsRead { get; set; }
     public Action? BeforeWifiRead { get; set; }
     public PortalFailure BlockFailure { get; set; }
     public bool FailBudget { get; set; }
@@ -791,7 +792,11 @@ internal sealed class MonitorFixture : IMonitorEnvironment
         if (FailLog) throw new IOException("fixture-secret-url");
         Logs.Add(entry);
     }
-    public Settings? LoadSettings() => Settings;
+    public Settings? LoadSettings()
+    {
+        BeforeSettingsRead?.Invoke();
+        return Settings;
+    }
     public Credentials? LoadCredentials() => HasCredentials ? Credentials : null;
     public AuthenticationBlock? LoadAuthenticationBlock() => Authentication ?? (legacyBlocked ? new(BlockFailure) : null);
     public void BlockAuthentication(AuthenticationBlock block)

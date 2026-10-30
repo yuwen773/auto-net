@@ -273,8 +273,8 @@ internal sealed record QaUnblockReport(
     string? Error = null);
 
 /// <summary>
-/// 设置页一步证据（#8 普通界面侧）：状态可信度、只读事实行与修改入口标签——
-/// 普通界面不读取受限配置、不显示凭据（故事 34、36 的呈现侧）。
+/// 设置页一步证据（#8 / #41 普通界面侧）：状态可信度、只读事实行、非秘密配置投影与
+/// 密码规则呈现——普通界面不读取受限配置、不显示凭据（故事 51、55 的呈现侧）。
 /// </summary>
 internal sealed record QaSettingsStep(
     string State,
@@ -282,11 +282,57 @@ internal sealed record QaSettingsStep(
     string RecoveryState,
     string GuardedNetwork,
     string PortalLine,
-    string ModifyLabel,
+    bool ConfigProjected,
+    string WifiProfile,
+    string ProxyUrlDisplay,
+    bool ProxyUrlRedacted,
+    string UuEndpointDisplay,
+    bool UuEndpointRedacted,
+    bool Enabled,
+    bool AllowActiveDisconnect,
+    bool KeepAwakeOnAc,
+    string AuthChannelMode,
+    /// <summary>页面上的恢复选项是否显示为确定值；无投影且未编辑时为 false（显示“未确定”）。</summary>
+    bool OptionsKnown,
     string? File);
 
 /// <summary>一次修改入口驱动：预期命令与实际记录的命令（QA 模式只记录，不弹 UAC）。</summary>
 internal sealed record QaSettingsAction(string Context, string Expected, bool Launched, string? Command);
+
+/// <summary>
+/// 设置页一次保存驱动（#41）：场景、受控结果、密码是否清除、交接是否发起，以及夹具内的
+/// 落盘事实。只记录布尔事实与受控消息，绝不记录账号或密码。
+/// </summary>
+internal sealed record QaSettingsSaveStep(
+    string Scenario,
+    string State,
+    string Message,
+    bool PasswordCleared,
+    bool HandoffInvoked,
+    bool SecretInMessage,
+    bool BlockUntouched,
+    bool SettingsWritten,
+    bool CredentialsWritten,
+    bool CredentialPlaintextFree,
+    string SaveNameDuringSave,
+    string SaveNameAfter,
+    bool KeepProfile,
+    bool KeepProxyUrl,
+    bool KeepUuEndpoint,
+    bool ExistingSettingsFound,
+    bool KeepEnabled,
+    bool KeepAllowActiveDisconnect,
+    bool KeepKeepAwakeOnAc,
+    bool KeepAuthChannelMode,
+    bool OptionsUnknown,
+    bool? EnabledAfter,
+    bool? AllowActiveDisconnectAfter,
+    bool? KeepAwakeOnAcAfter,
+    string? AuthChannelModeAfter,
+    string? File);
+
+/// <summary>跨页往返一步证据：目标页与页面宿主实际显示的标题，用于发现指纹缓存导致的错页。</summary>
+internal sealed record QaSettingsNavigationStep(string From, string To, string PageTitle, string? File);
 
 /// <summary>
 /// 设置编辑器一步证据（#8 提权侧）：场景结果、settings.json / credentials.dpapi 的落盘事实、
@@ -315,6 +361,8 @@ internal sealed record QaSettingsReport(
     List<QaSettingsStep> Steps,
     List<QaSettingsAction> Actions,
     List<QaSettingsEditorStep> EditorSteps,
+    List<QaSettingsSaveStep> SaveSteps,
+    List<QaSettingsNavigationStep> NavigationSteps,
     string? Error = null);
 
 /// <summary>

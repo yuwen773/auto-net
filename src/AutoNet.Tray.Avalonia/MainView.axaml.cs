@@ -22,7 +22,8 @@ public partial class MainView : UserControl
     private LogsPage? logsPage;
     private Func<string, Task>? copyHandler;
     private Action? folderHandler;
-    private Action? modifySettingsHandler;
+    private SettingsPage? settingsPage;
+    private Control? settingsControl;
     private Action? portalOpenHandler;
     private DiagnosticsExporter? diagnosticsExporter;
     private AuthChannelLauncher? authChannelLauncher;
@@ -32,7 +33,6 @@ public partial class MainView : UserControl
     private OverviewContent? overviewShown;
     private DiagnosticsContent? diagnosticsShown;
     private LogsContent? logsShown;
-    private SettingsContent? settingsShown;
     private bool technicalExpanded;
     private bool syncingSelection;
 
@@ -47,14 +47,14 @@ public partial class MainView : UserControl
         };
     }
 
-    /// <summary>接入壳控制器、概览动作、日志页（#7）、设置修改入口（#8）、兜底开页（#11）、诊断包导出（#12）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
+    /// <summary>接入壳控制器、概览动作、日志页（#7）、设置页（#8 / #41）、兜底开页（#11）、诊断包导出（#12）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
     internal void Attach(
         ShellController shell,
         OverviewActions? overviewActions = null,
         LogsPage? logs = null,
         Func<string, Task>? copy = null,
         Action? openFolder = null,
-        Action? modifySettings = null,
+        SettingsPage? settings = null,
         Action? portalOpen = null,
         Func<ThemePreference>? themeProvider = null,
         Action<ThemePreference>? themeSelected = null,
@@ -66,7 +66,7 @@ public partial class MainView : UserControl
         logsPage = logs;
         copyHandler = copy;
         folderHandler = openFolder;
-        modifySettingsHandler = modifySettings;
+        settingsPage = settings;
         portalOpenHandler = portalOpen;
         this.themeProvider = themeProvider;
         themeSelectedHandler = themeSelected;
@@ -86,7 +86,13 @@ public partial class MainView : UserControl
             });
         }
         BuildNavigation();
-        shell.SelectionChanged += page => Dispatcher.UIThread.Post(() => SyncSelection(page));
+        shell.SelectionChanged += page => Dispatcher.UIThread.Post(() =>
+        {
+            SyncSelection(page);
+            // 进入设置页时重新枚举 Wi-Fi 配置：启动时 WLAN 未就绪或之后新建的配置
+            // 不应要求重启托盘才能选择。
+            if (page == ShellPage.Settings) settingsPage?.RefreshProfiles();
+        });
         shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
         shell.StatusChanged += reading => Dispatcher.UIThread.Post(() => RenderStatus(reading));
         SyncSelection(shell.SelectedPage);
@@ -224,16 +230,20 @@ public partial class MainView : UserControl
                     index => logsPage?.SelectRow(index));
                 break;
             case SettingsContent settings:
-                // 指纹未变化时不重建：设置页只读投影跟随状态轮询刷新，避免无谓的控件树重建。
-                // 主题选择（#9）不走状态投影：重建时从偏好提供者读取当前值，已保存的选择不会被打断。
-                if (settingsShown is { } shownSettings && shownSettings.ContentKey == settings.ContentKey) return;
-                settingsShown = settings;
-                ClearShown(except: settings);
-                pageHost.Content = SettingsView.Build(
-                    settings,
-                    () => modifySettingsHandler?.Invoke(),
+                // 设置页（#8 / #41）是可编辑表单：控件树只构建一次并长期复用，状态轮询只更新
+                // 只读事实与结果文本，绝不重建正在输入的表单。主题选择（#9）同样不走状态投影。
+                // 进入设置页时清空其他页面的指纹缓存：否则从设置页返回未变化的概览/诊断/日志时，
+                // 指纹命中会提前 return，页面仍停留在设置控件上。
+                ClearShown(except: null);
+                settingsPage ??= new SettingsPage(
+                    () => [],
+                    (_, _) => Task.FromResult(new HandoffResult(HandoffOutcome.Rejected)));
+                settingsPage.Update(settings);
+                settingsControl ??= SettingsView.Build(
+                    settingsPage,
                     themeProvider?.Invoke() ?? ThemePreference.System,
                     preference => themeSelectedHandler?.Invoke(preference));
+                pageHost.Content = settingsControl;
                 break;
             case PageScaffold scaffold:
                 ClearShown(except: null);
@@ -248,7 +258,6 @@ public partial class MainView : UserControl
         if (!ReferenceEquals(except, overviewShown)) overviewShown = null;
         if (!ReferenceEquals(except, diagnosticsShown)) diagnosticsShown = null;
         if (!ReferenceEquals(except, logsShown)) logsShown = null;
-        if (!ReferenceEquals(except, settingsShown)) settingsShown = null;
     }
 
     private async Task<bool> SelectDateAsync(string? date)

@@ -35,10 +35,13 @@ internal static class SettingsHandoffRegression
         var receive = SettingsHandoff.ReceiveAsync(exchange.Request, peer, draft =>
         {
             Require(draft.Username == "HANDOFF-TEST-USER" && draft.Password == "HANDOFF-TEST-SECRET", "交接内容不符");
+            Require(draft.KeepProxyUrl && draft.KeepUuEndpoint && draft.AllowMissingSettingsForUnprojected,
+                "无投影保留地址标记在管道交接中丢失");
             writes++;
             return new(SettingsSaveOutcome.Saved, ElevatedSettings.SavedMessage);
         }, TimeSpan.FromSeconds(5));
-        var send = await exchange.SendAsync(Draft(), peer);
+        var send = await exchange.SendAsync(Draft() with
+        { KeepProxyUrl = true, KeepUuEndpoint = true, AllowMissingSettingsForUnprojected = true }, peer);
         Require(send.Outcome == HandoffOutcome.Completed && send.SaveOutcome == SettingsSaveOutcome.Saved, "发送端未收到保存结果");
         Require((await receive).Outcome == HandoffOutcome.Completed && writes == 1, "接收端未恰好保存一次");
     }

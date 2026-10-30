@@ -71,6 +71,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private bool authChannelPublished;
     private DateTimeOffset authChannelNotBefore;
     private string authChannelMode = AuthChannelModes.ManualOnly;
+    // 非秘密配置投影：只把普通界面可安全展示的设置字段写进 status.json；
+    // 账号与密码永不进入快照。null 表示本轮没有读到设置。
+    private Settings? projectedSettings;
     // One one-shot notification per cycle: a more specific event raised earlier in the
     // same cycle already tells the user authentication is paused, so the generic pause
     // announcement in Publish must not supersede it.
@@ -102,6 +105,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     // A complete cycle, with only external Windows/HTTP/file boundaries replaced in offline fixtures.
     public async Task<StatusSnapshot> RunOnceAsync(CancellationToken ct)
     {
+        // 本轮尚未读到并校验设置前，不得沿用上一轮的配置投影；读取失败时设置页必须降级，
+        // 而不是把旧配置标成当前可信值。读取成功后即使后续检测失败，投影仍然有效。
+        projectedSettings = null;
         authChannelMode = AuthChannelModes.ManualOnly;
         notifiedThisCycle = false;
         journal.BeginCycle();
@@ -121,7 +127,14 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             UpdatePower(false);
             journal.Fault("MainCycle/" + journal.Stage, "主检测异常", e);
             journal.Decision(new() { Stage = journal.Stage, Outcome = "None", Reason = "ObservationFailed", Error = DiagnosticError.From(e) }, new() { State = "检测异常" });
-            return Publish(new StatusSnapshot { AuthChannelMode = authChannelMode, State = "检测异常", Detail = "检测将自动重试；" + lastError });
+            // 本轮未读到并校验设置时，通道模式不是可信配置：留空而不是把复位后的 ManualOnly
+            // 当作当前值发布；读取成功但后续步骤失败时仍保留本轮已确认的模式。
+            return Publish(new StatusSnapshot
+            {
+                AuthChannelMode = projectedSettings is null ? "" : authChannelMode,
+                State = "检测异常",
+                Detail = "检测将自动重试；" + lastError
+            });
         }
     }
 
@@ -140,6 +153,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             journal.Suspend("SettingsMissing");
             return Publish(new StatusSnapshot { State = "等待设置", Detail = "请在托盘窗口中设置校园 Wi-Fi 和认证信息。" });
         }
+        // 本轮已成功读取设置：可作为配置投影。校验失败时投影仍来自本轮实际读到的文件，
+        // 且地址只投影安全展示值；读取本身失败时投影保持 null（见 RunOnceAsync 的复位）。
+        projectedSettings = settings;
         authChannelMode = AuthChannelModes.IsKnown(settings.AuthChannelMode) ? settings.AuthChannelMode : AuthChannelModes.ManualOnly;
         ReadStep("SettingsValidation", () => { settings.Validate(); return true; });
         var newBudgetKey = Guid.Parse(settings.InterfaceId).ToString("N") + "/" + settings.WifiProfile;
@@ -1034,6 +1050,25 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         }
     }
 
+    // 非秘密配置投影：主窗口设置页在普通权限下只能读 status.json，不能读 private 目录。
+    // 只投影界面需要预填、且不属于凭据的字段；账号与密码不在其中。
+    private StatusSnapshot ProjectSettings(StatusSnapshot status) => projectedSettings is { } settings
+        ? status with
+        {
+            SettingsProjected = true,
+            InterfaceId = settings.InterfaceId,
+            WifiProfile = settings.WifiProfile,
+            ProxyUrlDisplay = ConfigProjection.Display(settings.ProxyUrl),
+            ProxyUrlRedacted = ConfigProjection.HasHiddenParts(settings.ProxyUrl),
+            UuEndpointDisplay = ConfigProjection.Display(settings.UuEndpoint),
+            UuEndpointRedacted = ConfigProjection.HasHiddenParts(settings.UuEndpoint),
+            AllowActiveDisconnect = settings.AllowActiveDisconnect,
+            KeepAwakeOnAc = settings.KeepAwakeOnAc,
+            Enabled = settings.Enabled,
+            AuthChannelMode = authChannelMode
+        }
+        : status with { SettingsProjected = false };
+
     // Single projection for the B5 status flags, used by both the main construction and
     // Publish so an early-return snapshot carries the same durable signal values.
     private StatusSnapshot WithFallbackFlags(StatusSnapshot status) => status with
@@ -1058,6 +1093,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             if (!notifiedThisCycle) Notify(NotificationCodes.AuthenticationPaused);
         }
         if (!policy.CredentialsBlocked) blockedPublished = false;
+        status = ProjectSettings(status);
         status = WithFallbackFlags(status with { UpdatedAt = clock.GetUtcNow(), LastError = lastError, Notification = notification,
             DisconnectAttempts = policy.DisconnectAttempts, CredentialsBlocked = policy.CredentialsBlocked });
         var key = status.State + "/" + status.Detail + "/" + status.Wifi + "/" + status.Direct + "/" + status.Portal + "/" + status.Tunnel + "/" + status.Uu + "/" + status.LastError;
