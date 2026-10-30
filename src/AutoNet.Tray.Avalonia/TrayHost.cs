@@ -6,7 +6,7 @@ namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 托盘图标与菜单。菜单条目取自 <see cref="TrayMenuModel"/>（既有入口语义）：
-/// 打开、设置认证信息…（独立提权入口）、自动恢复开关（随状态同步、发送明确意图）、
+/// 打开、设置认证信息…（#41：打开主窗口设置页，保存时才提权）、自动恢复开关（随状态同步、发送明确意图）、
 /// 退出托盘（后台继续运行）。
 /// </summary>
 internal sealed class TrayHost : IDisposable
@@ -91,7 +91,9 @@ internal sealed class TrayHost : IDisposable
                 _ = SelectLogsSafelyAsync();
                 break;
             case TrayMenuAction.Settings:
-                Elevation.Launch(ElevatedOperationKind.Settings);
+                // #41：设置页已并入主窗口；入口只打开并定位到该页，保存时才请求 UAC。
+                ShowMainWindow();
+                _ = SelectSettingsSafelyAsync();
                 break;
             case TrayMenuAction.Exit:
                 RequestExit();
@@ -102,6 +104,15 @@ internal sealed class TrayHost : IDisposable
     private async Task SelectLogsSafelyAsync()
     {
         try { await shell.SelectAsync(ShellPage.Logs); }
+        catch (Exception)
+        {
+            // 受控：菜单点击异常不逃逸到原生菜单回调；页面内容仍有降级路径。
+        }
+    }
+
+    private async Task SelectSettingsSafelyAsync()
+    {
+        try { await shell.SelectAsync(ShellPage.Settings); }
         catch (Exception)
         {
             // 受控：菜单点击异常不逃逸到原生菜单回调；页面内容仍有降级路径。

@@ -6,6 +6,8 @@ using AutoNet.Core;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 if (args.FirstOrDefault() == "--handoff-test-peer") return await SettingsHandoffRegression.RunPeerAsync(args);
+if (args.FirstOrDefault() == "--settings-save-peer") return SettingsSaveRegression.RunSavePeer(args);
+if (args.FirstOrDefault() == "--settings-lock-peer") return SettingsSaveRegression.RunLockPeer(args);
 if (args.FirstOrDefault() == "--submission-budget-test-peer") return SubmissionBudgetRegression.RunPeer(args);
 if (args.FirstOrDefault() == "--submission-retry-test-peer") return SubmissionRetryRegression.RunPeer(args);
 if (args.FirstOrDefault() == "--channel-session-test-peer") { Console.WriteLine("READY"); Console.Out.Flush(); Console.ReadLine(); return 0; }
@@ -152,6 +154,7 @@ tests = tests.Concat(UnblockRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticsPageRegression.Cases).ToArray();
 tests = tests.Concat(LogsPageRegression.Cases).ToArray();
 tests = tests.Concat(SettingsPageRegression.Cases).ToArray();
+tests = tests.Concat(SettingsSaveRegression.Cases).ToArray();
 tests = tests.Concat(SettingsHandoffRegression.Cases).ToArray();
 tests = tests.Concat(SubmissionBudgetRegression.Cases).ToArray();
 tests = tests.Concat(SubmissionRetryRegression.Cases).ToArray();

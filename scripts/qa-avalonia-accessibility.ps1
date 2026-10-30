@@ -21,9 +21,13 @@ $steps = [ordered]@{}
 $failures = [System.Collections.Generic.List[string]]::new()
 $tracked = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $savedEnvironment = @{}
-foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH')) {
+foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH', 'AUTONET_QA_MUTEX_SUFFIX')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
 }
+# 本机可能装有正在运行的预览版托盘（占用固定 QA 互斥名）：用证据目录派生的受控后缀取得
+# 本次运行的独立互斥身份，绝不停止已安装托盘或其他工作树的进程（与设置页 QA 同一约定）。
+[Environment]::SetEnvironmentVariable('AUTONET_QA_MUTEX_SUFFIX', 'accessibility-' + [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($evidence))).Substring(0, 12).ToLowerInvariant())
 
 function Pass([string]$Name, $Detail) { $steps[$Name] = @{ result = 'pass'; detail = $Detail }; Write-Host ('PASS ' + $Name) }
 function Fail([string]$Name, [string]$Message) {

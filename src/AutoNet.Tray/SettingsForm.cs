@@ -68,18 +68,29 @@ internal sealed class SettingsForm : Form
         try
         {
             if (profiles.SelectedItem is not WifiProfile profile) throw new ArgumentException("请选择校园 Wi-Fi 配置。");
-            if (password.Text == "" && (credentials is null || credentials.Username != username.Text.Trim()))
+            // #41：与其他保存入口共享同一跨进程保存锁。既有凭据与设置的读取都在锁内完成，
+            // 避免用打开窗口时的旧快照覆盖另一会话刚保存的密码或设置。
+            using var writeLock = SettingsWriteLock.Production();
+            var current = Storage.LoadCredentials();
+            if (password.Text == "" && (current is null || current.Username != username.Text.Trim()))
                 throw new ArgumentException("首次设置或更改账号时，请输入校园网密码。");
+            if (Storage.LoadSettings() != existing)
+            {
+                MessageBox.Show("设置已被其他窗口或会话修改，未写入任何内容。请关闭后重新打开设置再保存。",
+                    "AutoNet", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             var settings = new Settings { InterfaceId = profile.InterfaceId, WifiProfile = profile.Name,
                 Enabled = enabled.Checked, AllowActiveDisconnect = disconnect.Checked, KeepAwakeOnAc = awake.Checked, ProxyUrl = proxy.Text.Trim(), UuEndpoint = endpoint.Text.Trim() };
             settings.Validate();
-            Storage.SaveCredentials(new(username.Text.Trim(), password.Text == "" ? credentials!.Password : password.Text));
+            Storage.SaveCredentials(new(username.Text.Trim(), password.Text == "" ? current!.Password : password.Text));
             Storage.SaveSettings(settings);
             password.Clear();
             MessageBox.Show("已保存。后台服务将在下一轮检测中使用新设置。", "AutoNet", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Close();
         }
         catch (ArgumentException e) { MessageBox.Show(e.Message, "检查设置", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        catch (TimeoutException) { MessageBox.Show("保存未完成：另一个设置保存正在进行，未写入任何内容。请稍后重试。", "AutoNet", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         catch (Exception e) { MessageBox.Show("保存未完成：" + e.GetType().Name, "AutoNet", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 

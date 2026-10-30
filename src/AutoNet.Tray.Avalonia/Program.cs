@@ -14,6 +14,13 @@ internal static class Program
     /// </summary>
     internal static string MutexName => ResolveMutexName(QaEnvironment.FromProcess());
 
+    /// <summary>
+    /// 正式托盘沿用既有安装身份；只有显式 QA 场景使用独立互斥，避免干扰已安装实例。
+    /// 同一台机器上可能同时存在旧预览版安装（其正式实例曾占用固定 QA 名）或并行工作树的 QA 进程，
+    /// 因此 QA 可用 <c>AUTONET_QA_MUTEX_SUFFIX</c> 追加受控后缀，取得本次运行的独立互斥身份；
+    /// 未设置后缀时保持既有固定名。后缀的读取与字符集校验集中在 <see cref="QaEnvironment"/>，
+    /// #37 与 #41 使用同一变量，这里只消费解析结果。
+    /// </summary>
     internal static string ResolveMutexName(QaEnvironment qa) => !qa.Active
         ? @"Local\AutoNet.Tray"
         : qa.MutexSuffix.Length == 0

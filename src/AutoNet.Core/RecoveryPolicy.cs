@@ -210,6 +210,30 @@ public sealed record StatusSnapshot
     public string State { get; init; } = "启动中";
     public string Detail { get; init; } = "";
     public bool Enabled { get; init; }
+    /// <summary>
+    /// 非秘密配置投影是否来自后台已加载的设置。旧版服务缺省 false：界面不得把默认值
+    /// 当成已保存的配置，也不得据此覆盖受限存储里的既有选项。
+    /// </summary>
+    public bool SettingsProjected { get; init; }
+    /// <summary>
+    /// 已保存的校园网账号，仅用于普通权限设置页预填（配置投影的一部分）；密码永不进入快照。
+    /// 诊断包收录 status.json 前会剔除该字段，保持“不含账号”的既有契约。
+    /// </summary>
+    public string Username { get; init; } = "";
+    public string InterfaceId { get; init; } = "";
+    public string WifiProfile { get; init; } = "";
+    /// <summary>
+    /// 代理地址的安全展示值：不含隐藏部分时是完整地址，否则只含 scheme://host[:port]。
+    /// 完整地址可能带令牌，绝不能写入对普通用户可读的 status.json 或诊断包。
+    /// </summary>
+    public string ProxyUrlDisplay { get; init; } = "";
+    /// <summary>已保存代理地址含未展示的路径、查询或片段；保存端未编辑时必须保留原值。</summary>
+    public bool ProxyUrlRedacted { get; init; }
+    public string UuEndpointDisplay { get; init; } = "";
+    /// <summary>已保存 UU 地址含未展示的路径；保存端未编辑时必须保留原值。</summary>
+    public bool UuEndpointRedacted { get; init; }
+    public bool AllowActiveDisconnect { get; init; } = true;
+    public bool KeepAwakeOnAc { get; init; } = true;
     public string Wifi { get; init; } = "待检测";
     public string Direct { get; init; } = "待检测";
     public string Portal { get; init; } = "待检测";

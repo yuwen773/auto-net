@@ -61,6 +61,9 @@ internal static class ShellAccessibility
     /// <summary>认证页手动重试入口（#37）：只在受控失败状态下可见。</summary>
     public const string AuthRetry = "重试加载门户页面…";
 
+    /// <summary>设置页保存按钮（#41）：自动化名称与可见文字同步，保存期间如实反映忙态。</summary>
+    public static string SettingsSave(bool saving) => saving ? "正在保存…" : "保存设置";
+
     /// <summary>设置控件可访问名称的统一入口，视图构建时链式调用。</summary>
     public static T Named<T>(T control, string name) where T : Control
     {

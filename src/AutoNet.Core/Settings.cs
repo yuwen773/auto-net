@@ -24,13 +24,22 @@ public sealed record Settings
             throw new ArgumentException("请选择校园 Wi-Fi 网卡和已保存的配置。");
         if (!Uri.TryCreate(PortalOrigin, UriKind.Absolute, out var portal) || !IsSupportedPortal(portal))
             throw new ArgumentException("认证地址仅支持 https://login.csust.edu.cn:443 根地址；802 端口由程序自行使用。");
-        if (ProxyUrl != "" && (!Uri.TryCreate(ProxyUrl, UriKind.Absolute, out var proxy) ||
+        ValidateConnectionOptions(ProxyUrl, UuEndpoint, AuthChannelMode);
+    }
+
+    /// <summary>
+    /// 代理、UU 地址与通道模式的共享校验：设置页的普通进程预检与保存端的权威校验共用同一规则，
+    /// 避免两处各写一套导致行为漂移。参数是待保存的原值（调用方负责去空白）。
+    /// </summary>
+    public static void ValidateConnectionOptions(string proxyUrl, string uuEndpoint, string authChannelMode)
+    {
+        if (proxyUrl != "" && (!Uri.TryCreate(proxyUrl, UriKind.Absolute, out var proxy) ||
             proxy.Scheme != "http" || !proxy.IsLoopback || proxy.UserInfo != ""))
             throw new ArgumentException("代理检测地址应为本机 HTTP 代理，例如 http://127.0.0.1:7897。");
-        if (UuEndpoint != "" && (!Uri.TryCreate(UuEndpoint, UriKind.Absolute, out var uu) ||
+        if (uuEndpoint != "" && (!Uri.TryCreate(uuEndpoint, UriKind.Absolute, out var uu) ||
             uu.Scheme != "https" || uu.UserInfo != "" || uu.Query != "" || uu.Fragment != ""))
             throw new ArgumentException("UU 检测地址必须是不含令牌的真实 HTTPS 服务地址。");
-        if (AuthChannelMode is not (AuthChannelModes.Automatic or AuthChannelModes.ManualOnly or AuthChannelModes.Off))
+        if (authChannelMode is not (AuthChannelModes.Automatic or AuthChannelModes.ManualOnly or AuthChannelModes.Off))
             throw new ArgumentException("内嵌认证通道模式仅支持自动、仅手动或关闭。");
     }
 

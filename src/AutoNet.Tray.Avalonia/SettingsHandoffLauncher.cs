@@ -25,7 +25,7 @@ internal static class SettingsHandoffLauncher
                 !sender.ImagePath.Equals(receiver.ImagePath, StringComparison.OrdinalIgnoreCase))
                 return 2;
             var request = new HandoffRequest(id, senderId, startedAt);
-            var result = await SettingsHandoff.ReceiveAsync(request, sender, ElevatedSettings.Production().Save, Timeout);
+            var result = await SettingsHandoff.ReceiveAsync(request, sender, draft => ElevatedSettings.Production().Save(draft), Timeout);
             return result.Outcome switch
             {
                 HandoffOutcome.Completed => result.SaveOutcome == SettingsSaveOutcome.Saved ? 0 : 3,

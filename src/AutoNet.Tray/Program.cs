@@ -23,7 +23,7 @@ internal static class Program
             if (RecoveryTarget(args) is { } enabled)
             {
                 if (!IsAdministrator) { Elevate(enabled ? "--enable-recovery" : "--disable-recovery"); return; }
-                SetRecoveryEnabled(enabled, Storage.LoadSettings, Storage.SaveSettings); return;
+                SetRecoveryEnabled(enabled, Storage.LoadSettings, Storage.SaveSettings, SettingsWriteLock.Production); return;
             }
             if (args.Contains("--unblock-auth"))
             {
@@ -80,8 +80,14 @@ internal static class Program
         return enable ? true : disable ? false : null;
     }
 
-    internal static void SetRecoveryEnabled(bool enabled, Func<Settings?> readSettings, Action<Settings> saveSettings)
+    /// <summary>
+    /// 读取与写入在保存锁内完成（#41）：与其他保存入口共享同一跨进程互斥，
+    /// 避免用较早读取的旧设置覆盖另一方刚保存的地址、密码或选项。
+    /// </summary>
+    internal static void SetRecoveryEnabled(bool enabled, Func<Settings?> readSettings, Action<Settings> saveSettings,
+        Func<IDisposable>? acquireLock = null)
     {
+        using var writeLock = acquireLock?.Invoke();
         var settings = readSettings() ?? throw new InvalidOperationException("请先保存校园网设置。");
         saveSettings(settings with { Enabled = enabled });
     }
