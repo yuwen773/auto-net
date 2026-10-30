@@ -1,6 +1,23 @@
 namespace AutoNet.Core;
 
 /// <summary>
+/// 链路状态的受控码（#35）：快照只广播码，托盘负责中文措辞。旧版快照缺少该字段时码为空，
+/// 托盘必须按“链路不可确认”降级，不得从显示文字猜测链路是否就绪。
+/// </summary>
+public static class WifiLinkCodes
+{
+    public const string Ready = "Ready";
+    public const string WaitingForAddress = "WaitingForAddress";
+    public const string Associating = "Associating";
+    public const string Unavailable = "Unavailable";
+    public const string Disconnected = "Disconnected";
+    public const string OtherProfile = "OtherProfile";
+
+    public static bool IsKnown(string? code) =>
+        code is Ready or WaitingForAddress or Associating or Unavailable or Disconnected or OtherProfile;
+}
+
+/// <summary>
 /// The mutually exclusive primary state shown in the main health area. Exactly one applies at a time;
 /// orthogonal facts (quota exhausted, proxy fault, recovery paused) are reported through
 /// <see cref="NetworkDisplay.Additional"/> instead of being folded in here.
@@ -94,6 +111,12 @@ public static class NetworkDisplayMap
         var (title, explanation, nextStep) = Copy(primary, status);
         return new(primary, additional, title, explanation, nextStep, Technical(status));
     }
+
+    /// <summary>
+    /// 不带新鲜度/完整性上下文的受控主状态映射：与 <see cref="Map"/> 使用同一规则，
+    /// 供只需要“当前是哪一类状态”的只读投影复用，避免托盘另写中文判定。
+    /// </summary>
+    public static NetworkPrimaryState PrimaryStateOf(StatusSnapshot status) => Primary(status, Additional(status));
 
     private static NetworkPrimaryState Primary(StatusSnapshot s, NetworkAdditional additional)
     {
