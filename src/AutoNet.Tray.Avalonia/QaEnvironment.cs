@@ -161,10 +161,13 @@ internal sealed record QaOverviewStep(
     string Title,
     bool AuthVisible,
     string AuthTitle,
+    string AuthNote,
     string RecoveryLabel,
     bool RecoveryEnabled,
     bool UnblockVisible,
     bool UnblockEnabled,
+    string SubmissionValue,
+    string SubmissionNote,
     string? File);
 
 /// <summary>一次动作驱动：上下文、明确意图、是否发起、实际记录到的命令。</summary>

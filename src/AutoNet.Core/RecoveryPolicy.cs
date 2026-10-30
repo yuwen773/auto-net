@@ -231,6 +231,21 @@ public sealed record StatusSnapshot
     public bool CredentialRequestStarted { get; init; }
     public string LastError { get; init; } = "";
     public bool CredentialsBlocked { get; init; }
+    /// <summary>
+    /// #35 提交额度级别的受控码（见 <see cref="SubmissionBudgetCodes"/>）。旧版服务不写该字段，
+    /// 缺省为空字符串；托盘必须按“不可确认”降级，不得据此推断次数或放行提交。
+    /// </summary>
+    public string SubmissionBudgetCode { get; init; } = "";
+    /// <summary>#35 受控重试决定码（<see cref="SubmissionRetryDecision"/> 的名称）；旧版缺省为空字符串。</summary>
+    public string SubmissionRetryCode { get; init; } = "";
+    /// <summary>#35 已用提交次数；null 表示快照未提供（旧版服务），不是零次。</summary>
+    public int? SubmissionAttempts { get; init; }
+    /// <summary>#35 提交额度上限；null 表示快照未提供。</summary>
+    public int? SubmissionAttemptMax { get; init; }
+    /// <summary>#35 额度是否耗尽；null 表示快照未提供。</summary>
+    public bool? SubmissionBudgetExhausted { get; init; }
+    /// <summary>#35 最早下次允许提交的墙钟时刻；null 表示当前没有可信的下次时刻。</summary>
+    public DateTimeOffset? SubmissionNextPossibleAt { get; init; }
     /// <summary>ADR-0005: the latest portal observation fell in the structural failure set; the portal's shape is suspected to have changed.</summary>
     public bool PortalLayoutSuspected { get; init; }
     /// <summary>
@@ -269,10 +284,12 @@ public static class NotificationCodes
     public const string AuthChannelStarted = "AuthChannelStarted";
     public const string AuthChannelResult = "AuthChannelResult";
     public const string AuthChannelNeedsHuman = "AuthChannelNeedsHuman";
+    /// <summary>#35 提交额度用尽、自动提交已停止的一次性提示。</summary>
+    public const string SubmissionBudgetExhausted = "SubmissionBudgetExhausted";
 
     public static bool IsKnown(string? code) => code is InternetRecovered or AuthenticationPaused
         or SubmissionRechecking or SubmissionUnresolved or BrowserFallbackRequested or PortalLayoutChanged
-        or AuthChannelStarted or AuthChannelResult or AuthChannelNeedsHuman;
+        or AuthChannelStarted or AuthChannelResult or AuthChannelNeedsHuman or SubmissionBudgetExhausted;
 }
 
 /// <summary>
