@@ -13,7 +13,7 @@ internal enum AuthPageHostStatus
     Attached,
     /// <summary>本机没有可用的浏览器运行时。</summary>
     RuntimeMissing,
-    /// <summary>受控网络边界尚未接入，宿主拒绝连接门户（绝不回退直连）。</summary>
+    /// <summary>受控网络边界不可用（校园 Wi-Fi 未就绪或允许列表代理未能启动），宿主拒绝连接门户（绝不回退直连）。</summary>
     NetworkBoundaryUnavailable,
     /// <summary>宿主加载失败，可手动重试。</summary>
     Failed
@@ -66,8 +66,10 @@ internal interface IAuthPageBrowserHost : IDisposable
 }
 
 /// <summary>
-/// 生产宿主（工单 #37 骨架）：在受控网络边界接入前**不创建任何浏览器，也不发起网络请求**。
-/// 运行时缺失与边界未接入都返回受控状态，绝不回退直连；#38 接入允许列表代理后再替换本实现。
+/// 失败关闭的骨架宿主（工单 #37）：**不创建任何浏览器，也不发起网络请求**。
+/// 运行时缺失与边界不可用都返回受控状态，绝不回退直连。生产装配已由
+/// <see cref="AuthPageWebViewHost"/> 接替；本类只用于 QA 夹具与回归验证受控降级，
+/// 生产装配不会回退到它。
 /// </summary>
 internal sealed class UnavailableAuthPageBrowserHost : IAuthPageBrowserHost
 {
@@ -107,11 +109,14 @@ internal sealed class UnavailableAuthPageBrowserHost : IAuthPageBrowserHost
     public void Dispose() { }
 }
 
-/// <summary>浏览器宿主的生产方式：本工单只选择失败关闭的骨架宿主。</summary>
+/// <summary>
+/// 浏览器宿主的生产装配（工单 #38）：真实 WebView2 宿主 + 允许列表代理。
+/// <paramref name="readLink"/> 从可信状态投影读取校园网卡；读不到时宿主失败关闭，绝不回退直连。
+/// </summary>
 internal static class AuthPageBrowserHostFactory
 {
-    public static IAuthPageBrowserHost Production() =>
-        new UnavailableAuthPageBrowserHost(AuthPageBrowserRuntime.IsWebView2RuntimePresent);
+    public static IAuthPageBrowserHost Production(Func<WifiLink?> readLink) =>
+        new AuthPageWebViewHost(readLink, AuthPageBrowserRuntime.IsWebView2RuntimePresent);
 }
 
 /// <summary>

@@ -2,6 +2,10 @@
   <ItemGroup>
     <InternalsVisibleTo Include="AutoNet.Tests" />
     <InternalsVisibleTo Include="AutoNet.AuthChannel" />
+    <!-- 认证页（#38）在托盘进程内承载 WebView2，复用允许列表代理与会话进程组。
+         发布时托盘程序集身份切换为 AutoNet.Tray（安装契约），两个名字都要授权。 -->
+    <InternalsVisibleTo Include="AutoNet.Tray.Avalonia" />
+    <InternalsVisibleTo Include="AutoNet.Tray" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
   </ItemGroup>

@@ -6,6 +6,7 @@ using System.Text;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using AutoNet.Core;
+using AutoNet.Tray.Avalonia;
 
 // Explicitly invoked offline QA: both proxy and destination are loopback listeners.
 internal static class WebViewProxyRegression
@@ -70,7 +71,8 @@ internal static class WebViewProxyRegression
             {
                 try
                 {
-                    var options = new CoreWebView2EnvironmentOptions($"--proxy-server=http://127.0.0.1:{args[1]} --proxy-bypass-list=<-loopback> --disable-quic --disable-background-networking");
+                    // 用生产参数构造器，确保显式 QA 覆盖的正是认证页实际使用的开关。
+                    var options = new CoreWebView2EnvironmentOptions(AuthPageBrowserArguments.For(int.Parse(args[1])));
                     var environment = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: null, userDataFolder: args[3], options: options);
                     await view.EnsureCoreWebView2Async(environment);
                     if (!job.Contains(checked((int)view.CoreWebView2.BrowserProcessId)) ||
@@ -95,7 +97,7 @@ internal static class WebViewProxyRegression
                     {
                         using var actualView = new WebView2 { Dock = DockStyle.Fill };
                         form.Controls.Add(actualView);
-                        var actualOptions = new CoreWebView2EnvironmentOptions($"--proxy-server=http://127.0.0.1:{actualProxy.Port} --proxy-bypass-list=<-loopback> --disable-quic --disable-background-networking");
+                        var actualOptions = new CoreWebView2EnvironmentOptions(AuthPageBrowserArguments.For(actualProxy.Port));
                         var actualEnvironment = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: null, userDataFolder: args[3] + "-production", options: actualOptions);
                         await actualView.EnsureCoreWebView2Async(actualEnvironment);
                         if (!job.Contains(checked((int)actualView.CoreWebView2.BrowserProcessId)))

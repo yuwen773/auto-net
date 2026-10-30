@@ -6,11 +6,17 @@ namespace AutoNet.Core;
 
 public sealed record Settings
 {
+    /// <summary>
+    /// 唯一允许的校园门户主机。代理允许列表、门户来源校验与认证页导航都从这里取值，
+    /// 避免同一主机名在四处各写一份而漂移。
+    /// </summary>
+    public const string PortalHost = "login.csust.edu.cn";
+
     public bool Enabled { get; init; } = true;
     public bool AllowActiveDisconnect { get; init; } = true;
     public string InterfaceId { get; init; } = "";
     public string WifiProfile { get; init; } = "";
-    public string PortalOrigin { get; init; } = "https://login.csust.edu.cn";
+    public string PortalOrigin { get; init; } = "https://" + PortalHost;
     public bool KeepAwakeOnAc { get; init; } = true;
     public string ProxyUrl { get; init; } = "";
     // Optional real UU endpoint, not its marketing website. Empty = explicitly unverified.
@@ -23,7 +29,7 @@ public sealed record Settings
         if (!Guid.TryParse(InterfaceId, out _) || string.IsNullOrWhiteSpace(WifiProfile))
             throw new ArgumentException("请选择校园 Wi-Fi 网卡和已保存的配置。");
         if (!Uri.TryCreate(PortalOrigin, UriKind.Absolute, out var portal) || !IsSupportedPortal(portal))
-            throw new ArgumentException("认证地址仅支持 https://login.csust.edu.cn:443 根地址；802 端口由程序自行使用。");
+            throw new ArgumentException("认证地址仅支持 https://" + PortalHost + ":443 根地址；802 端口由程序自行使用。");
         ValidateConnectionOptions(ProxyUrl, UuEndpoint, AuthChannelMode);
     }
 
@@ -43,10 +49,16 @@ public sealed record Settings
             throw new ArgumentException("内嵌认证通道模式仅支持自动、仅手动或关闭。");
     }
 
-    public static bool IsSupportedPortal(Uri portal) => portal.IsAbsoluteUri &&
-        portal.Scheme == "https" && portal.Host.Equals("login.csust.edu.cn", StringComparison.OrdinalIgnoreCase) &&
-        portal.Port == 443 && portal.UserInfo == "" && portal.Query == "" &&
-        portal.Fragment == "" && portal.AbsolutePath == "/";
+    /// <summary>
+    /// 门户来源判定：https + 固定主机 + 443 + 无用户信息。认证页导航与设置校验共用这一规则，
+    /// 避免宿主各自写一份后规则漂移。
+    /// </summary>
+    public static bool IsPortalOrigin(Uri portal) => portal.IsAbsoluteUri &&
+        portal.Scheme == "https" && portal.Host.Equals(PortalHost, StringComparison.OrdinalIgnoreCase) &&
+        portal.Port == 443 && portal.UserInfo == "";
+
+    public static bool IsSupportedPortal(Uri portal) =>
+        IsPortalOrigin(portal) && portal.Query == "" && portal.Fragment == "" && portal.AbsolutePath == "/";
 }
 
 public sealed record Credentials(string Username, string Password);

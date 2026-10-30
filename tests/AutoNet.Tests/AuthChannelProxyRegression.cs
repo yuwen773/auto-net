@@ -51,9 +51,9 @@ internal static class AuthChannelProxyRegression
         }),
         ("通道代理：TLS ClientHello 仅接受固定门户 SNI", () =>
         {
-            Require(AuthChannelProxy.IsAllowedClientHello(Hello("LOGIN.CSUST.EDU.CN")), "可信 SNI 被拒绝");
-            Require(!AuthChannelProxy.IsAllowedClientHello(Hello("login.csust.edu.cn.evil.example")), "伪装 SNI 被放行");
-            var truncated = Hello("login.csust.edu.cn");
+            Require(AuthChannelProxy.IsAllowedClientHello(TlsClientHelloFixture.Handshake("LOGIN.CSUST.EDU.CN")), "可信 SNI 被拒绝");
+            Require(!AuthChannelProxy.IsAllowedClientHello(TlsClientHelloFixture.Handshake("login.csust.edu.cn.evil.example")), "伪装 SNI 被放行");
+            var truncated = TlsClientHelloFixture.Handshake("login.csust.edu.cn");
             Require(!AuthChannelProxy.IsAllowedClientHello(truncated[..^1]), "截断握手被放行");
             return Task.CompletedTask;
         }),
@@ -127,24 +127,4 @@ internal static class AuthChannelProxyRegression
         Console.WriteLine("TLS-REJECTED"); Console.Out.Flush();
         return 0;
     }
-
-    private static byte[] Hello(string hostname)
-    {
-        var name = Encoding.ASCII.GetBytes(hostname);
-        var body = new List<byte> { 3, 3 };
-        body.AddRange(new byte[32]);
-        body.Add(0);
-        body.AddRange([0, 2, 0x13, 0x01, 1, 0]);
-        var extensionLength = name.Length + 9;
-        body.AddRange([(byte)(extensionLength >> 8), (byte)extensionLength, 0, 0,
-            (byte)((name.Length + 5) >> 8), (byte)(name.Length + 5),
-            (byte)((name.Length + 3) >> 8), (byte)(name.Length + 3), 0,
-            (byte)(name.Length >> 8), (byte)name.Length]);
-        body.AddRange(name);
-        var size = body.Count;
-        var hello = new List<byte> { 1, (byte)(size >> 16), (byte)(size >> 8), (byte)size };
-        hello.AddRange(body);
-        return hello.ToArray();
-    }
-
 }

@@ -266,11 +266,15 @@ public sealed class App : Application
         var portalOpener = new PortalPageOpener(PortalOpenStore.Create(tray.Qa), pipe.RefreshAsync, browserLaunch);
         // 日志页（#7）：读取既有日志目录；QA 夹具模式只在 logs 模式下重定向到证据目录内的夹具。
         var logsPage = LogsPage.Production(tray.Qa);
-        // 认证页（#37）：浏览器宿主抽象。生产宿主在 #38 接入受控网络边界前失败关闭，
-        // 不创建浏览器、不发起网络请求；auth-page QA 用假宿主验证页面生命周期。
-        IAuthPageBrowserHost authHost = tray.Qa.Mode == QaMode.AuthPage
-            ? new QaAuthPageHost()
-            : AuthPageBrowserHostFactory.Production();
+        // 认证页（#37/#38）：浏览器宿主抽象。生产宿主经允许列表代理连接固定门户，
+        // 网卡从可信状态投影读取；读不到时失败关闭，绝不回退直连。auth-page QA 用假宿主验证页面生命周期。
+        IAuthPageBrowserHost authHost = tray.Qa.Mode switch
+        {
+            QaMode.AuthPage => new QaAuthPageHost(),
+            // 其他 QA 模式不打开真实浏览器或代理：认证页导航到受控降级，证据仍来自真实窗口。
+            _ when tray.Qa.Active => new UnavailableAuthPageBrowserHost(AuthPageBrowserRuntime.IsWebView2RuntimePresent),
+            _ => AuthPageBrowserHostFactory.Production(() => ReadProjectedLink(pipe.Current))
+        };
         // 状态投影在读取线程上发起，协调器经此调度器把内容与事件交给界面线程；
         // 已在界面线程时同步执行，避免 QA 驱动时多一次排队。
         var authPage = new AuthPageCoordinator(authHost, action =>
@@ -421,6 +425,27 @@ public sealed class App : Application
             case QaMode.AuthPage:
                 QaAuthPage.Run(shell, authPage, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
+        }
+    }
+
+    /// <summary>
+    /// 认证页网络边界（#38）的网卡来源：只读服务已发布的可信状态投影。
+    /// 普通权限托盘不能读取 private 目录里的设置，因此不碰 <see cref="Storage.LoadSettings"/>；
+    /// 投影缺失、过期或字段不完整时返回 null，宿主据此失败关闭而不是猜一个网卡。
+    /// </summary>
+    internal static WifiLink? ReadProjectedLink(StatusReading? reading)
+    {
+        if (reading is not { Trusted: true } || reading.Snapshot is not { SettingsProjected: true } snapshot)
+            return null;
+        if (!Guid.TryParse(snapshot.InterfaceId, out _) || string.IsNullOrWhiteSpace(snapshot.WifiProfile))
+            return null;
+        try
+        {
+            return Wifi.Read(new Settings { InterfaceId = snapshot.InterfaceId, WifiProfile = snapshot.WifiProfile });
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return null;
         }
     }
 

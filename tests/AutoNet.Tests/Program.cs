@@ -160,6 +160,7 @@ tests = tests.Concat(SubmissionBudgetRegression.Cases).ToArray();
 tests = tests.Concat(SubmissionRetryRegression.Cases).ToArray();
 tests = tests.Concat(SubmissionVisibilityRegression.Cases).ToArray();
 tests = tests.Concat(AuthChannelProxyRegression.Cases).ToArray();
+tests = tests.Concat(AuthPageBoundaryRegression.Cases).ToArray();
 tests = tests.Concat(ChannelJobRegression.Cases).ToArray();
 tests = tests.Concat(ThemePreferenceRegression.Cases).ToArray();
 tests = tests.Concat(NotificationRouterRegression.Cases).ToArray();

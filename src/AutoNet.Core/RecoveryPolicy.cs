@@ -59,7 +59,7 @@ public sealed class RecoveryPolicy
     /// Opens are validated against <see cref="Settings.IsSupportedPortal"/> before launch, so a
     /// future drift here fails closed instead of navigating anywhere else.
     /// </summary>
-    public const string FallbackPortalPageUrl = "https://login.csust.edu.cn/";
+    public const string FallbackPortalPageUrl = "https://" + Settings.PortalHost + "/";
 
     private ActionKind lastAction;
     private DateTimeOffset? stalledSince;

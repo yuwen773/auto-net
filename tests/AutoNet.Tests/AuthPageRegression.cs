@@ -671,7 +671,7 @@ internal static class AuthPageRegression
             }
             finally { Directory.Delete(directory, recursive: true); }
         }),
-        ("认证页回归：浏览器运行时缺失与网络边界未就绪均为受控提示", async () =>
+        ("认证页回归：浏览器运行时缺失与网络边界不可用均为受控提示", async () =>
         {
             var missing = new UnavailableAuthPageBrowserHost(() => false);
             using var missingPage = new AuthPageCoordinator(missing);
@@ -688,7 +688,7 @@ internal static class AuthPageRegression
             await boundaryPage.EnsureAttachedAsync();
             Require(boundary.Snapshot.Status == AuthPageHostStatus.NetworkBoundaryUnavailable, "边界未就绪未失败关闭");
             Require(boundary.Surface is null, "边界未就绪仍创建了浏览器表面");
-            Require(boundaryPage.Current.HostDetail.Contains("受控网络边界", StringComparison.Ordinal), "边界未就绪提示不符");
+            Require(boundaryPage.Current.HostDetail.Contains("不会连接门户", StringComparison.Ordinal), "边界不可用提示不符");
             Require(boundaryPage.Current.HostDetail.Contains("不会回退直连", StringComparison.Ordinal), "边界未就绪未声明不回退直连");
         }),
         ("认证页回归：宿主加载失败受控降级且只能手动重试", async () =>

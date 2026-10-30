@@ -117,6 +117,15 @@ If every IPv4 source is temporarily unavailable, return `Rejected/MissingClientI
 
 Only one action runs per tick, and every action goes through `policy.Attempted()` for backoff, so an action cannot be retried before its cooldown regardless of how often the loop spins.
 
+### The auth page browser has one exit: the allowlist proxy
+
+`AuthPageWebViewHost` (`src/AutoNet.Tray.Avalonia/`) embeds WebView2 through Avalonia's `NativeControlHost` and gives it exactly one network path: a loopback `AuthChannelProxy` started in the same process. The proxy is the boundary — the `NavigationStarting` origin check is defence in depth only, never the isolation argument.
+
+- `ProxyHostPolicy` allows the single fixed portal host, normalizing **both** sides (trim, trailing dot, IDN, lowercase) and rejecting suffix/subdomain/parent lookalikes and literal IPs. Plaintext is allowed only on 80 and CONNECT only on 443; request bodies and protocol upgrades (WebSocket) are rejected.
+- Outbound connections go through `DirectNetwork.ConnectAsync`, which pins `IP_UNICAST_IF` and the source address to the selected campus adapter, so traffic cannot leak onto the default route's TUN. `AuthChannelProxy.StartAsync` exposes that connector internally for regression only; there is no host-to-address mapping hook.
+- `AuthPageNetworkBoundary` fails closed: missing runtime, unready campus link, or a proxy that will not start yields `RuntimeMissing`/`NetworkBoundaryUnavailable`, never a direct connection. The browser is launched with `--proxy-server` + `--proxy-bypass-list=<-loopback>`; QUIC and WebRTC non-proxied UDP are disabled. System proxy settings are never read or written.
+- The campus link comes from the trusted status projection (`App.ReadProjectedLink`), not `Storage.LoadSettings` — the non-elevated tray cannot read `private/`. Browser and tray share a `ChannelProcessJob`; the proxy rejects loopback clients outside that job.
+
 ### Auxiliary checks are advisory
 
 `HealthChecks.SystemPathAsync` samples DNS + `GetBestInterface` once and names a `RouteSelection` (`Tun` / `Wifi` / `Unknown`) — explicitly labelled as inference, not proof of physical egress. `UuService` reports whether the `GameViewerService` service is running and how many established TCP connections its processes hold, always with "会话待实测". None of this feeds into recovery decisions; it exists so the tray can display why traffic still isn't reaching the internet when the campus probe passes.
