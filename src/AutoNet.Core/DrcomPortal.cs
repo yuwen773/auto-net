@@ -480,8 +480,20 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
         return JsonDocument.Parse(match.Groups[1].Value);
     }
 
+    // 传统字符集（如 gb2312）需要显式注册代码页提供程序。服务与 WinForms 托盘在入口注册，
+    // 但 Avalonia 等宿主不一定；这里按需注册一次，保证解码不依赖宿主预配置。
+    private static bool codePagesRegistered;
+
+    private static void EnsureCodePages()
+    {
+        if (codePagesRegistered) return;
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        codePagesRegistered = true;
+    }
+
     public static async Task<string> ReadLimitedAsync(HttpResponseMessage response, CancellationToken ct)
     {
+        EnsureCodePages();
         const int limit = 512 * 1024;
         if (response.Content.Headers.ContentLength > limit) throw new InvalidDataException("Response too large.");
         using var stream = await response.Content.ReadAsStreamAsync(ct);
