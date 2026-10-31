@@ -44,6 +44,18 @@ Tests use a custom console runner, not xUnit or NUnit; failures return a nonzero
 
 History currently uses Chinese Conventional Commits, for example `feat: 添加 Windows 校园网自动恢复服务与托盘应用`. Continue with focused `feat:`, `fix:`, `docs:`, or `test:` commits. PRs should explain behavior changes, validation results, remaining limitations, and related issues when available. Include screenshots for UI changes.
 
+## Worktree Hygiene
+
+Worktrees must not outlive the task that created them. This applies to every worktree, including the ones subagents spawn under `.claude/worktrees/agent-*`.
+
+- When the task finishes, delete the worktree and its branch.
+- Delete the worktree's dedicated build output directory as well (`artifacts/`, `**/bin/`, `**/obj/` inside that worktree).
+- Before removal, pick one of two paths:
+  1. Merge the work into `main`; or
+  2. If it is not merged, commit the outstanding changes on that branch first, tag it `archive/<worktree-name>` to preserve the state, then run `git worktree remove` followed by `git branch -D`.
+- The session that orchestrated a subagent owns cleanup of the worktrees that subagent created.
+- If a worktree genuinely has to stay (awaiting user decision, unresolved conflicts, work still in progress), name its path and the reason in the final reply. Never leave one behind silently.
+
 ## Security & Operational Boundaries
 
 Never commit credentials, cookies, raw portal responses, or credential-bearing URLs. Preserve DPAPI encryption, restrictive configuration ACLs, and TLS validation. Repair only the selected campus network; do not reset adapters, reboot Windows, or modify UU/Mihomo. Obtain explicit authorization before disruptive live network tests.

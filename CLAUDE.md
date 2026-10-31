@@ -173,3 +173,15 @@ Green tests do not demonstrate the ~15-second recovery target — that requires 
 ### Domain docs
 
 单一领域上下文：根目录 `CONTEXT.md` 与 `docs/adr/`。见 `docs/agents/domain.md`。
+
+## Worktree hygiene
+
+Worktrees must not outlive the task that created them. This applies to every worktree, including the ones subagents spawn under `.claude/worktrees/agent-*`.
+
+- When the task finishes, delete the worktree and its branch.
+- Delete the worktree's dedicated build output directory as well (`artifacts/`, `**/bin/`, `**/obj/` inside that worktree).
+- Before removal, pick one of two paths:
+  1. Merge the work into `main`; or
+  2. If it is not merged, commit the outstanding changes on that branch first, tag it `archive/<worktree-name>` to preserve the state, then run `git worktree remove` followed by `git branch -D`.
+- The session that orchestrated a subagent owns cleanup of the worktrees that subagent created.
+- If a worktree genuinely has to stay (awaiting user decision, unresolved conflicts, work still in progress), name its path and the reason in the final reply. Never leave one behind silently.
