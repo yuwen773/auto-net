@@ -249,8 +249,8 @@ finally {
         failures = @($failures)
         result = if ($failures.Count -eq 0) { 'pass' } else { 'fail' }
         deferred = @(
-            '真实门户承载（#37 验收条件之一，部分完成）：生产宿主在 #38 受控网络边界接入前失败关闭，当前不显示真实门户；假宿主 QA 不能替代该项',
-            '真实 WebView2 窗口、真实门户页面与真实 TLS/重定向/新窗口/Service Worker（#38/#39 范围，未验证）',
+            '真实门户承载（#44）：生产宿主已由 #38 交付的真实 WebView2 宿主接替，本 QA 仍用假宿主，不能替代主窗口内真实承载与真实门户页面',
+            '主窗口内 NativeControlHost 的真实生命周期、真实 WebView2 窗口、真实门户页面与真实 TLS/重定向/新窗口/Service Worker（#38/#44，未验证）',
             '认证页与后台内嵌通道的同一会话附着（#39，未验证）',
             '真实校园网凭据提交、断网恢复与 UAC（需单独授权与现场验证）'
         )
