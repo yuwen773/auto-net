@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using AutoNet.Core;
@@ -14,10 +15,6 @@ namespace AutoNet.AuthChannel;
 /// </summary>
 internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 {
-    private const string ProbeScript =
-        "(() => { const pw = document.querySelector('input[type=password]');" +
-        "return { found: !!pw, ready: !!document.body }; })()";
-
     private readonly ChannelOptions _options;
     private readonly string _sessionDir;
     private readonly string _startPath;
@@ -35,6 +32,13 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
     private IDisposable? _launchLease;
     private bool _launchDenied;
     private AuthChannelConclusion _submissionConclusion = AuthChannelConclusion.Unknown;
+    // 工单 #40：虚拟指针只做视觉呈现；交互检测、接管与恢复复核状态全部留在本进程内。
+    private readonly AuthPagePointerPolicy _pointer = new(!ClientAreaAnimationEnabled());
+    private readonly System.Diagnostics.Stopwatch _pointerClock = System.Diagnostics.Stopwatch.StartNew();
+    private bool _pageOriginTrusted;
+    private bool _pageFormPresent;
+    private bool _takeoverLogged;
+    private bool _humanVisible;
 
     public int ExitCode { get; private set; } = 1;
     public bool HasTrustedNetworkBoundary => _runtimeInJob && _proxy?.IsRunning == true && _processJob is not null;
@@ -44,6 +48,12 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
     public int BrowserProcessId => checked((int)(_webView?.CoreWebView2?.BrowserProcessId ?? 0));
     public int HelperProcessId => Environment.ProcessId;
     public string ProcessJobName => _processJob?.Name ?? "";
+
+    /// <summary>固定门户来源与登录表单的就绪状态；导航后由页面只读核对更新（工单 #40）。</summary>
+    public AuthPageReadiness PageReadiness => new(_pageOriginTrusted, _pageFormPresent);
+
+    /// <summary>用户手动操作期间为 true；恢复必须经过 <see cref="TryResumeAutoAsync"/> 的完整复核。</summary>
+    public bool UserTakeoverActive => _pointer.TakeoverActive;
 
     private bool RuntimeInJob()
     {
@@ -153,6 +163,10 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 
     private void ShowForHuman()
     {
+        // 窗体由 Application.Run 启动时即处于“可见但屏幕外”状态；只在首次需要人工时搬到屏幕内，
+        // 避免用户操作过程中反复居中、抢焦点或改变窗口位置。
+        if (_humanVisible) return;
+        _humanVisible = true;
         var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
         WindowState = FormWindowState.Normal;
         ShowInTaskbar = true;
@@ -246,17 +260,27 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         core.Settings.AreDefaultContextMenusEnabled = false;
         core.Settings.IsStatusBarEnabled = false;
         core.Settings.IsZoomControlEnabled = false;
+        // 工单 #40：覆盖层只上报“发生过受信任输入”与位置变化，不携带按键、坐标或输入值。
+        core.Settings.IsWebMessageEnabled = true;
+        core.WebMessageReceived += OnWebMessage;
+        core.NavigationStarting += (_, _) =>
+        {
+            _pageOriginTrusted = false;
+            _pageFormPresent = false;
+            _pointer.NoteNavigation();
+        };
+        core.NavigationCompleted += (_, _) => _ = VerifyPageSafelyAsync();
+        // 每个文档创建时安装虚拟指针与交互检测；系统启用“减少动画”时直接以静态状态呈现。
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(
+            AuthPagePointerScript.Install(_pointer.ReducedMotion)).WaitAsync(timeout.Token);
         var navigation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         core.NavigationCompleted += (_, _) => navigation.TrySetResult();
         core.Navigate(_options.StartUrl);
         await navigation.Task.WaitAsync(timeout.Token);
         AuthChannelLogWriter.Append("AuthChannelStarted", "url=" + new Uri(_options.StartUrl).GetLeftPart(UriPartial.Path));
 
-        var probe = await core.ExecuteScriptAsync(ProbeScript).WaitAsync(timeout.Token);
-        if (!JsonDocument.Parse(probe).RootElement.GetProperty("found").GetBoolean())
-        {
-            return AuthChannelConclusion.Unknown;
-        }
+        // 填表前先核对固定门户来源与登录表单；只读，不提交。页面不成立时不继续自动操作。
+        if (!await VerifyPageAsync().WaitAsync(timeout.Token)) return AuthChannelConclusion.Unknown;
 
         using var environment = new MonitorEnvironment();
         var workflow = new AuthChannelWorkflow(environment, this, TimeProvider.System);
@@ -271,59 +295,239 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 
     public async Task<AuthChannelConclusion> SubmitAsync(Credentials credentials, CancellationToken ct)
     {
-        var core = _webView!.CoreWebView2;
-        _submissionStarted = true;
-        var fillResult = await core.ExecuteScriptAsync(FillScript(credentials.Username, credentials.Password)).WaitAsync(ct);
-        var fill = JsonDocument.Parse(fillResult).RootElement;
-        if (!fill.GetProperty("ok").GetBoolean())
+        // 复核与提交之间用户开始操作：不填表、不提交；结果保守按未知处理。
+        if (_pointer.TakeoverActive)
         {
-            _submissionConclusion = AuthChannelConclusion.NeedsHuman;
-            _humanAssisted = true;
-            ShowForHuman();
+            BeginHumanAssist();
             await HumanAssistDelayAsync();
-            return _submissionConclusion;
+            return AuthChannelConclusion.Unknown;
         }
+        var core = _webView!.CoreWebView2;
+        // 复核已经通过：清除页面的接管标记，开始真实动作。若用户在此之后再次操作，
+        // 页面会在下一个步骤前自行停止并上报。
+        await ResumePointerAsync();
+        var stopped = await RunPointerSequenceAsync(core, credentials, ct);
+        if (stopped is { } conclusion) return conclusion;
         _submissionConclusion = await PollOutcomeAsync(core, ct);
         return _submissionConclusion;
     }
 
-    private string FillScript(string username, string password)
+    /// <summary>
+    /// 依次执行账号、密码、协议与提交四个真实步骤；每一步都只在真实控件可用时显示指针。
+    /// 返回 null 表示已发起提交，继续等待结果；返回结论表示在提交前停止。
+    /// </summary>
+    private async Task<AuthChannelConclusion?> RunPointerSequenceAsync(
+        Microsoft.Web.WebView2.Core.CoreWebView2 core, Credentials credentials, CancellationToken ct)
     {
-        var user = JsonSerializer.Serialize(username);
-        var pass = JsonSerializer.Serialize(password);
-        return """
-            (() => {
-              if (location.protocol !== 'https:' || location.hostname.toLowerCase() !== 'login.csust.edu.cn' ||
-                  (location.port && location.port !== '443')) return { ok: false, reason: 'untrusted-source' };
-              const pw = document.querySelector('input[type=password]');
-              if (!pw) { return { ok: false, reason: 'no-password-input' }; }
-              const form = pw.closest('form') || document;
-              if (form === document) return { ok: false, reason: 'no-form' };
-              let target;
-              try { target = new URL(form.getAttribute('action') || location.href, location.href); }
-              catch { return { ok: false, reason: 'invalid-target' }; }
-              if (target.protocol !== 'https:' || target.hostname.toLowerCase() !== 'login.csust.edu.cn' ||
-                  (target.port && target.port !== '443') || target.username || target.password)
-                  return { ok: false, reason: 'untrusted-target' };
-              const user = form.querySelector('input[type=text],input[type=email],input[type=tel],input:not([type])');
-              if (!user) { return { ok: false, reason: 'no-user-input' }; }
-              user.value = __USER__;
-              pw.value = __PASS__;
-              const boxes = Array.from(form.querySelectorAll('input[type=checkbox]')).filter(b => !b.checked);
-              for (const b of boxes) {
-                b.checked = true;
-                b.dispatchEvent(new Event('change', { bubbles: true }));
-                if (!b.checked) { return { ok: false, reason: 'checkbox-rejected' }; }
-              }
-              const btn = form.querySelector('[type=submit],button,input[type=button]');
-              if (!btn) { return { ok: false, reason: 'no-submit-button' }; }
-              btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              return { ok: true };
-            })()
-            """
-            .Replace("__USER__", user)
-            .Replace("__PASS__", pass);
+        var account = await ExecutePointerStepAsync(
+            core, AuthPageStep.FillAccount, AuthPagePointerScript.Account, credentials.Username, ct);
+        if (account.Takeover) return await BeginTakeoverAsync();
+        if (!account.Ok) return await StopForHumanAsync(AuthPageStep.FillAccount, account.Reason);
+        NoteStep(account, AuthPageStep.FillAccount);
+
+        var password = await ExecutePointerStepAsync(
+            core, AuthPageStep.FillPassword, AuthPagePointerScript.Password, credentials.Password, ct);
+        if (password.Takeover) return await BeginTakeoverAsync();
+        if (!password.Ok) return await StopForHumanAsync(AuthPageStep.FillPassword, password.Reason);
+        NoteStep(password, AuthPageStep.FillPassword);
+
+        var agreement = await ExecutePointerStepAsync(
+            core, AuthPageStep.AcceptAgreement, AuthPagePointerScript.Agreement, null, ct);
+        if (agreement.Takeover) return await BeginTakeoverAsync();
+        if (!agreement.Ok) return await StopForHumanAsync(AuthPageStep.AcceptAgreement, agreement.Reason);
+        NoteStep(agreement, AuthPageStep.AcceptAgreement);
+
+        var submit = await ExecutePointerStepAsync(
+            core, AuthPageStep.Submit, AuthPagePointerScript.Submit, null, ct);
+        if (submit.Takeover) return await BeginTakeoverAsync();
+        if (!submit.Ok) return await StopForHumanAsync(AuthPageStep.Submit, submit.Reason);
+        // 点击已发生：从这里开始按“可能已发送”计。
+        _submissionStarted = true;
+        _pointer.AwaitResult();
+        return null;
     }
+
+    /// <summary>把脚本结果投影回策略；跳过与失败都不显示指针，也不声称成功。</summary>
+    private void NoteStep(PointerStepOutcome outcome, AuthPageStep step)
+    {
+        if (outcome.Skipped) _pointer.SkipStep(step, outcome.Reason);
+        else _pointer.CompleteStep(step, outcome.Target);
+    }
+
+    private readonly record struct PointerStepOutcome(
+        bool Ok, bool Skipped, bool Takeover, AuthPageStepReason Reason, AuthPageTarget Target);
+
+    private async Task<PointerStepOutcome> ExecutePointerStepAsync(
+        Microsoft.Web.WebView2.Core.CoreWebView2 core, AuthPageStep step, string kind, string? value, CancellationToken ct)
+    {
+        var script = AuthPagePointerScript.Step(kind, value is null ? null : JsonSerializer.Serialize(value));
+        try
+        {
+            var json = await core.ExecuteScriptAsync(script).WaitAsync(ct);
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var ok = root.TryGetProperty("ok", out var okElement) && okElement.ValueKind == JsonValueKind.True;
+            var reasonText = root.TryGetProperty("reason", out var reasonElement) ? reasonElement.GetString() : null;
+            if (reasonText == "user-takeover")
+                return new(false, false, true, AuthPageStepReason.UserTakeover, AuthPageTarget.None);
+            var skipped = root.TryGetProperty("skipped", out var skippedElement) && skippedElement.ValueKind == JsonValueKind.True;
+            var target = root.TryGetProperty("x", out var x) && root.TryGetProperty("y", out var y) &&
+                x.TryGetDouble(out var dx) && y.TryGetDouble(out var dy)
+                ? AuthPageTarget.At(dx, dy)
+                : AuthPageTarget.None;
+            return new(ok, skipped, false, AuthPagePointerPolicy.ParseReason(reasonText), target);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            // 脚本结果缺失或不是对象时按受控失败处理，不把浏览器异常当成提交结果。
+            return new(false, false, false, AuthPageStepReason.TargetUnavailable, AuthPageTarget.None);
+        }
+    }
+
+    private async Task<AuthChannelConclusion> BeginTakeoverAsync()
+    {
+        _pointer.NoteInteraction(_pointerClock.Elapsed);
+        BeginHumanAssist();
+        await HumanAssistDelayAsync();
+        return AuthChannelConclusion.Unknown;
+    }
+
+    private async Task<AuthChannelConclusion> StopForHumanAsync(AuthPageStep step, AuthPageStepReason reason)
+    {
+        _pointer.FailStep(step, reason);
+        _submissionConclusion = AuthChannelConclusion.NeedsHuman;
+        _humanAssisted = true;
+        BeginHumanAssist();
+        await HumanAssistDelayAsync();
+        return _submissionConclusion;
+    }
+
+    /// <summary>显示通道窗口，让用户看到当前步骤或接管状态；已关闭时忽略。</summary>
+    private void BeginHumanAssist()
+    {
+        try
+        {
+            if (IsDisposed || _humanVisible) return;
+            if (IsHandleCreated) BeginInvoke(ShowForHuman);
+            else ShowForHuman();
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>复核通过后清除页面接管标记；只在调用方已确认可以恢复时调用。</summary>
+    private async Task ResumePointerAsync()
+    {
+        if (_webView?.CoreWebView2 is not { } core) return;
+        try { await core.ExecuteScriptAsync("window.__autonet && window.__autonet.resume();"); }
+        catch (Exception) { }
+    }
+
+    /// <summary>只读核对固定门户来源与登录表单；导航后与恢复自动操作前各核对一次。</summary>
+    private async Task<bool> VerifyPageAsync(CancellationToken ct = default)
+    {
+        if (_webView?.CoreWebView2 is not { } core) return false;
+        try
+        {
+            var json = await core.ExecuteScriptAsync(AuthPagePointerScript.Verify)
+                .WaitAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(true);
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            _pageOriginTrusted = root.TryGetProperty("origin", out var origin) && origin.ValueKind == JsonValueKind.True;
+            _pageFormPresent = root.TryGetProperty("form", out var form) && form.ValueKind == JsonValueKind.True;
+            return _pageOriginTrusted && _pageFormPresent;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            _pageOriginTrusted = false;
+            _pageFormPresent = false;
+            return false;
+        }
+    }
+
+    private async Task VerifyPageSafelyAsync()
+    {
+        try { await VerifyPageAsync(); }
+        catch (Exception) { }
+    }
+
+    /// <summary>页面受控消息：只接受固定门户来源的交互、位置变化与减少动画事件。</summary>
+    private void OnWebMessage(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            if (!Uri.TryCreate(e.Source, UriKind.Absolute, out var source) || !Settings.IsPortalOrigin(source)) return;
+            if (!AuthPagePointerScript.TryParseMessage(e.TryGetWebMessageAsString(), out var kind)) return;
+            switch (kind)
+            {
+                case AuthPageInteractionKind.TrustedInput:
+                    // 每次受信任输入都重新计时：用户再次操作必须重新等待完整的 15 秒。
+                    _pointer.NoteInteraction(_pointerClock.Elapsed);
+                    if (!_takeoverLogged)
+                    {
+                        _takeoverLogged = true;
+                        AuthChannelLogWriter.Append("AuthChannelTakeover",
+                            "trigger=trusted-input; auto-fill=paused; auto-submit=paused");
+                        BeginHumanAssist();
+                    }
+                    break;
+                case AuthPageInteractionKind.ViewportChanged:
+                    _pointer.NoteViewportChanged();
+                    break;
+                case AuthPageInteractionKind.ReducedMotionOn:
+                    _pointer.NoteReducedMotion(true);
+                    break;
+                case AuthPageInteractionKind.ReducedMotionOff:
+                    _pointer.NoteReducedMotion(false);
+                    break;
+            }
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>
+    /// 接管空闲满 15 秒后，结合调用方重新核对的事实与页面自己的来源/表单检查决定是否恢复。
+    /// 任一条件不成立都保持接管；空闲本身不构成恢复理由。
+    /// </summary>
+    public async Task<bool> TryResumeAutoAsync(bool network, bool authentication, bool budget, CancellationToken ct)
+    {
+        if (!_pointer.TakeoverActive) return true;
+        // 先看空闲时间，避免用户仍在输入时每秒都执行一次页面脚本。
+        if (_pointer.IdleFor(_pointerClock.Elapsed) < AuthPagePointerPolicy.ResumeIdle) return false;
+        if (!await VerifyPageAsync(ct).ConfigureAwait(true)) return false;
+        // 页面来源与表单只采用刚刚核对的结果；调用方不提供这两项，避免旧快照参与判断。
+        var recheck = new AuthPageRecheck(network, authentication, _pageOriginTrusted, _pageFormPresent, budget);
+        if (!recheck.All) return false;
+        if (!_pointer.TryResume(_pointerClock.Elapsed, recheck)) return false;
+        await ResumePointerAsync().ConfigureAwait(true);
+        _takeoverLogged = false;
+        AuthChannelLogWriter.Append("AuthChannelTakeover",
+            "auto-ops=resumed; recheck=network,authentication,origin,form,budget");
+        return true;
+    }
+
+    private const uint SpiGetClientAreaAnimation = 0x1042;
+
+    /// <summary>
+    /// 读取 Windows“在 Windows 中显示动画”设置；读取失败按允许动画处理。
+    /// 页面脚本同时尊重 <c>prefers-reduced-motion</c>，两者任一要求减少动画即显示静态状态。
+    /// </summary>
+    private static bool ClientAreaAnimationEnabled()
+    {
+        try
+        {
+            return SystemParametersInfo(SpiGetClientAreaAnimation, 0, out var enabled, 0) && enabled;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, out bool pvParam, uint fWinIni);
 
     private async Task<AuthChannelConclusion> PollOutcomeAsync(
         Microsoft.Web.WebView2.Core.CoreWebView2 core, CancellationToken token)

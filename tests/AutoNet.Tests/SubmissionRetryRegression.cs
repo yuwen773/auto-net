@@ -809,7 +809,53 @@ internal static class SubmissionRetryRegression
             Require(policy.Evaluate(budget with { State = SubmissionBudgetState.Concluded }, now.AddHours(2), TimeSpan.FromHours(2)) == SubmissionRetryDecision.Concluded, "明确结束仍提交");
             Require(policy.Evaluate(budget with { State = SubmissionBudgetState.Reserved }, now.AddHours(3), TimeSpan.FromHours(3)) == SubmissionRetryDecision.InFlight, "活动预留仍提交");
             return Task.CompletedTask;
-        })
+        }),
+        ("手动接管：用户操作期间通道不预留额度也不提交", () => WithStore((fixture, store, _) =>
+        {
+            fixture.Http.GatewayLocation = "https://login.csust.edu.cn/?wlanuserip=10.0.0.1&wlanacip=192.168.100.254";
+            store.BlockAuthentication(new AuthenticationBlock(PortalFailure.InteractionRequired)
+                { Attempts = 3, Revision = Guid.NewGuid(), ChannelFallbackCause = PortalFailure.MissingGatewayParameters });
+            using var browser = new FixtureChannelBrowser { UserTakeoverActive = true };
+            var workflow = new AuthChannelWorkflow(new AcceptanceRegression.StoredEnvironment(fixture, store), browser, fixture.Clock);
+            Require(workflow.RunOnceAsync(default).GetAwaiter().GetResult() == ChannelWorkflowOutcome.Waiting && browser.Submissions == 0,
+                "接管期间仍填表或提交");
+            Require(store.LoadSubmissionBudget() is null, "接管期间占用了共享提交额度");
+            Require(browser.ResumeAttempts == 1 && browser.LastRecheck is { All: true }, "接管期间未重新核对恢复条件");
+        })),
+        ("手动接管：认证状态不再需要交互时不恢复也不提交", () => WithStore((fixture, store, _) =>
+        {
+            fixture.Http.GatewayLocation = "https://login.csust.edu.cn/?wlanuserip=10.0.0.1&wlanacip=192.168.100.254";
+            store.BlockAuthentication(new AuthenticationBlock(PortalFailure.CredentialsRejected) { Revision = Guid.NewGuid() });
+            using var browser = new FixtureChannelBrowser { UserTakeoverActive = true, ResumeAllowed = true };
+            var workflow = new AuthChannelWorkflow(new AcceptanceRegression.StoredEnvironment(fixture, store), browser, fixture.Clock);
+            Require(workflow.RunOnceAsync(default).GetAwaiter().GetResult() == ChannelWorkflowOutcome.Waiting && browser.Submissions == 0,
+                "认证状态变化后仍恢复或提交");
+            Require(browser.LastRecheck is { Authentication: false }, "恢复复核未反映认证状态");
+            Require(store.LoadSubmissionBudget() is null, "复核未通过却占用了提交额度");
+        })),
+        ("手动接管：页面来源或表单未就绪时通道不提交", () => WithStore((fixture, store, _) =>
+        {
+            fixture.Http.GatewayLocation = "https://login.csust.edu.cn/?wlanuserip=10.0.0.1&wlanacip=192.168.100.254";
+            store.BlockAuthentication(new AuthenticationBlock(PortalFailure.InteractionRequired)
+                { Attempts = 3, Revision = Guid.NewGuid(), ChannelFallbackCause = PortalFailure.MissingGatewayParameters });
+            using var browser = new FixtureChannelBrowser { PageReadiness = new(false, false) };
+            var workflow = new AuthChannelWorkflow(new AcceptanceRegression.StoredEnvironment(fixture, store), browser, fixture.Clock);
+            Require(workflow.RunOnceAsync(default).GetAwaiter().GetResult() == ChannelWorkflowOutcome.Blocked && browser.Submissions == 0,
+                "页面来源或表单未就绪仍填表或提交");
+            Require(store.LoadSubmissionBudget() is null, "页面未就绪却占用了提交额度");
+        })),
+        ("手动接管：复核齐全后恢复并继续原提交链", () => WithStore((fixture, store, _) =>
+        {
+            fixture.Http.GatewayLocation = "https://login.csust.edu.cn/?wlanuserip=10.0.0.1&wlanacip=192.168.100.254";
+            store.BlockAuthentication(new AuthenticationBlock(PortalFailure.InteractionRequired)
+                { Attempts = 3, Revision = Guid.NewGuid(), ChannelFallbackCause = PortalFailure.MissingGatewayParameters });
+            using var browser = new FixtureChannelBrowser { UserTakeoverActive = true, ResumeAllowed = true };
+            var workflow = new AuthChannelWorkflow(new AcceptanceRegression.StoredEnvironment(fixture, store), browser, fixture.Clock);
+            Require(workflow.RunOnceAsync(default).GetAwaiter().GetResult() == ChannelWorkflowOutcome.Submitted && browser.Submissions == 1,
+                "复核齐全后未恢复原提交链");
+            Require(!browser.UserTakeoverActive, "恢复后仍标记为手动接管");
+            Require(browser.LastRecheck is { All: true }, "恢复时未核对网络、认证、页面来源、表单与额度");
+        }))
     ];
 
     private static void Require(bool condition, string message) { if (!condition) throw new Exception(message); }
@@ -824,6 +870,20 @@ internal static class SubmissionRetryRegression
         public int BrowserProcessId => Session.BrowserId;
         public int HelperProcessId => Session.OwnerId;
         public string ProcessJobName => Session.Name;
+        public AuthPageReadiness PageReadiness { get; init; } = new(true, true);
+        public bool UserTakeoverActive { get; set; }
+        public bool ResumeAllowed { get; init; }
+        public int ResumeAttempts { get; private set; }
+        public AuthPageRecheck? LastRecheck { get; private set; }
+        public Task<bool> TryResumeAutoAsync(bool network, bool authentication, bool budget, CancellationToken ct)
+        {
+            ResumeAttempts++;
+            var recheck = new AuthPageRecheck(network, authentication, PageReadiness.OriginTrusted, PageReadiness.FormPresent, budget);
+            LastRecheck = recheck;
+            if (!ResumeAllowed || !recheck.All) return Task.FromResult(false);
+            UserTakeoverActive = false;
+            return Task.FromResult(true);
+        }
         public Action? BeforeSubmit { get; init; }
         public AuthChannelConclusion Result { get; init; } = AuthChannelConclusion.Unknown;
         public Task<AuthChannelConclusion> SubmitAsync(Credentials credentials, CancellationToken ct)

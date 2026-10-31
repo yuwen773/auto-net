@@ -149,6 +149,7 @@ tests = tests.Concat(AvaloniaPrototypeRegression.Cases).ToArray();
 tests = tests.Concat(AuthChannelRegression.Cases).ToArray();
 tests = tests.Concat(AvaloniaShellRegression.Cases).ToArray();
 tests = tests.Concat(AuthPageRegression.Cases).ToArray();
+tests = tests.Concat(AuthPagePointerRegression.Cases).ToArray();
 tests = tests.Concat(OverviewRegression.Cases).ToArray();
 tests = tests.Concat(UnblockRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticsPageRegression.Cases).ToArray();

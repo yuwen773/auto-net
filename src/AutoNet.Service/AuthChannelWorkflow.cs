@@ -9,6 +9,20 @@ public interface IAuthChannelBrowser
     int BrowserProcessId { get; }
     int HelperProcessId { get; }
     string ProcessJobName { get; }
+
+    /// <summary>页面是否仍是固定门户来源且包含登录表单；未就绪时不填表、不提交（工单 #40）。</summary>
+    AuthPageReadiness PageReadiness { get; }
+
+    /// <summary>用户是否正在手动操作，或接管后尚未完成恢复复核（工单 #40）。</summary>
+    bool UserTakeoverActive { get; }
+
+    /// <summary>
+    /// 接管空闲满 15 秒后，结合调用方本轮核对的事实（网络、认证、额度）与浏览器刚刚
+    /// 重新核对的页面来源/表单，决定是否恢复自动操作。页面事实只由浏览器提供，
+    /// 不接受调用方的旧快照。返回 true 表示已恢复。
+    /// </summary>
+    Task<bool> TryResumeAutoAsync(bool network, bool authentication, bool budget, CancellationToken ct);
+
     Task<AuthChannelConclusion> SubmitAsync(Credentials credentials, CancellationToken ct);
 }
 
@@ -38,6 +52,18 @@ public sealed class AuthChannelWorkflow(IMonitorEnvironment environment, IAuthCh
             var block = environment.LoadAuthenticationBlock();
             var link = environment.ReadWifi(settings);
             if (link.State != WifiState.Ready || !browser.IsBoundTo(settings, link)) return ChannelWorkflowOutcome.Blocked;
+            // 用户手动操作期间不填表、不提交。空闲满 15 秒也只是恢复的前提之一：
+            // 网络、认证、页面来源、表单与额度必须在本轮重新核对全部成立。
+            if (browser.UserTakeoverActive)
+            {
+                if (!await browser.TryResumeAutoAsync(
+                    network: link.State == WifiState.Ready,
+                    authentication: block?.State == AuthenticationState.InteractionRequired,
+                    budget: decision == SubmissionRetryDecision.Authorized, ct))
+                    return ChannelWorkflowOutcome.Waiting;
+            }
+            // 工单 #40：页面不是固定门户来源或没有登录表单时，自动填表与提交都不成立。
+            if (!browser.PageReadiness.Ready) return ChannelWorkflowOutcome.Blocked;
             var reviewStarted = clock.GetTimestamp();
             using var review = CancellationTokenSource.CreateLinkedTokenSource(ct);
             review.CancelAfter(TimeSpan.FromSeconds(5));
