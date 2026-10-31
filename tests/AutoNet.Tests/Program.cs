@@ -143,6 +143,7 @@ tests = tests.Concat(DiagnosticsPackageRegression.Cases).ToArray();
 tests = tests.Concat(SafetyRegression.Cases).ToArray();
 tests = tests.Concat(AcceptanceRegression.Cases).ToArray();
 tests = tests.Concat(AuthenticationPersistenceRegression.Cases).ToArray();
+tests = tests.Concat(LegacyStateRegression.Cases).ToArray();
 tests = tests.Concat(RecoveryPersistenceRegression.Cases).ToArray();
 tests = tests.Concat(DisplayRegression.Cases).ToArray();
 tests = tests.Concat(LogCentreRegression.Cases).ToArray();
