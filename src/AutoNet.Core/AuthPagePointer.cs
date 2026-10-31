@@ -121,6 +121,7 @@ public sealed class AuthPagePointerPolicy
 
     private TimeSpan? lastInteraction;
     private AuthPagePointerView view = AuthPagePointerView.Idle;
+    private bool hintCleared;
 
     public AuthPagePointerPolicy(bool reducedMotion = false)
     {
@@ -172,6 +173,7 @@ public sealed class AuthPagePointerPolicy
     public void NoteInteraction(TimeSpan now)
     {
         lastInteraction = now;
+        hintCleared = false;
         view = new(AuthPageStepState.Takeover, null, false, 0, 0, "", "正在手动操作，已暂停自动填表和提交。",
             true, ReducedMotion);
     }
@@ -193,6 +195,7 @@ public sealed class AuthPagePointerPolicy
     /// <summary>页面导航：清除旧页面的指针与步骤；接管状态保持不变。</summary>
     public void NoteNavigation()
     {
+        // 不清除 hintCleared：导航本身不是新的用户操作，已清除的提示不应因导航重复上报。
         view = TakeoverActive
             ? new(AuthPageStepState.Takeover, null, false, 0, 0, "", "正在手动操作，已暂停自动填表和提交。", true, ReducedMotion)
             : AuthPagePointerView.Idle with { ReducedMotion = ReducedMotion };
@@ -206,6 +209,27 @@ public sealed class AuthPagePointerPolicy
     }
 
     /// <summary>
+    /// 接管空闲满 15 秒后是否应只清除“正在手动操作”提示。清除提示不恢复自动操作，
+    /// 也不构成任何提交授权（ADR-0019）；再次交互会重新显示提示。
+    /// </summary>
+    public bool ShouldClearTakeoverHint(TimeSpan now) =>
+        !hintCleared && view.Takeover && lastInteraction is { } last && now - last >= ResumeIdle;
+
+    /// <summary>只清除提示投影；接管状态保持不变，自动填表与提交仍暂停。</summary>
+    public void ClearTakeoverHint()
+    {
+        if (!view.Takeover) return;
+        hintCleared = true;
+        // 仍处于接管：保留 Takeover 投影，只清掉提示与指针。
+        view = AuthPagePointerView.Idle with
+        {
+            State = AuthPageStepState.Takeover,
+            Takeover = true,
+            ReducedMotion = ReducedMotion
+        };
+    }
+
+    /// <summary>
     /// 尝试在用户停止操作后恢复自动操作。必须同时满足：空闲至少 15 秒，且调用方重新核对的
     /// 网络、认证状态、页面来源、表单与共享额度全部成立。任一条件不满足都保持接管。
     /// </summary>
@@ -215,6 +239,7 @@ public sealed class AuthPagePointerPolicy
         if (now - lastInteraction.Value < ResumeIdle) return false;
         if (!recheck.All) return false;
         lastInteraction = null;
+        hintCleared = false;
         view = AuthPagePointerView.Idle with { ReducedMotion = ReducedMotion };
         return true;
     }
@@ -294,13 +319,14 @@ public static class AuthPagePointerScript
 (() => {
   if (window.__autonet) return;
   const forcedReduced = __REDUCED_BOOL__;
-  const state = { takeover: false, reduced: forcedReduced, step: '', hint: '' };
+  const state = { takeover: false, hintCleared: false, reduced: forcedReduced, step: '', hint: '' };
   let pointer = null;
   let label = null;
   function paint() {
     if (!pointer || !label) return;
     label.textContent = state.takeover ? '正在手动操作，已暂停自动填表和提交。' : (state.hint || state.step);
-    label.style.display = (state.takeover || state.step || state.hint) ? 'block' : 'none';
+    const show = state.takeover ? !state.hintCleared : !!(state.step || state.hint);
+    label.style.display = show ? 'block' : 'none';
     if (state.takeover) pointer.style.opacity = '0';
   }
   function mount() {
@@ -324,7 +350,9 @@ public static class AuthPagePointerScript
     try { if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(message); } catch (_) {}
   }
   function interact() {
-    if (state.takeover) { report('__INTERACTION__'); return; }
+    // 再次操作重新显示“正在手动操作”提示；提示是否显示不影响接管本身。
+    state.hintCleared = false;
+    if (state.takeover) { paint(); report('__INTERACTION__'); return; }
     state.takeover = true;
     if (pointer) pointer.style.opacity = '0';
     paint();
@@ -371,7 +399,9 @@ public static class AuthPagePointerScript
       }
       paint();
     },
-    resume: function () { state.takeover = false; paint(); }
+    // 只清除“正在手动操作”提示：接管与自动操作暂停状态保持不变（ADR-0019）。
+    clearHint: function () { state.hintCleared = true; paint(); },
+    resume: function () { state.takeover = false; state.hintCleared = false; paint(); }
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
   else mount();

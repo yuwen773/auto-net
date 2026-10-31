@@ -275,7 +275,7 @@ internal static class AuthChannelRegression
         ("内嵌通道回归：同一会话可消费更新的结果（手动登录成功）", async () =>
         {
             using var receipt = new TemporaryResultFile();
-            var presented = new List<string>();
+            var presented = new List<NotificationAlert>();
             var launcher = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
                 () => Task.FromResult<StatusSnapshot?>(Grant()),
                 path =>
@@ -283,18 +283,20 @@ internal static class AuthChannelRegression
                     File.WriteAllText(path, Form("NeedsHuman", DateTimeOffset.UtcNow, "submit-once"));
                     return new System.Diagnostics.Process();
                 },
-                alert => presented.Add(alert.Body), resultPath: receipt.Path);
+                alert => presented.Add(alert), resultPath: receipt.Path);
             Require(await launcher.ObserveAsync(Grant()) == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.Launched,
                 "首次授予应发起");
             await launcher.ObserveAsync(Grant());
-            Require(presented.Count == 1 && presented[0].Contains("人工完成", StringComparison.Ordinal),
+            Require(presented.Count == 1 && presented[0].Body.Contains("人工完成", StringComparison.Ordinal),
                 "需要人工的结果应即时通知一次");
 
             var later = DateTimeOffset.UtcNow.AddSeconds(30);
             File.WriteAllText(receipt.Path, Form("LoggedIn", later, "manual-login"));
             await launcher.ObserveAsync(Grant());
-            Require(presented.Count == 2 && presented[1].Contains("Accepted", StringComparison.Ordinal),
-                "同一会话应消费更新的登录成功结果并再次通知");
+            Require(presented.Count == 2
+                && presented[1].Body.Contains("可在概览页手动解除", StringComparison.Ordinal)
+                && !presented[1].Warning,
+                "同一会话应消费更新的登录成功结果，并按 ADR-0019 给出解除指引且不作为警告");
             Require(launcher.Describe().LastConclusion == "Accepted", "最终结论应更新为已登录");
             Require(!File.Exists(receipt.Path), "更新结果应被清理");
 
@@ -303,6 +305,19 @@ internal static class AuthChannelRegression
             Require(presented.Count == 2 && !File.Exists(receipt.Path),
                 "同一判定时刻的重复结果不得再次通知，且应清理");
         }),
+        ("内嵌通道回归：清理前重读，补写的新结果不会被删除", () => Sync(() =>
+        {
+            var at = DateTimeOffset.UtcNow.AddMinutes(-2);
+            var consumed = AuthChannelResultFile.Parse(Form("NeedsHuman", at, "submit-once"));
+            Require(AuthChannelLauncher.ShouldCleanup(consumed, consumed), "同一判定应被清理");
+            Require(AuthChannelLauncher.ShouldCleanup(consumed, null), "文件已消失时应按无操作处理");
+            var newer = AuthChannelResultFile.Parse(Form("LoggedIn", at.AddSeconds(30), "manual-login"));
+            Require(!AuthChannelLauncher.ShouldCleanup(consumed, newer),
+                "读取后补写的新结果被当成已消费文件删除");
+            var other = AuthChannelResultFile.Parse(Form("NotLoggedIn", at, "other"));
+            Require(!AuthChannelLauncher.ShouldCleanup(consumed, other),
+                "同一时刻的不同结论被当成已消费文件删除");
+        })),
         ("内嵌通道回归：关闭态手动与自动一律拒绝", () => Sync(() =>
         {
             using var receipt = new TemporaryResultFile();

@@ -34,13 +34,15 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
     private AuthChannelConclusion _submissionConclusion = AuthChannelConclusion.Unknown;
     // 工单 #40：虚拟指针只做视觉呈现；交互检测、接管与恢复复核状态全部留在本进程内。
     private readonly AuthPagePointerPolicy _pointer = new(!ClientAreaAnimationEnabled());
-    private readonly System.Diagnostics.Stopwatch _pointerClock = System.Diagnostics.Stopwatch.StartNew();
+    // 指针、人工观察与空闲提示共用同一个单调时钟，避免两套计时互相漂移。
+    private readonly TimeProvider _clock = TimeProvider.System;
+    private readonly long _clockStart = TimeProvider.System.GetTimestamp();
+    private TimeSpan Elapsed => _clock.GetElapsedTime(_clockStart);
     private bool _pageOriginTrusted;
     private bool _pageFormPresent;
     private bool _takeoverLogged;
     private bool _humanVisible;
     // 工单 #40 / ADR-0019：人工等待期间允许同一会话补写更新的结果（NeedsHuman → LoggedIn）。
-    private bool _resultWritten;
     private AuthChannelConclusion? _lastWritten;
     private TimeSpan? _lastOnlineCheck;
 
@@ -188,14 +190,17 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         Activate();
     }
 
+    // 人工观察的真实外网探测间隔；每 2 秒的轮询不会每次都发起请求。
+    private static readonly TimeSpan OnlineProbeInterval = TimeSpan.FromSeconds(10);
+
     /// <summary>人工等待期间保持会话存活并只读观察；观察到登录成功即提前结束（ADR-0019）。</summary>
     private async Task<AuthChannelConclusion> WaitForHumanAsync(AuthChannelConclusion fallback)
     {
-        if (_options.HumanWaitSeconds <= 0) return fallback;
         var wait = new AuthChannelHumanWait(
             PollHumanOutcomeAsync,
             (interval, ct) => Task.Delay(interval, ct),
-            TimeProvider.System);
+            _clock,
+            RequestIdleHintClear);
         return await wait.ObserveAsync(
             fallback, TimeSpan.FromSeconds(_options.HumanWaitSeconds), _humanCancellationTokenSource.Token);
     }
@@ -204,26 +209,71 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
     /// 只读观察人工结果：绑定校园网卡做外网内容探测，最多每 10 秒一次；确认在线才报告已登录。
     /// 不提交凭据、不改变共享额度、不写认证状态。
     /// </summary>
-    private async Task<AuthChannelConclusion?> PollHumanOutcomeAsync(CancellationToken ct)
+    private async Task<bool> PollHumanOutcomeAsync(CancellationToken ct)
     {
         try
         {
-            if (_proxyLink is not { } link) return null;
-            if (_lastOnlineCheck is { } last && _pointerClock.Elapsed - last < TimeSpan.FromSeconds(10)) return null;
-            _lastOnlineCheck = _pointerClock.Elapsed;
+            if (_proxyLink is not { } link) return false;
+            if (_lastOnlineCheck is { } last && Elapsed - last < OnlineProbeInterval) return false;
+            _lastOnlineCheck = Elapsed;
             using var http = DirectNetwork.CreateClient(link);
-            return await HealthChecks.InternetAsync(http, ct) ? AuthChannelConclusion.LoggedIn : null;
+            return await HealthChecks.InternetAsync(http, ct);
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { return null; }
+        catch (Exception) { return false; }
     }
 
-    /// <summary>写结果文件；同一会话可补写更新的结论，但相同结论不重复写。</summary>
+    /// <summary>
+    /// 人工等待的轮询在线程池上继续（<see cref="AuthChannelHumanWait"/> 不依赖 UI 同步上下文），
+    /// 因此清除提示必须切回创建 WebView2 的 UI 线程；不等待脚本结果，避免阻塞观察循环。
+    /// </summary>
+    private void RequestIdleHintClear()
+    {
+        try
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            if (InvokeRequired) BeginInvoke(ClearIdleHint);
+            else ClearIdleHint();
+        }
+        catch (InvalidOperationException) { }
+    }
+
+    /// <summary>
+    /// 接管空闲满 15 秒后只清除页面上的“正在手动操作”提示；接管与自动操作暂停保持不变，
+    /// 不构成任何提交授权（ADR-0019）。
+    /// </summary>
+    private void ClearIdleHint()
+    {
+        if (!_pointer.ShouldClearTakeoverHint(Elapsed)) return;
+        if (_webView?.CoreWebView2 is not { } core) return;
+        _ = ClearIdleHintAsync(core);
+    }
+
+    private async Task ClearIdleHintAsync(Microsoft.Web.WebView2.Core.CoreWebView2 core)
+    {
+        try
+        {
+            await core.ExecuteScriptAsync("window.__autonet && window.__autonet.clearHint();");
+        }
+        catch (Exception) { return; }
+        // 脚本往返期间用户可能又开始操作：重新确认仍空闲才更新投影。
+        if (!_pointer.ShouldClearTakeoverHint(Elapsed)) return;
+        _pointer.ClearTakeoverHint();
+        AuthChannelLogWriter.Append("AuthChannelTakeover", "idle=15s; hint=cleared; auto-ops=still-paused");
+    }
+
+    /// <summary>
+    /// 写结果文件；同一会话可补写更新的结论，但相同结论不重复写。已确认的 <c>LoggedIn</c>
+    /// 不会被后续的 <c>Unknown</c>/错误覆盖：观察成功之后发生的存储或运行错误不改变登录事实。
+    /// </summary>
     private void PublishResult(AuthChannelConclusion conclusion, string? detail = null, bool force = false)
     {
-        if (!force && _resultWritten && _lastWritten == conclusion) return;
+        if (_lastWritten is { } last)
+        {
+            if (last == AuthChannelConclusion.LoggedIn && conclusion != AuthChannelConclusion.LoggedIn) return;
+            if (!force && last == conclusion) return;
+        }
         WriteResult(_options.ResultPath, conclusion, detail ?? DetailFor(conclusion));
-        _resultWritten = true;
         _lastWritten = conclusion;
     }
 
@@ -240,7 +290,8 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 
     private string DetailFor(AuthChannelConclusion conclusion) => conclusion switch
     {
-        AuthChannelConclusion.LoggedIn => "submit-once=done; outcome=logged-in",
+        AuthChannelConclusion.LoggedIn when _submissionStarted => "submit-once=done; outcome=logged-in",
+        AuthChannelConclusion.LoggedIn => "submit-once=halted; outcome=logged-in",
         AuthChannelConclusion.NotLoggedIn => "submit-once=done; outcome=explicit-failure",
         AuthChannelConclusion.NeedsHuman => "submit-once=halted; outcome=needs-human",
         _ when !_submissionStarted && !HasTrustedNetworkBoundary => "error=NetworkBoundaryUnverified; submit-once=not-authorized",
@@ -342,10 +393,7 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         if (_pointer.TakeoverActive)
         {
             BeginHumanAssist();
-            var observed = await WaitForHumanAsync(AuthChannelConclusion.Unknown);
-            if (observed != AuthChannelConclusion.LoggedIn) return AuthChannelConclusion.Unknown;
-            PublishResult(observed);
-            return observed;
+            return await ObserveTakeoverAsync();
         }
         var core = _webView!.CoreWebView2;
         // 复核已经通过：清除页面的接管标记，开始真实动作。若用户在此之后再次操作，
@@ -432,10 +480,20 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 
     private async Task<AuthChannelConclusion> BeginTakeoverAsync()
     {
-        _pointer.NoteInteraction(_pointerClock.Elapsed);
+        _pointer.NoteInteraction(Elapsed);
         BeginHumanAssist();
+        return await ObserveTakeoverAsync();
+    }
+
+    /// <summary>
+    /// 接管后只读观察人工结果（ADR-0019）：观察到在线才写入更新的结论，并同步提交结论，
+    /// 避免外层以默认的 Unknown 覆盖它。接管本身永不恢复自动填表或提交。
+    /// </summary>
+    private async Task<AuthChannelConclusion> ObserveTakeoverAsync()
+    {
         var observed = await WaitForHumanAsync(AuthChannelConclusion.Unknown);
         if (observed != AuthChannelConclusion.LoggedIn) return AuthChannelConclusion.Unknown;
+        _submissionConclusion = observed;
         PublishResult(observed);
         return observed;
     }
@@ -515,7 +573,7 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
             {
                 case AuthPageInteractionKind.TrustedInput:
                     // 每次受信任输入都重新计时：用户再次操作必须重新等待完整的 15 秒。
-                    _pointer.NoteInteraction(_pointerClock.Elapsed);
+                    _pointer.NoteInteraction(Elapsed);
                     if (!_takeoverLogged)
                     {
                         _takeoverLogged = true;
@@ -546,12 +604,12 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
     {
         if (!_pointer.TakeoverActive) return true;
         // 先看空闲时间，避免用户仍在输入时每秒都执行一次页面脚本。
-        if (_pointer.IdleFor(_pointerClock.Elapsed) < AuthPagePointerPolicy.ResumeIdle) return false;
+        if (_pointer.IdleFor(Elapsed) < AuthPagePointerPolicy.ResumeIdle) return false;
         if (!await VerifyPageAsync(ct).ConfigureAwait(true)) return false;
         // 页面来源与表单只采用刚刚核对的结果；调用方不提供这两项，避免旧快照参与判断。
         var recheck = new AuthPageRecheck(network, authentication, _pageOriginTrusted, _pageFormPresent, budget);
         if (!recheck.All) return false;
-        if (!_pointer.TryResume(_pointerClock.Elapsed, recheck)) return false;
+        if (!_pointer.TryResume(Elapsed, recheck)) return false;
         await ResumePointerAsync().ConfigureAwait(true);
         _takeoverLogged = false;
         AuthChannelLogWriter.Append("AuthChannelTakeover",

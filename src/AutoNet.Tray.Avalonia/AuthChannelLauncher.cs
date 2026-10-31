@@ -86,10 +86,10 @@ internal sealed class AuthChannelLauncher
     public async Task<ObserveOutcome> ObserveAsync(StatusSnapshot? reading)
     {
         lastReading = reading;
-        if (reading is null) { ConsumeResult(new StatusSnapshot()); return ObserveOutcome.NoGrant; }
-        ConsumeResult(reading);
+        if (reading is null) { ConsumeResult(); return ObserveOutcome.NoGrant; }
+        ConsumeResult();
         if (!reading.AuthChannelRequested || reading.AuthChannelNotBefore is not { } grant) return ObserveOutcome.NoGrant;
-        if (consumedGrant == grant) { TryConsumeResultFile(); return ObserveOutcome.AlreadyConsumed; }
+        if (consumedGrant == grant) return ObserveOutcome.AlreadyConsumed;
         // 发起前重验：快照不可信、请求消失或授予时间戳已变 → 不发起（故事 68 同型）。
         var fresh = await refresh();
         if (fresh?.AuthChannelRequested != true || fresh.AuthChannelNotBefore != grant) return ObserveOutcome.UntrustedState;
@@ -160,7 +160,7 @@ internal sealed class AuthChannelLauncher
         catch (System.ComponentModel.Win32Exception) { return true; }
     }
 
-    private void ConsumeResult(StatusSnapshot reading)
+    private void ConsumeResult()
     {
         if (launchedAt is null) return;
         if (!AuthChannelResultFile.TryLoad(resultPath, out var result, out _) || result is null) return;
@@ -171,8 +171,7 @@ internal sealed class AuthChannelLauncher
         // 只按判定时刻去重，不因已消费过第一条就永久拒绝；重复或更旧的判定直接清理。
         if (lastConsumedAt is { } last && result.DetectedAt <= last)
         {
-            try { File.Delete(resultPath); } catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            CleanupConsumed(result);
             return;
         }
         lastConsumedAt = result.DetectedAt;
@@ -190,19 +189,43 @@ internal sealed class AuthChannelLauncher
             Present(NotificationCodes.AuthChannelNeedsHuman,
                 "内嵌认证通道遇到验证码或页面限制，窗口保持门户页打开，请人工完成剩余步骤。");
         }
+        else if (result.Conclusion == AuthChannelConclusion.LoggedIn)
+        {
+            // ADR-0019 §6：登录成功不自动解除认证暂停，成功通知只给出显式解除指引。
+            // 自动成功时可能本就没有暂停，因此用条件句，不虚构暂停状态。
+            Present(NotificationCodes.AuthChannelResult,
+                "内嵌认证通道已登录成功；如仍有认证暂停，可在概览页手动解除。", warning: false);
+        }
         else
         {
             Present(NotificationCodes.AuthChannelResult,
                 "内嵌认证通道结论：" + lastConclusion + "。");
         }
-        try { File.Delete(resultPath); } catch (IOException) { }
+        CleanupConsumed(result);
     }
 
-    private void Present(string code, string body) =>
-        presentAlert?.Invoke(new NotificationAlert(code, "AutoNet · 内嵌认证通道", body, Warning: true));
-
-    private void TryConsumeResultFile()
+    /// <summary>
+    /// 清理已消费的结果。删除前重新读取一次：若通道在读取与清理之间补写了更新的判定，
+    /// 保留该文件给下一轮消费（ADR-0019 §5）。重读只缩小、不消除判定与删除之间的窗口；
+    /// 通道每次会话最多补写一条结果，实际风险远小于原先“读完即删”。
+    /// </summary>
+    private void CleanupConsumed(AuthChannelResult consumed)
     {
-        if (launchedAt is not null) ConsumeResult(new StatusSnapshot());
+        try
+        {
+            if (AuthChannelResultFile.TryLoad(resultPath, out var current, out _) && current is not null &&
+                !ShouldCleanup(consumed, current))
+                return;
+            File.Delete(resultPath);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
+
+    /// <summary>重新读取到的结果是否仍是被消费的那一条；不同的判定必须留给下一轮。</summary>
+    internal static bool ShouldCleanup(AuthChannelResult consumed, AuthChannelResult? current) =>
+        current is null || (current.DetectedAt == consumed.DetectedAt && current.Conclusion == consumed.Conclusion);
+
+    private void Present(string code, string body, bool warning = true) =>
+        presentAlert?.Invoke(new NotificationAlert(code, "AutoNet · 内嵌认证通道", body, Warning: warning));
 }

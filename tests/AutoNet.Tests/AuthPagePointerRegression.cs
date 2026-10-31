@@ -155,6 +155,28 @@ internal static class AuthPagePointerRegression
             Require(policy.TryResume(start + TimeSpan.FromSeconds(15), all), "空闲满 15 秒且复核齐全仍未恢复");
             Require(!policy.TakeoverActive && policy.CanAutoAct, "恢复后仍处于接管");
         })),
+        ("手动接管：空闲满 15 秒只清除提示且不恢复自动操作", () => Sync(() =>
+        {
+            var policy = new AuthPagePointerPolicy();
+            var start = TimeSpan.FromSeconds(3);
+            policy.NoteInteraction(start);
+            Require(!policy.ShouldClearTakeoverHint(start + TimeSpan.FromSeconds(14.9)), "不足 15 秒就清除提示");
+            Require(policy.ShouldClearTakeoverHint(start + TimeSpan.FromSeconds(15)), "空闲满 15 秒未清除提示");
+            policy.ClearTakeoverHint();
+            Require(policy.View.Hint.Length == 0 && policy.View.StepLabel.Length == 0, "提示文本未清除");
+            Require(policy.View.State == AuthPageStepState.Takeover && !policy.View.PointerVisible,
+                "清除提示后投影不再是接管或仍显示指针");
+            Require(policy.View.Takeover, "清除提示后投影丢失接管状态");
+            Require(policy.TakeoverActive && !policy.CanAutoAct, "清除提示被当成恢复自动操作");
+            Require(!policy.ShouldClearTakeoverHint(start + TimeSpan.FromSeconds(30)), "已清除的提示被重复上报");
+
+            policy.NoteInteraction(start + TimeSpan.FromSeconds(31));
+            Require(policy.View.Hint.Contains("正在手动操作", StringComparison.Ordinal), "再次交互未重新显示提示");
+
+            var install = AuthPagePointerScript.Install(false);
+            Require(install.Contains("clearHint", StringComparison.Ordinal), "覆盖层未提供只清除提示的入口");
+            Require(install.Contains("hintCleared", StringComparison.Ordinal), "覆盖层未区分提示清除与恢复");
+        })),
         ("手动接管：再次交互重置等待且空闲本身不授权", () => Sync(() =>
         {
             var policy = new AuthPagePointerPolicy();
