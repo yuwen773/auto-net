@@ -39,6 +39,10 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
     private bool _pageFormPresent;
     private bool _takeoverLogged;
     private bool _humanVisible;
+    // 工单 #40 / ADR-0019：人工等待期间允许同一会话补写更新的结果（NeedsHuman → LoggedIn）。
+    private bool _resultWritten;
+    private AuthChannelConclusion? _lastWritten;
+    private TimeSpan? _lastOnlineCheck;
 
     public int ExitCode { get; private set; } = 1;
     public bool HasTrustedNetworkBoundary => _runtimeInJob && _proxy?.IsRunning == true && _processJob is not null;
@@ -137,8 +141,9 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
             BeginInvoke(Close);
             return;
         }
-        WriteResult(_options.ResultPath, conclusion,
-            runtimeError.Length > 0 ? runtimeError : DetailFor(conclusion));
+        // 工单 #40 / ADR-0019：人工路径可能已经写过 NeedsHuman；错误必须覆盖，成功只补写一次。
+        PublishResult(conclusion,
+            runtimeError.Length > 0 ? runtimeError : null, force: runtimeError.Length > 0);
         if (runtimeError.Length == 0)
         {
             AuthChannelLogWriter.Append("AuthChannelResult", "conclusion=" + conclusion);
@@ -149,7 +154,11 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
             // 等人工完成（自动提交在 NeedsHuman 判定前就已停止，每页一次提交约束不变）。
             AuthChannelLogWriter.Append("AuthChannelNeedsHuman", "window-shown=true; auto-submit=halted");
             BeginInvoke(ShowForHuman);
-            await HumanAssistDelayAsync();
+            if (await WaitForHumanAsync(AuthChannelConclusion.NeedsHuman) == AuthChannelConclusion.LoggedIn)
+            {
+                conclusion = AuthChannelConclusion.LoggedIn;
+                PublishResult(conclusion);
+            }
         }
         ExitCode = conclusion switch
         {
@@ -179,13 +188,43 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         Activate();
     }
 
-    /// <summary>保持门户页打开等人工完成；超时或用户关闭即退出（页面状态由学校侧会话承载）。</summary>
-    private async Task HumanAssistDelayAsync()
+    /// <summary>人工等待期间保持会话存活并只读观察；观察到登录成功即提前结束（ADR-0019）。</summary>
+    private async Task<AuthChannelConclusion> WaitForHumanAsync(AuthChannelConclusion fallback)
     {
-        var wait = _options.HumanWaitSeconds;
-        if (wait <= 0) return;
-        try { await Task.Delay(TimeSpan.FromSeconds(wait), _humanCancellationTokenSource.Token); }
-        catch (OperationCanceledException) { /* 用户已关闭窗口 */ }
+        if (_options.HumanWaitSeconds <= 0) return fallback;
+        var wait = new AuthChannelHumanWait(
+            PollHumanOutcomeAsync,
+            (interval, ct) => Task.Delay(interval, ct),
+            TimeProvider.System);
+        return await wait.ObserveAsync(
+            fallback, TimeSpan.FromSeconds(_options.HumanWaitSeconds), _humanCancellationTokenSource.Token);
+    }
+
+    /// <summary>
+    /// 只读观察人工结果：绑定校园网卡做外网内容探测，最多每 10 秒一次；确认在线才报告已登录。
+    /// 不提交凭据、不改变共享额度、不写认证状态。
+    /// </summary>
+    private async Task<AuthChannelConclusion?> PollHumanOutcomeAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (_proxyLink is not { } link) return null;
+            if (_lastOnlineCheck is { } last && _pointerClock.Elapsed - last < TimeSpan.FromSeconds(10)) return null;
+            _lastOnlineCheck = _pointerClock.Elapsed;
+            using var http = DirectNetwork.CreateClient(link);
+            return await HealthChecks.InternetAsync(http, ct) ? AuthChannelConclusion.LoggedIn : null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>写结果文件；同一会话可补写更新的结论，但相同结论不重复写。</summary>
+    private void PublishResult(AuthChannelConclusion conclusion, string? detail = null, bool force = false)
+    {
+        if (!force && _resultWritten && _lastWritten == conclusion) return;
+        WriteResult(_options.ResultPath, conclusion, detail ?? DetailFor(conclusion));
+        _resultWritten = true;
+        _lastWritten = conclusion;
     }
 
     internal static void WriteFailureResult(string path, string error)
@@ -217,7 +256,10 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
             detectedAt = DateTimeOffset.UtcNow.ToString("o"),
             detail,
         });
-        File.WriteAllText(path, payload, new UTF8Encoding(false));
+        // 人工等待期间可能补写第二条结果；先写临时文件再原子替换，避免托盘读到半截。
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, payload, new UTF8Encoding(false));
+        File.Move(temp, path, overwrite: true);
     }
 
     private async Task<AuthChannelConclusion> ExecuteAsync()
@@ -295,12 +337,15 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 
     public async Task<AuthChannelConclusion> SubmitAsync(Credentials credentials, CancellationToken ct)
     {
-        // 复核与提交之间用户开始操作：不填表、不提交；结果保守按未知处理。
+        // 复核与提交之间用户开始操作：不填表、不提交；结果保守按未知处理，但保持会话
+        // 观察人工结果（ADR-0019）。
         if (_pointer.TakeoverActive)
         {
             BeginHumanAssist();
-            await HumanAssistDelayAsync();
-            return AuthChannelConclusion.Unknown;
+            var observed = await WaitForHumanAsync(AuthChannelConclusion.Unknown);
+            if (observed != AuthChannelConclusion.LoggedIn) return AuthChannelConclusion.Unknown;
+            PublishResult(observed);
+            return observed;
         }
         var core = _webView!.CoreWebView2;
         // 复核已经通过：清除页面的接管标记，开始真实动作。若用户在此之后再次操作，
@@ -389,8 +434,10 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
     {
         _pointer.NoteInteraction(_pointerClock.Elapsed);
         BeginHumanAssist();
-        await HumanAssistDelayAsync();
-        return AuthChannelConclusion.Unknown;
+        var observed = await WaitForHumanAsync(AuthChannelConclusion.Unknown);
+        if (observed != AuthChannelConclusion.LoggedIn) return AuthChannelConclusion.Unknown;
+        PublishResult(observed);
+        return observed;
     }
 
     private async Task<AuthChannelConclusion> StopForHumanAsync(AuthPageStep step, AuthPageStepReason reason)
@@ -398,9 +445,14 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         _pointer.FailStep(step, reason);
         _submissionConclusion = AuthChannelConclusion.NeedsHuman;
         _humanAssisted = true;
+        // 先立即写入并通知，再保持会话观察人工结果；成功时补写更新的结论（ADR-0019）。
+        PublishResult(AuthChannelConclusion.NeedsHuman);
         BeginHumanAssist();
-        await HumanAssistDelayAsync();
-        return _submissionConclusion;
+        var observed = await WaitForHumanAsync(AuthChannelConclusion.NeedsHuman);
+        if (observed != AuthChannelConclusion.LoggedIn) return AuthChannelConclusion.NeedsHuman;
+        _submissionConclusion = observed;
+        PublishResult(observed);
+        return observed;
     }
 
     /// <summary>显示通道窗口，让用户看到当前步骤或接管状态；已关闭时忽略。</summary>

@@ -39,6 +39,7 @@ internal sealed class AuthChannelLauncher
     private readonly string resultPath;
     private DateTimeOffset? consumedGrant;
     private DateTimeOffset? launchedAt;
+    private DateTimeOffset? lastConsumedAt;
     private string? lastConclusion;
     private Process? activeProcess;
     private StatusSnapshot? lastReading;
@@ -119,6 +120,7 @@ internal sealed class AuthChannelLauncher
     {
         if (reading.AuthChannelMode == AuthChannelModes.Off) return ObserveOutcome.ModeOff;
         lastConclusion = null;
+        lastConsumedAt = null;
         if (SessionActive) return ObserveOutcome.Busy;
         launchedAt = DateTimeOffset.UtcNow;
         try { File.Delete(resultPath); } catch (IOException) { }
@@ -160,11 +162,20 @@ internal sealed class AuthChannelLauncher
 
     private void ConsumeResult(StatusSnapshot reading)
     {
-        if (launchedAt is null || lastConclusion is not null) return;
+        if (launchedAt is null) return;
         if (!AuthChannelResultFile.TryLoad(resultPath, out var result, out _) || result is null) return;
         // 回执双核对（工单 #23）：结果文件必须就是发起时约定的路径（同机同用户），且
         // 判定时刻不早于发起时刻——伪造或上一轮的陈旧结果在此被拒。
         if (!AuthChannelReceipt.Validate(result, resultPath, resultPath, launchedAt.Value, out _)) return;
+        // 工单 #40 / ADR-0019：人工等待期间允许同一会话补写更新的结果（例如手动登录成功）。
+        // 只按判定时刻去重，不因已消费过第一条就永久拒绝；重复或更旧的判定直接清理。
+        if (lastConsumedAt is { } last && result.DetectedAt <= last)
+        {
+            try { File.Delete(resultPath); } catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return;
+        }
+        lastConsumedAt = result.DetectedAt;
         lastConclusion = AuthChannelReceipt.MapToSubmissionOutcome(result.Conclusion)?.ToString()
             ?? "Unknown";
         // 工单 #25：受控关键通知（不静默）。失败回退系统浏览器兜底；需人工呈现窗口提示。
@@ -192,6 +203,6 @@ internal sealed class AuthChannelLauncher
 
     private void TryConsumeResultFile()
     {
-        if (launchedAt is not null && lastConclusion is null) ConsumeResult(new StatusSnapshot());
+        if (launchedAt is not null) ConsumeResult(new StatusSnapshot());
     }
 }

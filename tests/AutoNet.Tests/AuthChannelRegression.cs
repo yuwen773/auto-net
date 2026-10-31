@@ -272,6 +272,37 @@ internal static class AuthChannelRegression
             Require(!File.Exists(receipt.Path) && presented.Count == 2 && presented[1].Contains("RejectedCredentials"),
                 "第二轮实际回执应清理且呈现一次");
         }),
+        ("内嵌通道回归：同一会话可消费更新的结果（手动登录成功）", async () =>
+        {
+            using var receipt = new TemporaryResultFile();
+            var presented = new List<string>();
+            var launcher = new AutoNet.Tray.Avalonia.AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(Grant()),
+                path =>
+                {
+                    File.WriteAllText(path, Form("NeedsHuman", DateTimeOffset.UtcNow, "submit-once"));
+                    return new System.Diagnostics.Process();
+                },
+                alert => presented.Add(alert.Body), resultPath: receipt.Path);
+            Require(await launcher.ObserveAsync(Grant()) == AutoNet.Tray.Avalonia.AuthChannelLauncher.ObserveOutcome.Launched,
+                "首次授予应发起");
+            await launcher.ObserveAsync(Grant());
+            Require(presented.Count == 1 && presented[0].Contains("人工完成", StringComparison.Ordinal),
+                "需要人工的结果应即时通知一次");
+
+            var later = DateTimeOffset.UtcNow.AddSeconds(30);
+            File.WriteAllText(receipt.Path, Form("LoggedIn", later, "manual-login"));
+            await launcher.ObserveAsync(Grant());
+            Require(presented.Count == 2 && presented[1].Contains("Accepted", StringComparison.Ordinal),
+                "同一会话应消费更新的登录成功结果并再次通知");
+            Require(launcher.Describe().LastConclusion == "Accepted", "最终结论应更新为已登录");
+            Require(!File.Exists(receipt.Path), "更新结果应被清理");
+
+            File.WriteAllText(receipt.Path, Form("LoggedIn", later, "duplicate"));
+            await launcher.ObserveAsync(Grant());
+            Require(presented.Count == 2 && !File.Exists(receipt.Path),
+                "同一判定时刻的重复结果不得再次通知，且应清理");
+        }),
         ("内嵌通道回归：关闭态手动与自动一律拒绝", () => Sync(() =>
         {
             using var receipt = new TemporaryResultFile();
