@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using AutoNet.Core;
 using AutoNet.Tray.Avalonia;
@@ -43,6 +44,51 @@ internal static class DiagnosticsExporterRegression
 
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
+        ("导出：提权进程异步采集并解码 GB2312 后完成退出", async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("AutoNet-export-ui-").FullName;
+            try
+            {
+                var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
+                if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "dotnet", StringComparison.OrdinalIgnoreCase))
+                    info.ArgumentList.Add(typeof(DiagnosticsExporterRegression).Assembly.Location);
+                info.ArgumentList.Add("--export-ui-test-peer");
+                info.ArgumentList.Add(root);
+                using var child = Process.Start(info) ?? throw new Exception("无法启动导出 UI 夹具");
+                try
+                {
+                    try
+                    {
+                        await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(8));
+                    }
+                    catch (TimeoutException)
+                    {
+                        Require(File.Exists(Path.Combine(root, "collection-started")), "未进入异步采集，不能判定为导出阻塞");
+                        throw new Exception("异步采集后导出 UI 进程未在时限内退出");
+                    }
+                    Require(child.ExitCode == 0, "导出进程应成功退出：" + child.ExitCode);
+                    var target = Path.Combine(root, "package.zip");
+                    Require(File.Exists(Path.Combine(root, "collection-started")), "应进入真正的异步采集");
+                    using var zip = ZipFile.OpenRead(target);
+                    var readme = new StreamReader(zip.GetEntry("README.txt")!.Open()).ReadToEnd();
+                    var outcome = DiagnosticsExportOutcome.TryRead(Path.Combine(root, "export-result.json"));
+                    Require(outcome is { Ok: true } && outcome.TargetPath == target, "结果文件应确认实际目标");
+                    Require(!outcome!.Notes.Any(n => n.Contains("实时采集失败", StringComparison.Ordinal)), "异步采集或 GB2312 解码不应失败");
+                    Require(outcome!.Notes.Any(n => n.Contains("status.json", StringComparison.Ordinal))
+                        && readme.Contains("status.json", StringComparison.Ordinal), "结果与包应同时披露采集缺口");
+                }
+                finally
+                {
+                    // 任何断言或读取失败都不能留下运行中的子进程。
+                    if (!child.HasExited)
+                    {
+                        child.Kill(true);
+                        await child.WaitForExitAsync();
+                    }
+                }
+            }
+            finally { Directory.Delete(root, true); }
+        }),
         ("导出：启动请求解析 --export-diagnostics 目标路径且与其他操作互斥", () =>
         {
             var parsed = StartupRequest.Parse(["--export-diagnostics", @"C:\pkg\diag.zip"]);
@@ -179,7 +225,7 @@ internal static class DiagnosticsExporterRegression
                 var logs = Path.Combine(root, "logs");
                 Directory.CreateDirectory(logs);
                 File.WriteAllText(Path.Combine(logs, "autonet-2026-10-16.jsonl"), "{\"schemaVersion\":2,\"action\":\"today\"}\n");
-                var code = DiagnosticsExportJob.Run(target, resultPath, options => options with
+                var code = DiagnosticsExportJob.RunAsync(target, resultPath, options => options with
                 {
                     LogDirectory = logs,
                     StatusPath = Path.Combine(root, "missing-status.json"),
@@ -187,7 +233,7 @@ internal static class DiagnosticsExporterRegression
                     Profiles = () => [],
                     Collect = (_, _) => Task.FromResult(new AutoNet.Core.LiveDiagnostics(null, null)),
                     ExportedAt = Base
-                });
+                }).GetAwaiter().GetResult();
                 Require(code == 0, "离线成功采集应返回退出码 0");
                 Require(File.Exists(target), "应产出诊断包");
                 Require(Directory.GetFiles(root, "*.tmp").Length == 0, "不得留下临时残留");
@@ -215,7 +261,7 @@ internal static class DiagnosticsExporterRegression
                 var resultPath = Path.Combine(root, "export-result.json");
                 // 目标被独占占用 → 最终发布失败：这是“导出失败”的受控模拟。
                 using var exclusive = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.None);
-                var code = DiagnosticsExportJob.Run(target, resultPath, options => options with
+                var code = DiagnosticsExportJob.RunAsync(target, resultPath, options => options with
                 {
                     LogDirectory = Path.Combine(root, "no-logs"),
                     StatusPath = Path.Combine(root, "missing-status.json"),
@@ -223,14 +269,14 @@ internal static class DiagnosticsExporterRegression
                     Profiles = () => [],
                     Collect = (_, _) => Task.FromResult(new AutoNet.Core.LiveDiagnostics(null, null)),
                     ExportedAt = Base
-                });
+                }).GetAwaiter().GetResult();
                 exclusive.Dispose();
                 Require(code == 3, "采集发布失败应返回退出码 3");
                 Require(File.ReadAllText(target) == oldBytes, "旧包字节应保持不变");
                 var outcome = DiagnosticsExportOutcome.TryRead(resultPath);
                 Require(outcome is { } bad && !bad.Ok && bad.ErrorKind is { Length: > 0 }, "结果文件应披露受控错误类型");
                 // 参数缺失：退出码 2，不产包。
-                var missing = DiagnosticsExportJob.Run("  ", Path.Combine(root, "missing-result.json"));
+                var missing = DiagnosticsExportJob.RunAsync("  ", Path.Combine(root, "missing-result.json")).GetAwaiter().GetResult();
                 Require(missing == 2, "空目标应返回退出码 2");
             }
             finally { Directory.Delete(root, true); }
@@ -245,7 +291,7 @@ internal static class DiagnosticsExporterRegression
                 // 结果文件是界面侧「结果」呈现的全部来源——逐字段扫描敏感形态。
                 var target = Path.Combine(root, "pkg.zip");
                 var resultPath = Path.Combine(root, "export-result.json");
-                var code = DiagnosticsExportJob.Run(target, resultPath, options => options with
+                var code = DiagnosticsExportJob.RunAsync(target, resultPath, options => options with
                 {
                     LogDirectory = Path.Combine(root, "no-logs"),
                     StatusPath = Path.Combine(root, "missing-status.json"),
@@ -253,7 +299,7 @@ internal static class DiagnosticsExporterRegression
                     Profiles = () => [],
                     Collect = (_, _) => Task.FromResult(new AutoNet.Core.LiveDiagnostics(null, null)),
                     ExportedAt = Base
-                });
+                }).GetAwaiter().GetResult();
                 Require(code == 0, "离线导出应成功");
                 var outcome = DiagnosticsExportOutcome.TryRead(resultPath);
                 if (outcome is not { } ok || !ok.Ok) throw new Exception("结果文件应记录成功");
@@ -277,5 +323,21 @@ internal static class DiagnosticsExporterRegression
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
+    }
+
+    public static int RunUiPeer(string root)
+    {
+        Environment.SetEnvironmentVariable("AUTONET_QA_EXPORT_OUTCOME", "async-collection");
+        var code = 1;
+        var thread = new Thread(() =>
+        {
+            var target = Path.Combine(root, "package.zip");
+            code = AppHost.RunElevated(new StartupRequest(false, ElevatedOperationKind.DiagnosticsExport, target),
+                new QaEnvironment(QaMode.ExportDiagnostics, root));
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        return code;
     }
 }

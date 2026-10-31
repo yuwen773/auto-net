@@ -239,9 +239,12 @@ public sealed class App : Application
     /// </summary>
     private static void StartDiagnosticsExport(IClassicDesktopStyleApplicationLifetime desktop, ElevatedMode elevated)
     {
-        Dispatcher.UIThread.Post(() =>
+        Dispatcher.UIThread.Post(async () =>
         {
-            var code = DiagnosticsExportJob.Run(elevated.ExportTargetPath, DiagnosticsExportJob.ProductionResultPath);
+            // 异步采集不再阻塞 UI 线程；RunAsync 内部已收敛受控错误，这里只兜底意外异常。
+            var code = 3;
+            try { code = await DiagnosticsExportJob.RunAsync(elevated.ExportTargetPath, DiagnosticsExportJob.ProductionResultPath); }
+            catch (Exception) { code = 3; }
             desktop.Shutdown(code);
         });
     }

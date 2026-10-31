@@ -1,5 +1,8 @@
+using System.Net;
+using System.Net.Http.Headers;
 using Avalonia;
 using Avalonia.Threading;
+using AutoNet.Core;
 
 namespace AutoNet.Tray.Avalonia;
 
@@ -146,6 +149,11 @@ internal static class QaExport
     /// </summary>
     public static void RunElevated(ElevatedMode elevated, QaEnvironment qa, Action<int> shutdown)
     {
+        if (Environment.GetEnvironmentVariable("AUTONET_QA_EXPORT_OUTCOME") == "async-collection")
+        {
+            RunAsyncCollection(elevated, qa, shutdown);
+            return;
+        }
         Dispatcher.UIThread.Post(() =>
         {
             try
@@ -180,6 +188,48 @@ internal static class QaExport
                 });
                 shutdown(3);
             }
+        });
+    }
+
+    /// <summary>
+    /// 异步采集夹具（<c>AUTONET_QA_EXPORT_OUTCOME=async-collection</c>）：走真实的
+    /// <see cref="DiagnosticsExportJob.RunAsync"/> 链路，用受控 <c>Collect</c> 延迟 100ms
+    /// 并解码 GB2312，证明提权导出不再在 UI 线程同步阻塞。只写 QA 证据目录，不触碰真实位置。
+    /// </summary>
+    private static void RunAsyncCollection(ElevatedMode elevated, QaEnvironment qa, Action<int> shutdown)
+    {
+        Dispatcher.UIThread.Post(async () =>
+        {
+            var code = 3;
+            try
+            {
+                var target = elevated.ExportTargetPath ?? "";
+                if (string.Equals(target, Path.Combine(qa.Directory, "package.zip"), StringComparison.Ordinal))
+                {
+                    code = await DiagnosticsExportJob.RunAsync(target, qa.ExportResultPath, options => options with
+                    {
+                        LogDirectory = Path.Combine(qa.Directory, "missing-logs"),
+                        StatusPath = Path.Combine(qa.Directory, "missing-status.json"),
+                        LoadSettings = () => new Settings { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "CSUST" },
+                        Profiles = () => [],
+                        Collect = async (_, _) =>
+                        {
+                            File.WriteAllText(Path.Combine(qa.Directory, "collection-started"), "started");
+                            await Task.Delay(100);
+                            using var response = new HttpResponseMessage(HttpStatusCode.OK)
+                            {
+                                Content = new ByteArrayContent([0xd6, 0xd0, 0xce, 0xc4])
+                            };
+                            response.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "gb2312" };
+                            if (await DrcomPortal.ReadLimitedAsync(response, CancellationToken.None) != "中文")
+                                throw new InvalidDataException("字符集解码不匹配");
+                            return new LiveDiagnostics(null, null);
+                        }
+                    });
+                }
+            }
+            catch (Exception) { code = 3; }
+            finally { shutdown(code); }
         });
     }
 

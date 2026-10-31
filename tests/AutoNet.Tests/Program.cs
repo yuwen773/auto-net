@@ -4,6 +4,9 @@ using System.Text;
 using System.Text.Json;
 using AutoNet.Core;
 
+// 该独立进程刻意不预注册字符集，覆盖 Avalonia 导出实际需要的解码能力。
+if (args.FirstOrDefault() == "--export-ui-test-peer")
+    return args.Length > 1 ? DiagnosticsExporterRegression.RunUiPeer(args[1]) : 2;
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 if (args.FirstOrDefault() == "--handoff-test-peer") return await SettingsHandoffRegression.RunPeerAsync(args);
 if (args.FirstOrDefault() == "--settings-save-peer") return SettingsSaveRegression.RunSavePeer(args);

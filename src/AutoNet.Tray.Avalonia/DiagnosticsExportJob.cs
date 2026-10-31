@@ -20,7 +20,7 @@ internal static class DiagnosticsExportJob
     /// 返回退出码（0 成功 / 3 失败 / 2 参数缺失）。
     /// <paramref name="configure"/> 供测试离线化注入（日志目录、状态路径、采集桩）；生产路径不传。
     /// </summary>
-    public static int Run(string? targetPath, string resultPath, Func<DiagnosticsPackageOptions, DiagnosticsPackageOptions>? configure = null)
+    public static async Task<int> RunAsync(string? targetPath, string resultPath, Func<DiagnosticsPackageOptions, DiagnosticsPackageOptions>? configure = null)
     {
         if (string.IsNullOrWhiteSpace(targetPath))
         {
@@ -39,7 +39,7 @@ internal static class DiagnosticsExportJob
                 SourceLabel = "AutoNet 界面导出（独立提权采集；目标位置由普通界面用户选定）",
             };
             if (configure is { } customize) options = customize(options);
-            var result = DiagnosticsPackage.ExportAsync(options).GetAwaiter().GetResult();
+            var result = await DiagnosticsPackage.ExportAsync(options).ConfigureAwait(false);
             outcome = new DiagnosticsExportOutcome(true, result.Path, null, result.Notes, DateTimeOffset.UtcNow.ToString("O"));
         }
         catch (Exception e)
