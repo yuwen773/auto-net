@@ -87,7 +87,7 @@ Get-Process -Name 'AutoNet.Tray' -ErrorAction SilentlyContinue |
 # 真实共享导出结果文件（ProgramData\AutoNet\export-result.json）。导出 QA 必须全程保持不变。
 function Get-RealPrivateFingerprint {
     $private = Join-Path $env:ProgramData 'AutoNet/private'
-    $files = @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'auth-release-audit.jsonl')
+    $files = @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl')
     $snapshot = [ordered]@{}
     foreach ($file in $files) {
         $path = Join-Path $private $file
@@ -228,7 +228,7 @@ try {
     # 5) 本机真实存储逐字节未被触碰（只读核对）。
     try {
         $privateAfter = Get-RealPrivateFingerprint
-        foreach ($file in @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'auth-release-audit.jsonl')) {
+        foreach ($file in @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl')) {
             $before = $privateBefore[$file]
             $after = $privateAfter[$file]
             Require ($before.exists -eq $after.exists) ($file + ' 存在性发生变化')

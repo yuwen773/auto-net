@@ -2,6 +2,16 @@
 
 日期：2026-10-11（Asia/Shanghai）。已完成本次覆盖升级；此前一次真实 Wi-Fi 断连恢复记录保留在下方历史章节，真实认证失效、重启和长期稳定性仍待验收。
 
+## 交付检查（2026-11-01，工单 #42，仅离线，未发布）
+
+- 完整 Release 构建 **0 警告 / 0 错误**，全量回归 **591/591**，基线提交 `4596028`（构建证据取自该提交的干净树；本次只改脚本与文档，不改产品源码，见 `artifacts/validation/build.json`、`tests.txt`）。
+- **安装/升级/回滚契约**：发现并修复 `install.ps1` 失败回滚漏备份 `authchannel/AutoNet.AuthChannel.exe` 的缺口——升级失败会留下新旧混装的辅助进程；覆盖前与卸载时停止运行中的辅助进程。`qa-install-smoke.ps1` 扩展为：六个持久记录（`settings.json`、`credentials.dpapi`、`auth-block.txt`、`submission-budget.json`、`submission-restart.json`、`auth-release-audit.jsonl`）逐字节基线；全新安装、坏包失败回滚（断言日志出现回滚文案）、覆盖安装（先改动已安装辅助进程）、卸载四阶段断言；辅助进程布局与包内哈希；回滚后旧服务、旧辅助进程与持久记录全部恢复。六套 Avalonia QA 的真实存储指纹补入 `submission-budget.json` 与 `submission-restart.json`。冒烟矩阵带 CI 守卫，**本机未运行**；真实安装/回滚仍为 `NOT_RUN`。
+- **隐私**：`--filter 隐私` **2/2**、`--filter 脱敏` **7/7**、`--filter 诊断包` **16/16**、`--filter 日志` **38/38**；脏输入下诊断包与日志摘要不含凭据、Cookie、Token、原始响应与真实 MAC，凭据零出现。
+- **回滚兼容**：`scripts/check-released-reader.ps1` 为 **READER-OK**（真实 `v0.3.1` 读取规则与冻结副本在 24 条语料上逐条一致）。
+- **文档同步**：计划文档由“尚未实施”改为“离线实现已落线、未发布、未现场验收”；`CONTEXT.md` 认证页状态更新为 #37/#38/#39 已实现；ADR-0016 补上 WebRTC/STUN 走向未查清；ADR-0017–0021 与 #37–#41 实施记录核对无矛盾。详见 [#42 交付检查记录](progress/42-delivery-check.md)。
+- **仍需现场验证（全部 `NOT_RUN`）**：真实学校门户（含 `,0,` 前缀、MAC 令牌、`PHPSESSID`）、真实断网恢复与 15 秒目标、跨管理员账户 UAC、WebRTC/STUN 实际走向、真实 WebView2 展示宿主与门户子资源/802 端口经代理的兼容性、真实通道会话互斥与手动接管、真实 UAC 下的解除与诊断包导出、真实安装/覆盖/回滚、真实存储故障与 ACL。
+- 已知遗留：`qa-authchannel.ps1` 夹具模式与当前通道实现不兼容（`ExecuteAsync` 要求 `--from-settings` 且拒绝 `--fixture-dir`），本工单不恢复夹具后门。
+
 ## 人工解除的前置复核：门户已登录且网关无重定向（2026-10-31 现场热修，2026-11-01 补入源码，未发布）
 
 - 现场事实：本机已安装候选包上的人工「解除认证暂停」两次只读复核都失败。第一次是编码问题（Avalonia 宿主未注册代码页提供程序，门户以 `gbk` 返回状态时解码抛 `ArgumentException`），已在 `da4594a` 修复并有隔离进程回归；编码修好后仍失败，失败分类变为 `MissingGatewayParameters`——门户 `/drcom/chkstatus` 报告**已登录**，而网关探针没有 302 重定向，拿不到 MAC/AC 上下文。热修当日以 `archive/auto-net-installed-unblock-fix` 标记直接落在装机目录上，解除结果为 `Released`，但源码侧从未跟进，装机程序与仓库从此分叉。

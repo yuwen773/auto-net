@@ -53,14 +53,20 @@ try {
     $data = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'AutoNet'
     $serviceExe = Join-Path $destination 'service/AutoNet.Service.exe'
     $trayExe = Join-Path $destination 'tray/AutoNet.Tray.exe'
-    foreach ($part in @('service/AutoNet.Service.exe', 'tray/AutoNet.Tray.exe', 'authchannel/AutoNet.AuthChannel.exe')) {
+    # 内嵌认证通道是独立辅助进程（工单 #26）；它和主程序一样参与覆盖安装与失败回滚，
+    # 否则升级失败后会留下新旧混装的托盘/辅助进程组合。
+    $authChannelExe = Join-Path $destination 'authchannel/AutoNet.AuthChannel.exe'
+    # 发布包布局、需要备份/回滚的目标各只维护一份；新增组件时不会漏掉某一条清单。
+    $bundleParts = @('service/AutoNet.Service.exe', 'tray/AutoNet.Tray.exe', 'authchannel/AutoNet.AuthChannel.exe')
+    $replaceTargets = @($serviceExe, $trayExe, $authChannelExe, (Join-Path $destination 'uninstall.ps1'), $shortcut)
+    foreach ($part in $bundleParts) {
         if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $part))) { throw 'Use install.ps1 from the published bundle, not the source scripts directory.' }
     }
     foreach ($path in @($destination, (Join-Path $destination 'service'), (Join-Path $destination 'tray'), (Join-Path $destination 'authchannel'), $data, (Join-Path $data 'private'), (Join-Path $data 'logs'))) {
         Assert-OrdinaryDirectory $path
         if (Test-Path -LiteralPath $path) { $originalAcls[$path] = Get-Acl -LiteralPath $path }
     }
-    foreach ($target in @($serviceExe, $trayExe, (Join-Path $destination 'uninstall.ps1'), $shortcut)) {
+    foreach ($target in $replaceTargets) {
         if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '安装目标是重解析点，已停止安装。' }
     }
     $existing = Get-Service -Name AutoNet -ErrorAction SilentlyContinue
@@ -75,7 +81,7 @@ try {
     $backup = Join-Path $destination ('.rollback-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $backup | Out-Null
     Set-DataAcl $backup $false
-    foreach ($target in @($serviceExe, $trayExe, (Join-Path $destination 'uninstall.ps1'), $shortcut)) {
+    foreach ($target in $replaceTargets) {
         $saved = $null
         if (Test-Path -LiteralPath $target) {
             $saved = Join-Path $backup ([Guid]::NewGuid().ToString('N'))
@@ -91,6 +97,9 @@ try {
         $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20))
     }
     Get-Process -Name AutoNet.Tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $trayExe } | Stop-Process
+    # 内嵌通道是独立辅助进程；运行中的实例会锁住自己的 exe，必须在覆盖前停止，
+    # 否则 Copy-Item 失败会把整次升级推进回滚分支。
+    Get-Process -Name AutoNet.AuthChannel -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $authChannelExe } | Stop-Process
     # Executables run as SYSTEM, so ordinary users must never be able to replace them.
     foreach ($path in @($destination, (Join-Path $destination 'service'), (Join-Path $destination 'tray'), (Join-Path $destination 'authchannel'))) {
         New-Item -ItemType Directory -Path $path -Force | Out-Null
@@ -99,7 +108,7 @@ try {
     foreach ($path in @($data, (Join-Path $data 'logs'))) { New-Item -ItemType Directory -Path $path -Force | Out-Null; Set-DataAcl $path $true }
     $private = Join-Path $data 'private'
     New-Item -ItemType Directory -Path $private -Force | Out-Null; Set-DataAcl $private $false
-    foreach ($part in @('service/AutoNet.Service.exe', 'tray/AutoNet.Tray.exe', 'authchannel/AutoNet.AuthChannel.exe')) {
+    foreach ($part in $bundleParts) {
         $target = Join-Path $destination $part
         if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Executable target is a reparse point.' }
         $targetDir = Split-Path $target -Parent

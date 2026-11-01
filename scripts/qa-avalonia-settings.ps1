@@ -107,7 +107,7 @@ $isAdministrator = ([Security.Principal.WindowsPrincipal][Security.Principal.Win
 # 普通权限进程无法读取仅管理员可访问的 private 目录时，明确返回“未验证”，绝不谎报已核对。
 function Get-RealPrivateFingerprint {
     $private = Join-Path $env:ProgramData 'AutoNet/private'
-    $files = @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'auth-release-audit.jsonl')
+    $files = @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl')
     $snapshot = [ordered]@{ accessible = $false; reason = '' }
     try {
         if (-not (Test-Path -LiteralPath $private)) { $snapshot.reason = 'PrivateDirectoryMissing'; return $snapshot }
@@ -499,7 +499,7 @@ try {
             Write-Host 'NOT-VERIFIED real-private-untouched：当前进程无法读取真实 private 目录'
         }
         else {
-            foreach ($file in @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'auth-release-audit.jsonl')) {
+            foreach ($file in @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl')) {
                 $before = $privateBefore[$file]
                 $after = $privateAfter[$file]
                 Require ($before.exists -eq $after.exists) ($file + ' 存在性发生变化')

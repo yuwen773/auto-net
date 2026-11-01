@@ -67,7 +67,7 @@ Get-Process -Name 'AutoNet.Tray' -ErrorAction SilentlyContinue |
 # 本机真实安全状态的指纹：解除 QA 必须在全程保持逐字节不变。
 function Get-RealSafetyFingerprint {
     $private = Join-Path $env:ProgramData 'AutoNet/private'
-    $files = @('auth-block.txt', 'auth-release-audit.jsonl', 'settings.json')
+    $files = @('auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl', 'settings.json')
     $snapshot = [ordered]@{}
     foreach ($file in $files) {
         $path = Join-Path $private $file
@@ -231,7 +231,7 @@ try {
     # 3) 本机真实安全状态逐字节未被触碰（只读核对）
     try {
         $safetyAfter = Get-RealSafetyFingerprint
-        foreach ($file in @('auth-block.txt', 'auth-release-audit.jsonl', 'settings.json')) {
+        foreach ($file in @('auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl', 'settings.json')) {
             $before = $safetyBefore[$file]
             $after = $safetyAfter[$file]
             Require ($before.exists -eq $after.exists) ($file + ' 存在性发生变化')

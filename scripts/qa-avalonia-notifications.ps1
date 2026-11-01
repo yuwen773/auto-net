@@ -91,7 +91,7 @@ Get-Process -Name 'AutoNet.Tray' -ErrorAction SilentlyContinue |
 # （LocalAppData）。通知 QA 必须全程保持三者逐字节不变——按用户隔离（故事 57、70）的直接证据。
 function Get-RealPrivateFingerprint {
     $private = Join-Path $env:ProgramData 'AutoNet/private'
-    $files = @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'auth-release-audit.jsonl')
+    $files = @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl')
     $snapshot = [ordered]@{}
     foreach ($file in $files) {
         $path = Join-Path $private $file
@@ -245,7 +245,7 @@ try {
     # 4) 本机真实受限存储、真实用户偏好与真实消费记录逐字节未被触碰（只读核对，故事 57、70）。
     try {
         $privateAfter = Get-RealPrivateFingerprint
-        foreach ($file in @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'auth-release-audit.jsonl')) {
+        foreach ($file in @('settings.json', 'credentials.dpapi', 'auth-block.txt', 'submission-budget.json', 'submission-restart.json', 'auth-release-audit.jsonl')) {
             $before = $privateBefore[$file]
             $after = $privateAfter[$file]
             Require ($before.exists -eq $after.exists) ($file + ' 存在性发生变化')
