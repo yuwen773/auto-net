@@ -15,6 +15,7 @@
 | 全量回归 | **591/591 passed**，退出码 0 | `artifacts/validation/tests.txt` |
 | 构建标识 | 提交 `4596028f500f65918d8673127d93ade6621581f9`，`trackedChanges=false`（构建时） | `artifacts/validation/build.json` |
 | 运行器 | 自定义控制台运行器，`--filter` 为中文名称子串匹配 | `tests/AutoNet.Tests` |
+| CI 离线回归 | `build` 与 `install-smoke` 均 **SUCCESS**（提交 `243d4ba`） | `Windows offline regression`，[run 41298120031](https://github.com/yuwen773/auto-net/actions/runs/41298120031) |
 
 本次没有改动产品源码，回归数字与基线一致；改动只涉及安装/QA 脚本和文档。
 
@@ -46,7 +47,7 @@
 
 - 修改后的 9 个 PowerShell 脚本全部通过语法解析。
 - `scripts/check-released-reader.ps1`：**READER-OK**，真实 `v0.3.1` 读取规则与测试内冻结副本在 24 条语料上逐条一致（`artifacts/released-reader-check/report.txt`），支撑回滚兼容判定。
-- `qa-install-smoke.ps1` 带 CI 环境守卫，**本机未运行**（会覆盖安装本机 AutoNet）。真实安装/覆盖/回滚仍为 `NOT_RUN`；本机已安装候选程序是热修版本，与仓库源码不一致。
+- `qa-install-smoke.ps1` 带 CI 环境守卫，**本机未运行**（会覆盖安装本机 AutoNet）。GitHub 托管 runner 上已执行并通过：`Windows offline regression` 对提交 `243d4ba` 的 `build` 与 `install-smoke` 均 SUCCESS（[run 41298120031](https://github.com/yuwen773/auto-net/actions/runs/41298120031)），全新安装、坏包回滚、覆盖安装与卸载四阶段连同六个持久记录基线全部通过。这是合成夹具上的一次性环境，真实数据机器上的安装/覆盖/回滚仍为 `NOT_RUN`；本机已安装候选程序是热修版本，与仓库源码不一致。
 - “覆盖前停止运行中的辅助进程”需要真实 WebView2 会话才能保持进程存活，CI 冒烟矩阵未单独触发；该分支为 `NOT_RUN`。文件层面的覆盖/回滚由坏包与覆盖阶段断言。
 
 ## 3. 日志与诊断包隐私
