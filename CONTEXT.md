@@ -96,6 +96,11 @@ _Avoid_: 消息、推送
 落点：journal 事件 + status.json 的 `PortalLayoutSuspected` 标志 + 一次性通知。
 _Avoid_: 解析失败
 
+**网关上下文（GatewayContext）**:
+门户提交所需的网关标识（MAC/AC 等），来自网关 302 重定向；诊断拿不到它时报 MissingGatewayParameters。
+门户已登录时网关通常不重定向，上下文取不到但也没有凭据要提交；人工解除的前置复核在这种情况下不再阻断，其余失败照旧阻断（见 [ADR-0021](docs/adr/0021-unblock-preflight-when-logged-in.md)）。
+_Avoid_: 网关参数、网关地址
+
 **诊断包**:
 一键导出的脱敏证据压缩包，供自助排查或交给网管；不含账号、密码、Cookie、Token，MAC 掩码。
 _Avoid_: 日志导出
