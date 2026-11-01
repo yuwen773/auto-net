@@ -5,6 +5,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using AutoNet.Core;
 
 namespace AutoNet.Tray.Avalonia;
 
@@ -72,6 +73,12 @@ public sealed class App : Application
     /// </summary>
     private static void StartElevated(IClassicDesktopStyleApplicationLifetime desktop, ElevatedMode elevated)
     {
+        if (elevated.Operation is ElevatedOperationKind.RestartAuthentication)
+        {
+            if (elevated.Qa.Active) { Dispatcher.UIThread.Post(() => desktop.Shutdown(0)); return; }
+            StartRestartAuthentication(desktop);
+            return;
+        }
         if (elevated.Operation is ElevatedOperationKind.UnblockAuthentication)
         {
             // 只有 unblock 模式才走隔离夹具：其他 QA 模式走到这里仍按生产语义执行，
@@ -88,14 +95,10 @@ public sealed class App : Application
 
         if (elevated.Operation is ElevatedOperationKind.Settings)
         {
-            // 只有 settings 模式才走隔离夹具：其他 QA 模式走到这里仍按生产语义执行。
-            if (elevated.Qa.Mode == QaMode.Settings)
-            {
-                QaSettings.RunEditor(elevated.Qa, code => desktop.Shutdown(code));
-                return;
-            }
-
-            StartSettingsEditor(desktop);
+            DispatchSettings(elevated.Qa,
+                () => StartSettingsEditor(desktop),
+                () => QaSettings.RunEditor(elevated.Qa, code => desktop.Shutdown(code)),
+                () => desktop.Shutdown(0));
             return;
         }
 
@@ -137,6 +140,37 @@ public sealed class App : Application
         // 受控占位：入口已成立（不被普通互斥锁拦截），具体页面随后续工单提供。
         StartNotice(desktop, elevated.Operation.DisplayName() + "（迁移中）",
             "该操作将在界面迁移完成后通过新的页面提供。\n当前版本不会修改任何设置、凭据或服务。");
+    }
+
+    private static void StartRestartAuthentication(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                var store = new SafetyStateStore(Storage.Private);
+                var restart = new RestartAuthentication(store, () => ConfirmWindow.AskAsync("重新开始认证",
+                    "此操作会重置凭据提交额度，并可能允许之后再次提交凭据。认证暂停和主动断线额度保持不变。\n\n确认重新开始认证？",
+                    "确认重新开始", cancelByDefault: true));
+                var result = await restart.RunAsync();
+                if (result == RestartAuthenticationOutcome.Cancelled) { desktop.Shutdown(0); return; }
+                if (result == RestartAuthenticationOutcome.StorageFailure)
+                {
+                    StartNotice(desktop, "重新开始认证未完成", "安全状态或审计存储不可用，或状态记录损坏；操作未能确认完成。部分记录可能已更新；请检查本地存储和认证诊断，再重新检查后重试。");
+                    return;
+                }
+                if (result == RestartAuthenticationOutcome.Changed)
+                {
+                    StartNotice(desktop, "重新开始认证未完成", "认证正在进行或安全状态已变化；本次未重置提交额度，请重新检查后重试。");
+                    return;
+                }
+                StartNotice(desktop, "已重置提交额度", "提交额度已重置。认证暂停仍保持原状；如需解除暂停，请先检查认证诊断。");
+            }
+            catch (Exception e)
+            {
+                StartNotice(desktop, "重新开始认证未完成", "操作未完成：" + e.GetType().Name + "。请检查安全状态后重试。");
+            }
+        });
     }
 
     /// <summary>
@@ -205,9 +239,12 @@ public sealed class App : Application
     /// </summary>
     private static void StartDiagnosticsExport(IClassicDesktopStyleApplicationLifetime desktop, ElevatedMode elevated)
     {
-        Dispatcher.UIThread.Post(() =>
+        Dispatcher.UIThread.Post(async () =>
         {
-            var code = DiagnosticsExportJob.Run(elevated.ExportTargetPath, DiagnosticsExportJob.ProductionResultPath);
+            // 异步采集不再阻塞 UI 线程；RunAsync 内部已收敛受控错误，这里只兜底意外异常。
+            var code = 3;
+            try { code = await DiagnosticsExportJob.RunAsync(elevated.ExportTargetPath, DiagnosticsExportJob.ProductionResultPath); }
+            catch (Exception) { code = 3; }
             desktop.Shutdown(code);
         });
     }
@@ -232,8 +269,28 @@ public sealed class App : Application
         var portalOpener = new PortalPageOpener(PortalOpenStore.Create(tray.Qa), pipe.RefreshAsync, browserLaunch);
         // 日志页（#7）：读取既有日志目录；QA 夹具模式只在 logs 模式下重定向到证据目录内的夹具。
         var logsPage = LogsPage.Production(tray.Qa);
+        // 认证页（#37/#38/#39）：浏览器宿主抽象。生产宿主经允许列表代理连接固定门户，
+        // 网卡从可信状态投影读取；读不到时失败关闭，绝不回退直连。auth-page QA 用假宿主验证页面生命周期。
+        // 内嵌认证通道发起器在后面装配，这里用延迟绑定读取它的会话状态（#39）：
+        // 通道会话进行中时认证页不创建第二个浏览器。
+        AuthChannelLauncher? authChannel = null;
+        IAuthPageBrowserHost authHost = tray.Qa.Mode switch
+        {
+            QaMode.AuthPage => new QaAuthPageHost(),
+            // 其他 QA 模式不打开真实浏览器或代理：认证页导航到受控降级，证据仍来自真实窗口。
+            _ when tray.Qa.Active => new UnavailableAuthPageBrowserHost(AuthPageBrowserRuntime.IsWebView2RuntimePresent),
+            _ => AuthPageBrowserHostFactory.Production(
+                () => ReadProjectedLink(pipe.Current), () => authChannel?.SessionActive == true)
+        };
+        // 状态投影在读取线程上发起，协调器经此调度器把内容与事件交给界面线程；
+        // 已在界面线程时同步执行，避免 QA 驱动时多一次排队。
+        var authPage = new AuthPageCoordinator(authHost, action =>
+        {
+            if (Dispatcher.UIThread.CheckAccess()) action();
+            else Dispatcher.UIThread.Post(action);
+        });
         var shell = new ShellController(pipe, (page, token) =>
-            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener);
+            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener, authPage);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
         logsPage.Updated += content => shell.ApplyExternal(content);
         // 概览/可访问性 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
@@ -244,8 +301,17 @@ public sealed class App : Application
             _ => Elevation.Launch
         };
         var actions = new OverviewActions(pipe.RefreshAsync, launcher);
-        // 设置修改入口（#8）走同一条提权路径；设置页与可访问性 QA 模式下替换为受控空操作（不弹 UAC）。
-        Action modifySettings = tray.Qa.Mode is QaMode.Settings or QaMode.Accessibility ? QaSettings.RecordModify : LaunchSettingsEditor;
+        // 设置页（#8 / #41）：普通权限下直接编辑非秘密字段；保存经独立提权交接。
+        // 受限配置不从普通进程读取，非秘密值来自 status.json 的配置投影。
+        Func<IReadOnlyList<WifiProfile>> loadProfiles = tray.Qa.Active
+            ? () => QaSettings.Profiles
+            : () => Wifi.Profiles().Where(profile => profile.AllUsers).ToList();
+        Func<SettingsDraft, CancellationToken, Task<HandoffResult>> saveSettings = tray.Qa.Mode == QaMode.Settings
+            ? QaSettings.SaveForQaAsync
+            : tray.Qa.Active
+                ? (_, _) => Task.FromResult(new HandoffResult(HandoffOutcome.Rejected))
+                : SettingsHandoffLauncher.SaveAsync;
+        var settingsPage = new SettingsPage(loadProfiles, saveSettings, () => pipe.RefreshAsync());
         // 主题（#9 / 故事 27–29）：设置页外观分区直接读写偏好并当场应用（不走状态投影，
         // 轮询重建不打断选择）；跟随模式下响应系统主题变化，手动选择保持优先。
         // 订阅挂在长驻的托盘进程；提权/提示窗口是短生命周期进程，跟随语义由框架对
@@ -288,14 +354,15 @@ public sealed class App : Application
         Func<Task>? authChannelFallback = tray.Qa.Mode == QaMode.Accessibility
             ? null
             : () => portalOpener.OpenManuallyAsync();
-        var authChannelLauncher = new AuthChannelLauncher(
-            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart, authChannelPresent, authChannelFallback);
+        authChannel = new AuthChannelLauncher(
+            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart, authChannelPresent, authChannelFallback,
+            launchActive: () => new AutoNet.Core.SafetyStateStore(AutoNet.Core.Storage.Root).IsChannelLaunchActive());
         // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
         Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility
             ? QaAccessibility.RecordPortalOpen
             : () => _ = portalOpener.OpenManuallyAsync();
-        window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, modifySettings,
-            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannelLauncher);
+        window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, settingsPage,
+            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
@@ -309,14 +376,11 @@ public sealed class App : Application
             notifier = new TrayBalloonNotifier(trayHost.TrayIcon!);
             pipe.Updated += notifications.Observe;
         }
-        // 自动开页由状态读取驱动（#11）；portal-open 与可访问性 QA 模式不订阅管道——前者由
-        // QaPortal 手工驱动（时序完全确定），后者夹具只驱动投影显示、绝不触发真实浏览器。
-        // 手动开页只经概览页按钮。
-        if (tray.Qa.Mode is not (QaMode.PortalOpen or QaMode.Accessibility))
-            pipe.Updated += reading => _ = portalOpener.EvaluateAsync(reading);
-        // 通道授予消费（工单 #24）：同一批 QA 模式不订阅（可访问性记录器不消费真实授予）。
-        if (tray.Qa.Mode is not (QaMode.PortalOpen or QaMode.Accessibility))
-            pipe.Updated += reading => _ = authChannelLauncher.ObserveAsync(reading.Snapshot);
+        // 自动开页与认证通道由生产状态读取驱动；所有 QA 模式都隔离真实动作。
+        // portal-open 仍由 QaPortal 手工驱动受控记录器，不受此订阅边界影响。
+        AttachAutomaticActions(pipe, tray.Qa,
+            reading => _ = portalOpener.EvaluateAsync(reading),
+            reading => _ = authChannel.ObserveAsync(reading.Snapshot));
         desktop.Exit += (_, _) =>
         {
             trayHost.Dispose();
@@ -348,7 +412,7 @@ public sealed class App : Application
                 QaLogs.Run(shell, logsPage, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
             case QaMode.Settings:
-                QaSettings.Run(shell, window, modifySettings, tray.Qa, code => desktop.Shutdown(code));
+                QaSettings.Run(shell, window, settingsPage, tray.Qa, code => desktop.Shutdown(code));
                 break;
             case QaMode.ThemePrefs:
                 QaThemePrefs.Run(shell, window, theme!, tray.Qa, code => desktop.Shutdown(code));
@@ -365,11 +429,47 @@ public sealed class App : Application
             case QaMode.Accessibility:
                 QaAccessibility.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
                 break;
+            case QaMode.AuthPage:
+                QaAuthPage.Run(shell, authPage, window, tray.Qa, code => desktop.Shutdown(code));
+                break;
         }
     }
 
-    /// <summary>生产路径：设置修改入口发起独立提权操作（--settings）；拒绝 UAC 时什么都不发生（故事 43）。</summary>
-    private static void LaunchSettingsEditor() => Elevation.Launch(ElevatedOperationKind.Settings);
+    /// <summary>
+    /// 认证页网络边界（#38）的网卡来源：只读服务已发布的可信状态投影。
+    /// 普通权限托盘不能读取 private 目录里的设置，因此不碰 <see cref="Storage.LoadSettings"/>；
+    /// 投影缺失、过期或字段不完整时返回 null，宿主据此失败关闭而不是猜一个网卡。
+    /// </summary>
+    internal static WifiLink? ReadProjectedLink(StatusReading? reading)
+    {
+        if (reading is not { Trusted: true } || reading.Snapshot is not { SettingsProjected: true } snapshot)
+            return null;
+        if (!Guid.TryParse(snapshot.InterfaceId, out _) || string.IsNullOrWhiteSpace(snapshot.WifiProfile))
+            return null;
+        try
+        {
+            return Wifi.Read(new Settings { InterfaceId = snapshot.InterfaceId, WifiProfile = snapshot.WifiProfile });
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    internal static void AttachAutomaticActions(StatusPipe pipe, QaEnvironment qa,
+        Action<StatusReading> portalOpen, Action<StatusReading> authChannel)
+    {
+        if (qa.Active) return;
+        pipe.Updated += portalOpen;
+        pipe.Updated += authChannel;
+    }
+
+    internal static void DispatchSettings(QaEnvironment qa, Action production, Action fixture, Action stopProbe)
+    {
+        if (!qa.Active) production();
+        else if (qa.Mode == QaMode.Settings) fixture();
+        else stopProbe();
+    }
 
     /// <summary>
     /// 生产路径：诊断包导出的保存位置选择（故事 72、78）。默认当前用户桌面 + 默认文件名；

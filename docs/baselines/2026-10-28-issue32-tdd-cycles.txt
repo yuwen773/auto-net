@@ -1,0 +1,78 @@
+Cycle 1
+FAIL 有限重试：单调等待119秒拒绝120秒放行: 120秒未放行
+0/1 passed
+1/1 passed
+
+Cycle 2
+FAIL 有限重试：额度耗尽结束及活动状态拒绝外网在线暂停: 外网在线仍提交
+1/2 passed
+2/2 passed
+
+Cycle 3
+FAIL 有限重试：墙钟跳变回拨与重启均不能缩短等待: 前跳被视为可信
+2/3 passed
+3/3 passed
+
+Cycle 4
+FAIL 有限重试：服务在发出前持久预留并在结果未知后保持计数: 未保留可能发送计数
+3/4 passed
+4/4 passed
+
+Cycle 5
+FAIL 有限重试：未知持续时120秒再发且合计三次封顶继续复检: 120秒没有重试
+4/5 passed
+5/5 passed
+
+Cycle 6
+FAIL 有限重试：预留后发送前进程退出按可能发送计且重启重新等待: 中断预留未计入下一次额度
+5/6 passed
+6/6 passed
+
+Cycle 7
+FAIL 有限重试：预留失败及最终认证额度修订变化均零发送: budget 时仍发送
+6/7 passed
+7/7 passed
+
+Cycle 8
+FAIL 有限重试：外网在预检中恢复也须暂停提交且继续只读定性: 外网恢复后仍占额度或提交
+7/8 passed
+8/8 passed
+
+Cycle 9
+FAIL 有限重试：明确密码绑定拒绝立即停止即使额度终态写失败: 明确拒绝未保存认证终态：密码错误
+8/9 passed
+9/9 passed
+
+Cycle 10
+FAIL 有限重试：状态端点失联时仍在可信网关配置复核后有限重试: 状态端点失联退化为永久停发
+9/10 passed
+10/10 passed
+
+Cycle 11
+FAIL 有限重试：外网在线不消解不重置而门户明确成功审计后消解: 成功复检没有明确结束或越界重置额度
+14/15 passed
+15/15 passed
+
+Cycle 12
+16/16 passed
+已有行为通过，未修改生产代码，不计入 red/green 轮次。
+
+Cycle 13
+FAIL 有限重试：预检上限不吞掉明确临时拒绝后的提交额度: 预检计数提前终止临时拒绝后的提交
+16/17 passed
+17/17 passed
+
+Cycle 14
+FAIL 有限重试：损坏记录及旧Pending缺额度保守停发: 旧Pending凭空初始化额度
+16/17 passed
+17/17 passed
+
+Cycle 15
+FAIL 有限重试：墙钟跳变回拨与重启均不能缩短等待: 时间失效后恢复未重新等待
+16/17 passed
+17/17 passed
+
+Cycle 16
+FAIL 绑定拒绝：只提交一次且单独解除认证暂停不重置提交额度: 安全约束不符合预期
+2/3 passed
+3/3 passed

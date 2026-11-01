@@ -39,6 +39,32 @@ internal sealed record OverviewAuthColumn(OverviewAuthKind Kind, string Title, s
         OverviewAuthKind.Unconfirmable, "认证状态不可确认", "当前状态不可确认，认证相关操作暂不可用。", OverviewTone.Neutral);
 }
 
+/// <summary>#35 提交额度级别的展示分类；未知码一律归入 <see cref="Unknown"/>，绝不渲染原始码。</summary>
+internal enum OverviewSubmissionBudgetKind
+{
+    Unknown,
+    Unused,
+    Available,
+    NearLimit,
+    Exhausted,
+    Reset
+}
+
+/// <summary>
+/// #35 认证提交额度投影：已用次数、上限、最早下次提交与停止原因都来自快照的受控码和数值，
+/// 文案只在托盘侧生成。旧版快照缺少字段时固定降级为“不可确认”，不猜测零次或已重置。
+/// </summary>
+internal sealed record OverviewSubmissionBudget(
+    OverviewSubmissionBudgetKind Kind,
+    string Value,
+    string Note,
+    OverviewTone Tone)
+{
+    public static readonly OverviewSubmissionBudget Unknown = new(
+        OverviewSubmissionBudgetKind.Unknown, "额度状态不可确认",
+        "状态快照缺少提交额度字段（可能来自旧版服务）；不会据此重置额度或放行提交。", OverviewTone.Neutral);
+}
+
 /// <summary>恢复开关的明确意图：只发送开启或关闭，不使用 toggle 语义（故事 40）。</summary>
 internal enum RecoveryIntent
 {
@@ -94,6 +120,9 @@ internal sealed record OverviewContent : PageContent
 
     /// <summary>浏览器兜底开页入口（#11）：仅在可信且存在有效授予时可见。</summary>
     public PortalOpenEntryState PortalOpen { get; init; } = PortalOpenEntryState.Hidden;
+
+    /// <summary>#35 认证提交额度：已用次数、最早下次提交与停止原因。</summary>
+    public OverviewSubmissionBudget Submission { get; init; } = OverviewSubmissionBudget.Unknown;
 
     /// <summary>渲染指纹：全部可见字段的稳定拼接；不变时视图跳过重建（不打断展开状态与焦点）。</summary>
     public string ContentKey { get; init; } = "";
@@ -167,10 +196,11 @@ internal static class OverviewModel
         var trusted = reading?.Trusted == true;
         var snapshot = trusted ? reading!.Snapshot : null;
 
+        var submission = snapshot is null ? OverviewSubmissionBudget.Unknown : SubmissionBudget(snapshot);
         IReadOnlyList<OverviewRow> progress = snapshot is null
             ? [new OverviewRow("进度", display.Title + "，暂不显示进度信息。")]
-            : ProgressRows(snapshot);
-        IReadOnlyList<OverviewChip> chips = snapshot is null ? [] : Chips(display.Additional, display.Primary);
+            : ProgressRows(snapshot, submission);
+        IReadOnlyList<OverviewChip> chips = snapshot is null ? [] : Chips(display.Additional, display.Primary, snapshot, submission);
 
         var content = new OverviewContent
         {
@@ -182,12 +212,13 @@ internal static class OverviewModel
             NextStep = display.NextStep,
             TechnicalDetail = display.TechnicalDetail,
             HasTechnical = display.TechnicalDetail.Length > 0,
-            Auth = snapshot is null ? OverviewAuthColumn.Unconfirmable : AuthColumn(snapshot),
+            Auth = snapshot is null ? OverviewAuthColumn.Unconfirmable : AuthColumn(snapshot, submission),
             Progress = progress,
             Chips = chips,
             Recovery = RecoverySwitch(reading),
             Unblock = Unblock(trusted, snapshot),
-            PortalOpen = PortalEntry(trusted, snapshot, portalFailure, portalSaveFailure)
+            PortalOpen = PortalEntry(trusted, snapshot, portalFailure, portalSaveFailure),
+            Submission = submission
         };
         return content with { ContentKey = Fingerprint(content) };
     }
@@ -208,14 +239,71 @@ internal static class OverviewModel
         return new(true, label, "需要使用浏览器完成校园网认证；只打开固定允许的门户根地址，不填表、不携带凭据。", OverviewTone.Attention);
     }
 
-    private static OverviewAuthColumn AuthColumn(StatusSnapshot snapshot)
+    /// <summary>
+    /// 明确的人工处理原因本身就是停止原因：凭据被拒、绑定被拒或需要人工验证时，认证列必须先说明
+    /// 该原因，不能让额度耗尽或即将用尽掩盖它（第三次提交可能同时发生拒绝与额度耗尽）。
+    /// 额度事实仍由进度行和附加标签独立展示，不在此重复。
+    /// </summary>
+    private static string? ExplicitPauseNote(StatusSnapshot snapshot)
+    {
+        var state = snapshot.AuthenticationPersistentState;
+        if (state == nameof(AuthenticationState.CredentialsRejected) ||
+            snapshot.AuthenticationFailure == nameof(PortalFailure.CredentialsRejected))
+            return "自动提交已暂停：门户明确拒绝了本次凭据（例如密码错误）；请核实账号密码后重新保存，再手动解除认证暂停。";
+        if (state == nameof(AuthenticationState.BindingRejected) ||
+            snapshot.AuthenticationFailure == nameof(PortalFailure.BindingRejected))
+            return "自动提交已暂停：网关或设备绑定被拒绝，这不等于密码错误；请核实 VLAN、MAC/AC 参数并查看认证诊断，再手动解除暂停。";
+        if (state == nameof(AuthenticationState.InteractionRequired) ||
+            snapshot.AuthenticationFailure == nameof(PortalFailure.InteractionRequired))
+            return "自动提交已暂停：门户要求人工验证；请按门户提示处理后，再手动解除认证暂停。";
+        return null;
+    }
+
+    /// <summary>
+    /// 提交结果待决：凭据已发出、结果未知，且持久状态仍是提交待决。明确拒绝、存储故障、
+    /// 旧版或缺失状态都不属于待决，界面不得把它们说成复检中。
+    /// </summary>
+    private static bool SubmissionResultPending(StatusSnapshot snapshot) =>
+        snapshot.CredentialsBlocked &&
+        snapshot.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending) &&
+        snapshot.AuthenticationFailure != nameof(PortalFailure.SafetyPersistence) &&
+        ExplicitPauseNote(snapshot) is null;
+
+    /// <summary>校园 Wi-Fi 已就绪；只有此时服务才会真正执行低频只读复检。判定只接受受控码，不读显示文字。</summary>
+    private static bool CampusWifiReady(StatusSnapshot snapshot) => snapshot.WifiLinkCode == WifiLinkCodes.Ready;
+
+    /// <summary>
+    /// 低频只读复检链正在运行：提交结果待决且校园 Wi-Fi 已就绪。Wi-Fi 未连接、等待 IPv4
+    /// 或网卡未就绪时复检被跳过，界面只能说等待网络条件恢复，不能声称正在复检。
+    /// </summary>
+    private static bool SubmissionRecheckActive(StatusSnapshot snapshot) =>
+        SubmissionResultPending(snapshot) && CampusWifiReady(snapshot);
+
+    private static OverviewAuthColumn AuthColumn(StatusSnapshot snapshot, OverviewSubmissionBudget submission)
     {
         if (snapshot.CredentialsBlocked)
         {
-            var note = snapshot.PortalLayoutSuspected
+            var note = snapshot.SubmissionResolutionStorageFault
+                ? "认证安全状态或审计存储不可用，或状态记录损坏；请检查本地存储及诊断日志，提交仍受安全状态和额度约束。"
+                : snapshot.AuthenticationFailure == nameof(PortalFailure.SafetyPersistence)
+                ? "认证安全状态无法确认；请检查认证诊断及本地状态。"
+                : snapshot.PortalLayoutSuspected
                 ? "自动认证已安全暂停，需要人工核实后解除；门户结构疑似变化。"
+                : ExplicitPauseNote(snapshot) is { } explicitNote
+                ? explicitNote
+                : submission.Kind == OverviewSubmissionBudgetKind.Exhausted
+                ? SubmissionRecheckActive(snapshot)
+                    ? "自动提交已停止：本次故障的提交额度已耗尽；继续只读复检，门户明确成功或手动“重新开始认证”后重置。"
+                    : SubmissionResultPending(snapshot)
+                    ? "自动提交已停止：本次故障的提交额度已耗尽；校园 Wi-Fi 当前不可用，复检已暂停，待网络条件恢复后再进行只读复检。"
+                    : "自动提交已停止：本次故障的提交额度已耗尽；认证状态需要人工核实，没有进行中的提交结果复检。"
+                : submission.Kind == OverviewSubmissionBudgetKind.NearLimit
+                ? "自动认证已安全暂停；提交额度即将用尽，下一次自动提交后停止。"
                 : "自动认证已安全暂停，需要人工核实后解除。";
-            return new OverviewAuthColumn(OverviewAuthKind.Suspended, "认证提交已暂停", note, OverviewTone.Problem);
+            var title = snapshot.SubmissionResolutionStorageFault &&
+                snapshot.AuthenticationPersistentState == nameof(AuthenticationState.SubmissionPending)
+                ? "认证状态需检查" : "认证提交已暂停";
+            return new OverviewAuthColumn(OverviewAuthKind.Suspended, title, note, OverviewTone.Problem);
         }
 
         if (snapshot.PortalLayoutSuspected)
@@ -236,8 +324,192 @@ internal static class OverviewModel
         return new UnblockEntryState(true, true, label);
     }
 
-    /// <summary>“应用正在做什么”：断线额度、下次重试与最近恢复，数值全部来自快照投影，界面不重复策略常量。</summary>
-    private static IReadOnlyList<OverviewRow> ProgressRows(StatusSnapshot snapshot)
+    /// <summary>
+    /// #35 认证提交额度投影：只接受 Core 的受控码与数值。码未知、缺少次数/上限/耗尽事实、
+    /// 数值互相矛盾或重试码未知时一律降级为固定文案，绝不把快照里的原始字符串渲染到界面。
+    /// </summary>
+    public static OverviewSubmissionBudget SubmissionBudget(StatusSnapshot snapshot)
+    {
+        var code = snapshot.SubmissionBudgetCode;
+        var kind = BudgetKind(code);
+        if (kind == OverviewSubmissionBudgetKind.Unknown || !Consistent(kind, snapshot.SubmissionAttempts, snapshot.SubmissionAttemptMax, snapshot.SubmissionBudgetExhausted))
+            return UnknownBudget(snapshot, code);
+
+        var attempts = snapshot.SubmissionAttempts ?? 0;
+        var max = snapshot.SubmissionAttemptMax ?? SubmissionRetryPolicy.AttemptCap;
+        var retry = RetryDecision(snapshot);
+        // 已明确结束且仍有次数：自动提交已永久停止，不能再说“仍有剩余”或给出剩余次数。
+        var concluded = retry == SubmissionRetryDecision.Concluded &&
+            kind is OverviewSubmissionBudgetKind.Available or OverviewSubmissionBudgetKind.NearLimit;
+        string value;
+        string note;
+        OverviewTone tone;
+        switch (kind)
+        {
+            case OverviewSubmissionBudgetKind.Unused:
+                value = $"尚未使用（0/{max} 次）";
+                note = $"首次提交后最多再自动提交 {SubmissionRetryPolicy.AttemptCap - 1} 次；" +
+                    $"相邻两次可能发出凭据的提交至少间隔 {CooldownSeconds(snapshot)} 秒。";
+                tone = OverviewTone.Neutral;
+                break;
+            case OverviewSubmissionBudgetKind.Available:
+                value = concluded
+                    ? $"已用 {attempts}/{max} 次 · 自动提交已停止"
+                    : $"已用 {attempts}/{max} 次 · 仍有剩余";
+                note = concluded
+                    ? "已停止自动提交：本次凭据提交已明确结束；重启和保存设置不会恢复。"
+                    : "每次可能发出凭据的提交都占用共享额度；预检不占用。";
+                tone = concluded ? OverviewTone.Warning : OverviewTone.Neutral;
+                break;
+            case OverviewSubmissionBudgetKind.NearLimit:
+                // Concluded 时不再给出“剩余 N 次”的可提交暗示，只保留额度级别事实。
+                value = concluded
+                    ? $"已用 {attempts}/{max} 次 · 即将用尽"
+                    : $"已用 {attempts}/{max} 次 · 即将用尽（剩余 {max - attempts} 次）";
+                note = concluded
+                    ? "已停止自动提交：本次凭据提交已明确结束；重启和保存设置不会恢复。"
+                    : "下一次自动提交后额度耗尽，将停止自动提交。";
+                tone = concluded ? OverviewTone.Warning : OverviewTone.Attention;
+                break;
+            case OverviewSubmissionBudgetKind.Exhausted:
+                value = $"已用 {attempts}/{max} 次 · 已耗尽";
+                // 只有持久状态明确是“提交结果未知”时才存在低频只读复检链；明确拒绝、
+                // 存储故障、旧版快照或其他状态都不能被说成仍在复检，也不能把额度说成唯一原因。
+                note = SubmissionRecheckActive(snapshot)
+                    ? "已停止自动提交：首次提交后的两次额外额度已用尽；继续低频只读复检，门户明确成功或手动“重新开始认证”后重置。"
+                    : SubmissionResultPending(snapshot)
+                    ? "本次故障的自动提交额度已用尽；校园 Wi-Fi 当前不可用，提交结果复检已暂停，待网络条件恢复后再进行低频只读复检，不自动重发凭据。"
+                    : ExplicitPauseNote(snapshot) is not null
+                    ? "本次故障的自动提交额度已用尽；门户已明确拒绝或要求人工处理，自动提交已停止，也没有进行中的提交结果复检。请按认证暂停提示处理后再手动“重新开始认证”。"
+                    : "本次故障的自动提交额度已用尽；当前没有可证实的提交结果复检，不自动重发凭据。";
+                tone = OverviewTone.Warning;
+                break;
+            case OverviewSubmissionBudgetKind.Reset:
+                value = $"已重置（0/{max} 次）";
+                note = "额度仅在门户明确确认成功或手动“重新开始认证”后重置；重启和保存设置不会重置。";
+                tone = OverviewTone.Good;
+                break;
+            default:
+                // 未来新增但本版本不认识的额度级别：固定降级，不伪装成“已重置”。
+                return UnknownBudget(snapshot, code);
+        }
+
+        // 重试码同样只接受受控词表；未知码只显示固定降级提示，不显示原文。
+        if (snapshot.SubmissionRetryCode is { Length: > 0 } && retry is null)
+        {
+            note += " 重试状态不可确认；不据此提前提交。";
+        }
+        else if (retry is { } decision)
+        {
+            switch (decision)
+            {
+                case SubmissionRetryDecision.Waiting:
+                    value += " · 等待重试";
+                    note += snapshot.SubmissionNextPossibleAt is { } at
+                        ? $" 最早下次提交：{at.ToLocalTime():HH:mm:ss}。"
+                        : " 等待下一次安全复核。";
+                    if (tone != OverviewTone.Warning) tone = OverviewTone.Attention;
+                    break;
+                case SubmissionRetryDecision.InFlight:
+                    value += " · 上次提交执行中";
+                    note += " 等待上次提交执行结束，不重复发送凭据。";
+                    if (tone != OverviewTone.Warning) tone = OverviewTone.Attention;
+                    break;
+                case SubmissionRetryDecision.Concluded:
+                    // 已在上面按终态措辞呈现，不再重复追加同一事实。
+                    if (!concluded)
+                    {
+                        value += " · 本次提交已明确结束";
+                        note += " 已停止自动提交：本次凭据提交已明确结束。";
+                    }
+                    break;
+                case SubmissionRetryDecision.InternetOnline:
+                    value += " · 外网已恢复，暂停提交";
+                    // 外网在线不代表存在待确认的提交结果：首次尚未提交凭据时没有复检链。
+                    note += SubmissionRecheckActive(snapshot)
+                        ? " 外网可达不证明门户接受了凭据；继续只读复检。"
+                        : " 外网可达不证明门户接受了凭据；当前没有待确认的提交结果，不据此重发凭据。";
+                    if (tone != OverviewTone.Warning) tone = OverviewTone.Attention;
+                    break;
+                case SubmissionRetryDecision.WaitClock:
+                case SubmissionRetryDecision.InvalidTime:
+                    value += " · 时间不可信，保守延后";
+                    note += " 系统时间不可信，等待按单调时间重新计算。";
+                    if (tone != OverviewTone.Warning) tone = OverviewTone.Attention;
+                    break;
+                case SubmissionRetryDecision.Exhausted:
+                    value += " · 已停止自动提交";
+                    break;
+                case SubmissionRetryDecision.Authorized:
+                    value += " · 额度与间隔条件满足";
+                    note += " 是否提交仍取决于认证状态、恢复开关和网络等其他条件。";
+                    break;
+            }
+        }
+
+        if (NetworkDisplayMap.PrimaryStateOf(snapshot) == NetworkPrimaryState.OtherProfileConnected)
+            note = "当前连接其他 Wi-Fi，校园网认证与只读复检暂停；保留已用额度，回到校园网后继续检测。";
+        return new OverviewSubmissionBudget(kind, value, note, tone);
+    }
+
+    private static OverviewSubmissionBudgetKind BudgetKind(string? code) => SubmissionBudgetCodes.IsKnown(code)
+        ? code switch
+        {
+            SubmissionBudgetCodes.Unused => OverviewSubmissionBudgetKind.Unused,
+            SubmissionBudgetCodes.Available => OverviewSubmissionBudgetKind.Available,
+            SubmissionBudgetCodes.NearLimit => OverviewSubmissionBudgetKind.NearLimit,
+            SubmissionBudgetCodes.Exhausted => OverviewSubmissionBudgetKind.Exhausted,
+            SubmissionBudgetCodes.Reset => OverviewSubmissionBudgetKind.Reset,
+            _ => OverviewSubmissionBudgetKind.Unknown
+        }
+        : OverviewSubmissionBudgetKind.Unknown;
+
+    /// <summary>
+    /// 受控码与数值必须彼此自洽：任何矛盾组合都降级为“不可确认”，绝不宣称仍有额度或已耗尽。
+    /// 上限必须等于 Core 的策略常量，否则快照来自不兼容版本。
+    /// </summary>
+    private static bool Consistent(OverviewSubmissionBudgetKind kind, int? attempts, int? max, bool? exhausted) => kind switch
+    {
+        OverviewSubmissionBudgetKind.Unused =>
+            attempts is (null or 0) && exhausted != true && (max is null or SubmissionRetryPolicy.AttemptCap),
+        OverviewSubmissionBudgetKind.Available =>
+            attempts is >= 0 and < (SubmissionRetryPolicy.AttemptCap - 1) &&
+            max == SubmissionRetryPolicy.AttemptCap && exhausted == false,
+        OverviewSubmissionBudgetKind.NearLimit =>
+            attempts == SubmissionRetryPolicy.AttemptCap - 1 &&
+            max == SubmissionRetryPolicy.AttemptCap && exhausted == false,
+        OverviewSubmissionBudgetKind.Exhausted =>
+            attempts >= SubmissionRetryPolicy.AttemptCap &&
+            max == SubmissionRetryPolicy.AttemptCap && exhausted == true,
+        OverviewSubmissionBudgetKind.Reset =>
+            attempts == 0 && max == SubmissionRetryPolicy.AttemptCap && exhausted == false,
+        _ => false
+    };
+
+    private static OverviewSubmissionBudget UnknownBudget(StatusSnapshot snapshot, string? code) =>
+        new(OverviewSubmissionBudgetKind.Unknown, OverviewSubmissionBudget.Unknown.Value,
+            NetworkDisplayMap.PrimaryStateOf(snapshot) == NetworkPrimaryState.OtherProfileConnected
+                ? "当前连接其他 Wi-Fi；提交额度不可确认，等待校园网后再核实。"
+                : code == SubmissionBudgetCodes.Unknown
+                ? SubmissionRecheckActive(snapshot)
+                    ? "提交额度记录缺失或不可确认；保持暂停并只读复检，不自动重发凭据。"
+                    : SubmissionResultPending(snapshot)
+                    ? "提交额度记录缺失或不可确认；校园 Wi-Fi 当前不可用，复检已暂停，待网络条件恢复后再进行只读复检，不自动重发凭据。"
+                    : "提交额度记录缺失或不可确认；当前认证状态不明，不自动重发凭据。"
+                : OverviewSubmissionBudget.Unknown.Note,
+            OverviewTone.Neutral);
+
+    /// <summary>相邻提交间隔只从快照投影读取；旧版快照缺字段时回落到 Core 的同一常量。</summary>
+    private static int CooldownSeconds(StatusSnapshot snapshot) =>
+        snapshot.SubmissionCooldownSeconds > 0 ? snapshot.SubmissionCooldownSeconds : SubmissionRetryPolicy.SubmissionIntervalSeconds;
+
+    private static SubmissionRetryDecision? RetryDecision(StatusSnapshot snapshot) =>
+        Enum.TryParse<SubmissionRetryDecision>(snapshot.SubmissionRetryCode, out var decision)
+        && Enum.IsDefined(decision) && decision.ToString() == snapshot.SubmissionRetryCode
+            ? decision : null;
+
+    /// <summary>“应用正在做什么”：提交额度、断线额度、下次重试与最近恢复，数值全部来自快照投影，界面不重复策略常量。</summary>
+    private static IReadOnlyList<OverviewRow> ProgressRows(StatusSnapshot snapshot, OverviewSubmissionBudget submission)
     {
         var max = Math.Max(1, snapshot.DisconnectBudgetMax);
         var quota = $"本次故障主动断线额度：{snapshot.DisconnectAttempts}/{max} 次" +
@@ -250,6 +522,7 @@ internal static class OverviewModel
             : "尚无恢复记录。";
         return
         [
+            new OverviewRow("认证提交额度", submission.Value, submission.Note),
             new OverviewRow("主动断线额度", quota),
             new OverviewRow("下次允许重试", next,
                 $"额度在连续在线 {snapshot.DisconnectResetAfterSeconds} 秒后重置；每次断线请求至少间隔 {snapshot.DisconnectCooldownSeconds} 秒。"),
@@ -258,13 +531,16 @@ internal static class OverviewModel
     }
 
     // 附加事实标签：恢复开关关闭由进度行与开关呈现，不重复为标签；额度用尽已是主状态时不重复。
-    private static IReadOnlyList<OverviewChip> Chips(NetworkAdditional additional, NetworkPrimaryState primary)
+    private static IReadOnlyList<OverviewChip> Chips(NetworkAdditional additional, NetworkPrimaryState primary, StatusSnapshot snapshot, OverviewSubmissionBudget submission)
     {
         var chips = new List<OverviewChip>();
         if (additional.HasFlag(NetworkAdditional.DisconnectQuotaExhausted) && primary != NetworkPrimaryState.DisconnectQuotaExhausted)
             chips.Add(new OverviewChip("主动断线额度已用尽", OverviewTone.Warning));
         if (additional.HasFlag(NetworkAdditional.DisconnectUnconfirmed))
             chips.Add(new OverviewChip("断线完成状态未确认", OverviewTone.Problem));
+        // 只有自洽的额度投影才能宣称耗尽；矛盾的原始字段不得进入标签。
+        if (submission.Kind == OverviewSubmissionBudgetKind.Exhausted)
+            chips.Add(new OverviewChip("认证提交额度已耗尽", OverviewTone.Warning));
         if (additional.HasFlag(NetworkAdditional.ProxyFault))
             chips.Add(new OverviewChip("代理 / 系统路径异常", OverviewTone.Warning));
         if (additional.HasFlag(NetworkAdditional.EgressUnverified))
@@ -280,6 +556,6 @@ internal static class OverviewModel
         content.Primary, content.Tone,
         string.Join("\u001e", content.Chips.Select(chip => chip.Text + ":" + chip.Tone)),
         string.Join("\u001e", content.Progress.Select(row => row.Caption + ":" + row.Value + ":" + row.Note)),
-        content.Recovery, content.Unblock, content.PortalOpen
+        content.Recovery, content.Unblock, content.PortalOpen, content.Submission
     });
 }

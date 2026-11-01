@@ -23,7 +23,7 @@ public static class LogSummary
         "认证提交获准", "认证提交被阻止", "提交结果复检", "提交结果消解", "提交结果待人工",
         "断线前重新核验", "诊断事件", "开始恢复动作", "辅助检测失败",
         "取消主动断线", "主动断线请求失败", "重新认证",
-        "门户疑似改版", "浏览器兜底请求"
+        "门户疑似改版", "浏览器兜底请求", "提交额度已耗尽", "提交额度即将用尽", "提交额度已重置"
     };
 
     static LogSummary() => AllowedActions.UnionWith(NetworkDisplayMap.KnownStates);
@@ -62,6 +62,7 @@ public static class LogSummary
         "SafetyStateWriteStarted", "SafetyStateWritten", "OperationFailed", "OperationRecovered", "CycleInterrupted",
         "LoggingGap", "StatusChanged", "SubmissionAuthorized", "SubmissionNotAuthorized", "DisconnectRecheck",
         "SubmissionRechecking", "SubmissionResolved", "SubmissionUnresolved",
+        "SubmissionBudgetExhausted", "SubmissionBudgetNearLimit", "SubmissionBudgetReset",
         "PortalLayoutChanged", "BrowserFallbackRequested"
     };
     private static readonly HashSet<string> AllowedReasons = new(StringComparer.Ordinal)

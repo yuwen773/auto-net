@@ -12,12 +12,12 @@ internal static class AvaloniaShellRegression
 {
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
-        ("壳回归：左侧导航固定四页且顺序与术语一致", () => Sync(() =>
+        ("壳回归：左侧导航固定五页且顺序与术语一致", () => Sync(() =>
         {
             Require(ShellPages.All.Select(info => info.Page).SequenceEqual(
-                [ShellPage.Overview, ShellPage.Diagnostics, ShellPage.Logs, ShellPage.Settings]), "导航顺序变化");
+                [ShellPage.Overview, ShellPage.Authentication, ShellPage.Diagnostics, ShellPage.Logs, ShellPage.Settings]), "导航顺序变化");
             Require(ShellPages.All.Select(info => info.Name).SequenceEqual(
-                ["概览", "网络诊断", "日志", "设置"]), "导航名称变化");
+                ["概览", "上网认证", "网络诊断", "日志", "设置"]), "导航名称变化");
             Require(ShellPages.All.All(info => info.Description.Length > 0), "页面说明缺失");
             Require(Enum.GetValues<ShellPage>().Length == ShellPages.All.Count, "存在未纳入导航的页面");
             Require(ShellPages.Default == ShellPage.Overview, "默认页必须为概览");
@@ -150,6 +150,63 @@ internal static class AvaloniaShellRegression
             }
             finally { Directory.Delete(directory, recursive: true); }
         })),
+        ("壳回归：较早轮询迟到时不得覆写手动刷新", async () =>
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "autonet-shell-order-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, "status.json");
+            var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+            File.WriteAllText(path, JsonSerializer.Serialize(Online() with { UpdatedAt = now }, Storage.Json));
+            using var releaseOldRead = new ManualResetEventSlim();
+            using var releaseNextPoll = new ManualResetEventSlim();
+            var oldReadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var nextPollStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var nextPollReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reads = 0;
+            DateTimeOffset Clock()
+            {
+                switch (Interlocked.Increment(ref reads))
+                {
+                    case 1:
+                        oldReadStarted.SetResult();
+                        releaseOldRead.Wait();
+                        return now;
+                    case 2:
+                        return now.AddSeconds(1);
+                    default:
+                        // 开始下一次轮询证明旧轮询已经完成应用；先挡住新一轮，避免其掩盖迟到覆盖。
+                        nextPollStarted.TrySetResult();
+                        releaseNextPoll.Wait();
+                        nextPollReleased.TrySetResult();
+                        return now.AddSeconds(2);
+                }
+            }
+
+            using var pipe = new StatusPipe(path, TimeSpan.FromMilliseconds(10), Clock);
+            var seen = new List<DateTimeOffset>();
+            var gate = new object();
+            pipe.Updated += reading => { lock (gate) seen.Add(reading.ReadAt); };
+            try
+            {
+                pipe.Start();
+                await oldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var refreshed = await pipe.RefreshAsync();
+                Require(refreshed.ReadAt == now.AddSeconds(1), "手动刷新未先完成");
+                releaseOldRead.Set();
+                await nextPollStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Require(pipe.Current?.ReadAt == refreshed.ReadAt, "较早轮询迟到后覆写了手动刷新");
+                lock (gate) Require(seen.SequenceEqual([refreshed.ReadAt]), "较早轮询迟到后仍发出旧状态通知");
+            }
+            finally
+            {
+                pipe.Dispose();
+                releaseOldRead.Set();
+                releaseNextPoll.Set();
+                if (nextPollStarted.Task.IsCompleted)
+                    await nextPollReleased.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Directory.Delete(directory, recursive: true);
+            }
+        }),
         ("壳回归：状态管道读取失败不中断且销毁后不再通知", async () =>
         {
             var directory = Path.Combine(Path.GetTempPath(), "autonet-shell-loop-" + Guid.NewGuid().ToString("N"));
@@ -174,6 +231,7 @@ internal static class AvaloniaShellRegression
                 File.WriteAllText(path, "{bad json");
                 Require(WaitUntil(() => Has(reading => reading.Snapshot is null && !reading.Fresh)), "读取失败后未按未就绪降级");
 
+                lock (gate) seen.Clear();
                 File.WriteAllText(path, JsonSerializer.Serialize(Online(), Storage.Json));
                 Require(WaitUntil(() => Has(reading => reading.Fresh)), "读取失败后轮询未自行恢复");
 
@@ -254,6 +312,54 @@ internal static class AvaloniaShellRegression
             }
             finally { Directory.Delete(directory, recursive: true); }
         }),
+        ("壳回归：所有 QA 模式的状态订阅均不启动真实浏览器或认证通道", async () =>
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "autonet-shell-qa-actions-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var path = WriteStatus(directory, Online() with
+                {
+                    BrowserFallbackRequested = true,
+                    BrowserFallbackNotBefore = DateTimeOffset.UtcNow.AddMinutes(-1),
+                    AuthChannelRequested = true,
+                    AuthChannelNotBefore = DateTimeOffset.UtcNow.AddMinutes(-1),
+                    AuthChannelMode = AuthChannelModes.Automatic
+                });
+                foreach (var qa in Enum.GetValues<QaMode>().Select(mode => new QaEnvironment(mode, directory))
+                             .Append(QaEnvironment.Inactive))
+                {
+                    using var pipe = new StatusPipe(path);
+                    var browserStarts = 0;
+                    var channelStarts = 0;
+                    App.AttachAutomaticActions(pipe, qa,
+                        reading => { if (reading.Snapshot?.BrowserFallbackRequested == true) browserStarts++; },
+                        reading => { if (reading.Snapshot?.AuthChannelRequested == true) channelStarts++; });
+                    var reading = await pipe.RefreshAsync();
+                    Require(reading.Trusted, "授予夹具必须经过真实状态读取且可信");
+                    var expected = qa.Active ? 0 : 1;
+                    Require(browserStarts == expected && channelStarts == expected,
+                        $"{qa.Mode}（QA={qa.Active}）自动动作越过隔离边界：浏览器={browserStarts}，认证通道={channelStarts}");
+                }
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        }),
+        ("壳回归：提权设置 QA 探针不进入真实受限配置编辑器", () => Sync(() =>
+        {
+            foreach (var qa in Enum.GetValues<QaMode>()
+                         .Select(mode => new QaEnvironment(mode, Path.GetTempPath()))
+                         .Append(QaEnvironment.Inactive))
+            {
+                var production = 0;
+                var fixture = 0;
+                var stopped = 0;
+                App.DispatchSettings(qa, () => production++, () => fixture++, () => stopped++);
+                Require(production == (qa.Active ? 0 : 1),
+                    $"{qa.Mode}（QA={qa.Active}）错误地进入真实设置编辑器");
+                Require(fixture == (qa.Active && qa.Mode == QaMode.Settings ? 1 : 0), "设置夹具分支错误");
+                Require(stopped == (qa.Active && qa.Mode != QaMode.Settings ? 1 : 0), "设置路由探针未直接结束");
+            }
+        })),
         ("壳回归：托盘入口保持既有语义，恢复开关随状态同步", () => Sync(() =>
         {
             // #7 起托盘恢复既有「查看日志」条目：打开主窗口并导航到日志页（与旧托盘同语义）。

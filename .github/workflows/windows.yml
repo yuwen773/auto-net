@@ -22,6 +22,14 @@ jobs:
       - name: Verify-bundle QA self-test
         shell: pwsh
         run: pwsh.exe -NoLogo -NoProfile -File scripts/qa-verify-bundle.ps1
+      - name: Install-smoke environment guard self-test
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/qa-install-smoke-guard.ps1
+      # 工单 #36：回滚兼容判定校验——冻结的已发布版本读取规则副本必须与真实旧版逐条一致。
+      # 浅克隆默认没有 tag，脚本会自行抓取；需要仓库的读权限与本地 SDK。
+      - name: Released reader compatibility check (工单 #36)
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/check-released-reader.ps1
       - name: Upload build evidence and Windows package
         if: always()
         uses: actions/upload-artifact@v4

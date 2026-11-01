@@ -73,11 +73,12 @@ try {
             '不替换已安装程序、不停止现有服务。验收状态见 docs/UI-MIGRATION-ACCEPTANCE.md：'
             '真实网络场景与人工视觉项为显式待验收项，独立于发布结论。'
         ) | Set-Content -LiteralPath (Join-Path $bundle 'BUILD-ID.txt') -Encoding utf8
-        $hashes = foreach ($file in Get-ChildItem -LiteralPath $bundle -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt') {
+        $manifestPath = Join-Path $bundle 'SHA256SUMS.txt'
+        $hashes = foreach ($file in Get-ChildItem -LiteralPath $bundle -File -Recurse | Where-Object FullName -ne $manifestPath) {
             $hash = Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256
             $hash.Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetRelativePath($bundle, $file.FullName).Replace('\', '/')
         }
-        $hashes | Set-Content -LiteralPath (Join-Path $bundle 'SHA256SUMS.txt') -Encoding utf8
+        $hashes | Set-Content -LiteralPath $manifestPath -Encoding utf8
         Write-Host "Ready: $bundle"
     }
 }

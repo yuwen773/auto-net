@@ -1,0 +1,69 @@
+=== 工单 #43：存储隔离用例改为不依赖本机真实记录 ===
+日期：2026-10-28（Asia/Shanghai）
+基线源提交：1f36272（工单 #28 基线记录）
+本工单只改测试，未改生产代码，也未新增 NotificationConsumptionStore.RecordPath。
+以下一至五为修订前的历史记录，不代表最终测试方案。旧变异运行未记录真实记录
+是否受到影响及是否恢复；不能凭该次记录断言真实记录未受影响。
+SDK：10.0.401（.tools/dotnet/dotnet.exe），Release。
+
+一、本机真实记录存在
+$ .tools/dotnet/dotnet.exe tests/AutoNet.Tests/bin/Release/net10.0-windows/AutoNet.Tests.dll --filter 存储按
+PASS 通知回归：存储按 Windows 用户隔离且 QA 激活即重定向（故事 57、70）
+1/1 passed
+exit=0
+
+本机 %LOCALAPPDATA%\AutoNet\notification-consumption.json 含一条 InternetRecovered
+（2026-10-24），正是基线失败的那种机器状态。
+
+二、本机真实记录不存在
+把该文件临时移开并在 finally 中恢复（恢复后 SHA-256 与移开前一致），重跑同一用例：
+PASS 通知回归：存储按 Windows 用户隔离且 QA 激活即重定向（故事 57、70）
+1/1 passed
+exit=0
+恢复校验：hash-before == hash-after
+（0c9dbf1d3f9e2017c31c5b4cf81eee8a714526d2bcbfd3c055119c97835da069）
+
+三、变异验证：破坏 QA 重定向
+临时把 NotificationConsumptionStore.Create 改为恒用 DefaultPath()（不重定向），
+重新构建并运行同一用例：
+FAIL 通知回归：存储按 Windows 用户隔离且 QA 激活即重定向（故事 57、70）: QA 模式的消费记录未落在证据目录内
+0/1 passed
+恢复源码并重新构建后重跑：PASS，1/1 passed，exit=0。
+
+四、通知回归整组
+$ ... --filter 通知回归
+14/14 passed，exit=0。
+
+五、记录路径取舍（对应验收项 3）
+未保留/新增 NotificationConsumptionStore.RecordPath。用例用构造函数
+new NotificationConsumptionStore(DefaultPath())（测试项目经 InternalsVisibleTo 可见）
+直接读取本机真实记录作为对照，并用「证据目录落点 + 本机记录前后字节快照」验证隔离，
+因此不需要为测试新增生产 API。
+
+六、评审修订及验证
+评审发现旧用例先写入再检查路径，重定向失效时可能覆盖真实记录；前后读取
+真实记录也可能受到托盘并发写入影响。最终用例通过反射读取存储的私有路径，
+先确认普通模式与 QA 模式的路径，再仅向证据目录写入并读取，完全不读写真实记录。
+这种检查依赖私有字段名；字段重命名时测试会明确失败并需同步调整。
+
+当前工作树 Release 构建：0 警告、0 错误；通知回归 14/14 passed。
+在基于 1f36272 的隔离源码副本中复制最终测试，把 Create 改为恒用 DefaultPath，
+重新构建后运行单项：0/1，退出码 1，失败信息为「QA 模式的消费记录未重定向到证据目录」。
+检查发生在 TrySave 前，变异用例未调用写入；未修改工作树的生产代码。
+最终测试不读取真实记录，因此其存在或不存在不会改变测试输入；此前两种状态的
+运行结果属于旧版测试证据，并非最终版本在两种状态下各自实跑的证据。
+
+七、最终版在独立 Windows 用户配置下的两种状态（2026-10-28）
+重新构建当前工作树，Release 0 警告、0 错误；测试 DLL SHA-256：
+66C409FBA10B3335E6D25CC1A17ABCEB977A54A504AC341396D3F498AB9FAE8D。
+创建临时标准本地账户，进程身份与用户配置目录均经核对；
+新进程解析 LocalApplicationData 为该临时账户配置下的 AppData\Local。
+切换账户启动进程默认继承了原用户环境，故启动测试前将 USERPROFILE、
+LOCALAPPDATA、TEMP 和 TMP 设置为临时用户路径，并在独立新进程验证目录解析。
+
+- 记录不存在：执行前确认不存在；最终版单项 1/1 PASS，执行后仍不存在。
+- 记录存在：在临时用户目录写入虚构通知记录；最终版单项 1/1 PASS。
+  文件 SHA-256 执行前后均为
+  8837B588883F832C9D6BCAB46BB8C3D9CC5D586956102F28261FF5DEE494231C。
+- 测试进程退出码 0；临时账户、Windows 用户配置和暂存目录均已删除。
+  当前用户的通知记录未作为测试数据使用。

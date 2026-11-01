@@ -210,12 +210,15 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
     public async Task<LoginResult> LoginAsync(Credentials credentials, CancellationToken ct) =>
         (await LoginDetailedAsync(credentials, ct)).Result;
 
-    public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct, Func<CancellationToken, bool>? authorizeSubmission = null) => ExecuteAsync(credentials, ct, authorizeSubmission);
+    public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct, Func<CancellationToken, bool>? authorizeSubmission = null,
+        bool allowUnknownStatus = false, Func<CancellationToken, Task<bool>>? authorizeSubmissionAsync = null)
+        => ExecuteAsync(credentials, ct, authorizeSubmission, allowUnknownStatus, authorizeSubmissionAsync);
 
     // Reads the same prerequisites as login; this path has no credentials and cannot submit them.
     public Task<PortalAttempt> DiagnoseAsync(CancellationToken ct) => ExecuteAsync(null, ct);
 
-    private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct, Func<CancellationToken, bool>? authorizeSubmission = null)
+    private async Task<PortalAttempt> ExecuteAsync(Credentials? credentials, CancellationToken ct, Func<CancellationToken, bool>? authorizeSubmission = null,
+        bool allowUnknownStatus = false, Func<CancellationToken, Task<bool>>? authorizeSubmissionAsync = null)
     {
         evidence = new(); responseStatus = null;
         var stage = PortalStage.Unknown;
@@ -235,9 +238,22 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
         try
         {
             stage = PortalStage.Status;
-            var inspection = await ReadStateAsync(requestToken);
+            var retryUnknown = allowUnknownStatus && (authorizeSubmission is not null || authorizeSubmissionAsync is not null);
+            var statusUnavailable = false;
+            PortalStatus inspection;
+            try { inspection = await ReadStateAsync(requestToken); }
+            catch (Exception e) when (retryUnknown && !requestToken.IsCancellationRequested &&
+                (e is IOException || e is HttpRequestException http && http.HttpRequestError != HttpRequestError.SecureConnectionError || e is OperationCanceledException))
+            {
+                // An unavailable status endpoint is not authentication success. Only an
+                // already-pending, budget-reviewed retry may continue to the independent
+                // trusted gateway and configuration checks; TLS/shape failures still stop.
+                statusUnavailable = true;
+                inspection = new(PortalState.Unknown, null, null, ResultField: false);
+            }
             state = inspection.State;
-            if (credentials is not null && state != PortalState.NeedsLogin)
+            if (credentials is not null && state != PortalState.NeedsLogin &&
+                !(retryUnknown && state == PortalState.Unknown && (inspection.ResultField || statusUnavailable || inspection.HttpStatus >= 500)))
             {
                 // A 200 whose body lost the result field is a changed response shape
                 // (ADR-0005): pause like the other structural failures instead of retrying
@@ -333,7 +349,7 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
             if (!gateway.CanSubmit)
                 return Outcome(LoginResult.Rejected, PortalFailure.MissingGatewayParameters);
             if (credentials is null) { stage = PortalStage.Complete; return Outcome(LoginResult.Accepted, PortalFailure.None); }
-            if (authorizeSubmission is not null)
+            if (authorizeSubmission is not null || authorizeSubmissionAsync is not null)
             {
                 // The review chain runs between steps only: a file or WLAN read that blocks
                 // cannot be interrupted, but every step boundary checks the chain's own
@@ -343,7 +359,7 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
                 using var reviewBudget = new CancellationTokenSource(budgets.Review);
                 using var review = CancellationTokenSource.CreateLinkedTokenSource(ct, reviewBudget.Token);
                 bool authorized;
-                try { authorized = authorizeSubmission(review.Token); }
+                try { authorized = authorizeSubmissionAsync is not null ? await authorizeSubmissionAsync(review.Token) : authorizeSubmission!(review.Token); }
                 catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
                 {
                     error = DiagnosticError.From(e);
@@ -464,8 +480,20 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
         return JsonDocument.Parse(match.Groups[1].Value);
     }
 
+    // 传统字符集（如 gb2312）需要显式注册代码页提供程序。服务与 WinForms 托盘在入口注册，
+    // 但 Avalonia 等宿主不一定；这里按需注册一次，保证解码不依赖宿主预配置。
+    private static bool codePagesRegistered;
+
+    private static void EnsureCodePages()
+    {
+        if (codePagesRegistered) return;
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        codePagesRegistered = true;
+    }
+
     public static async Task<string> ReadLimitedAsync(HttpResponseMessage response, CancellationToken ct)
     {
+        EnsureCodePages();
         const int limit = 512 * 1024;
         if (response.Content.Headers.ContentLength > limit) throw new InvalidDataException("Response too large.");
         using var stream = await response.Content.ReadAsStreamAsync(ct);

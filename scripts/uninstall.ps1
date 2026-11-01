@@ -24,7 +24,10 @@ if ($PurgeData) {
 }
 $serviceExe = Join-Path $env:ProgramFiles 'AutoNet/service/AutoNet.Service.exe'
 $trayExe = Join-Path $env:ProgramFiles 'AutoNet/tray/AutoNet.Tray.exe'
+$authChannelExe = Join-Path $env:ProgramFiles 'AutoNet/authchannel/AutoNet.AuthChannel.exe'
 Get-Process -Name AutoNet.Tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $trayExe } | Stop-Process
+# 内嵌通道辅助进程不属于服务或托盘；卸载同样停止它，避免留下仍在持有启动锁的残留进程。
+Get-Process -Name AutoNet.AuthChannel -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $authChannelExe } | Stop-Process
 $service = Get-Service -Name AutoNet -ErrorAction SilentlyContinue
 if ($service) {
     $definition = Get-CimInstance Win32_Service -Filter "Name='AutoNet'"

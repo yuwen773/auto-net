@@ -1,7 +1,7 @@
 #requires -Version 7.0
 # 应用壳 QA（迁移工单 #3）。
 # 覆盖：自包含 win-x64 单文件发布与隔离生命周期（隐藏启动/关闭隐藏/退出不停服务）、
-# 普通实例单实例与独立提权入口并存、壳导航四页真实窗口截图、状态栏降级证据（夹具）、
+# 普通实例单实例与独立提权入口并存、壳导航五页真实窗口截图、状态栏降级证据（夹具）、
 # 读取本机真实状态的实况证据。主题渲染与安装器文件布局由 #9 / #15 各自承接，本脚本不复跑。
 # 边界：不安装、不替换、不重启服务；不写本机真实 status.json（夹具只允许写 QA 证据目录内）。
 param([switch]$SkipPublish)
@@ -19,9 +19,13 @@ $steps = [ordered]@{}
 $failures = [System.Collections.Generic.List[string]]::new()
 $tracked = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $savedEnvironment = @{}
-foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH')) {
+foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH', 'AUTONET_QA_MUTEX_SUFFIX')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
 }
+# 本机可能仍有已安装的候选托盘占用 QA 默认互斥名；按证据目录生成一次性后缀隔离，
+# 同一次运行内的所有实例共用该后缀，单实例语义不变，也不触碰已安装进程。
+$mutexSuffix = 'q' + ([Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($evidence)))).Substring(0, 16).ToLowerInvariant()
 
 function Pass([string]$Name, $Detail) { $steps[$Name] = @{ result = 'pass'; detail = $Detail }; Write-Host ('PASS ' + $Name) }
 function Fail([string]$Name, [string]$Message) {
@@ -35,6 +39,7 @@ function Start-App {
     [Environment]::SetEnvironmentVariable('AUTONET_QA_DIR', $QaDirectory)
     [Environment]::SetEnvironmentVariable('AUTONET_QA_MODE', $QaMode)
     [Environment]::SetEnvironmentVariable('AUTONET_QA_STATUS_PATH', $StatusPath)
+    [Environment]::SetEnvironmentVariable('AUTONET_QA_MUTEX_SUFFIX', $mutexSuffix)
     $start = [Diagnostics.ProcessStartInfo]::new($Executable)
     $start.UseShellExecute = $false
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
@@ -102,7 +107,7 @@ try {
 
     if (-not (Test-Path -LiteralPath $exe)) { throw '没有可运行的壳发布产物，后续核验无法进行。' }
 
-    # 2) 壳导航与状态栏降级（夹具模式）：四页截图 + 有效/过期/未来/损坏/缺失五态状态栏
+    # 2) 壳导航与状态栏降级（夹具模式）：五页截图 + 有效/过期/未来/损坏/缺失五态状态栏
     try {
         $shellDir = New-QaDirectory 'shell'
         $fixture = Join-Path $shellDir 'status-fixture.json'
@@ -115,7 +120,7 @@ try {
         Require ($report.Mode -eq 'fixture' -and $report.Fixture) '夹具模式标记不符'
         Require ($null -eq $report.Error) ('壳 QA 报告包含错误：' + $report.Error)
         $stepMap = @{}; foreach ($step in $report.Steps) { $stepMap[$step.Step] = $step }
-        foreach ($page in @('overview', 'diagnostics', 'logs', 'settings')) {
+        foreach ($page in @('overview', 'authentication', 'diagnostics', 'logs', 'settings')) {
             Require (Test-Path -LiteralPath (Join-Path $shellDir ('shell-nav-' + $page + '.png'))) ('缺少导航截图：' + $page)
         }
         Require ($stepMap['nav'].Strip.StartsWith('后台服务运行中')) '有效状态的底部状态栏未显示运行中'
@@ -123,7 +128,7 @@ try {
         Require ($stepMap['state-future'].Strip.StartsWith('后台状态已过期')) '未来异常时间未降级为已过期'
         Require ($stepMap['state-invalid'].Strip -eq '后台状态不可确认') '损坏状态未降级为不可确认'
         Require ($stepMap['state-missing'].Strip -eq '后台服务未就绪') '缺失状态未降级为未就绪'
-        foreach ($shot in @('shell-nav-overview', 'shell-nav-diagnostics', 'shell-nav-logs', 'shell-nav-settings',
+        foreach ($shot in @('shell-nav-overview', 'shell-nav-authentication', 'shell-nav-diagnostics', 'shell-nav-logs', 'shell-nav-settings',
                 'shell-strip-stale', 'shell-strip-future', 'shell-strip-invalid', 'shell-strip-missing')) {
             $path = Join-Path $shellDir ($shot + '.png')
             Require ((Get-Item -LiteralPath $path).Length -gt 10KB) ($shot + ' 内容过小，疑似空白渲染')
@@ -143,7 +148,7 @@ try {
         $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
         Require ($report.Mode -eq 'live' -and -not $report.Fixture) '实况模式标记不符'
         $nav = @($report.Steps | Where-Object Step -eq 'nav')
-        Require ($nav.Count -eq 4) ('实况导航步骤数不符：' + $nav.Count)
+        Require ($nav.Count -eq 5) ('实况导航步骤数不符：' + $nav.Count)
         Require ($nav[0].Strip -match '^后台(服务运行中|状态已过期|服务未就绪|状态不可确认)') ('实况状态栏文本异常：' + $nav[0].Strip)
         Require (Test-Path -LiteralPath (Join-Path $liveDir 'shell-nav-overview.png')) '缺少实况导航截图'
         Pass 'shell-live' @{ report = $reportPath; strip = $nav[0].Strip; steps = $nav }

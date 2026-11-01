@@ -1,48 +1,49 @@
 using System.Text.Json;
 using AutoNet.Core;
 using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 设置页与设置编辑器 QA（仅 AUTONET_QA_DIR / AUTONET_QA_MODE=settings 激活）：
-/// - 壳侧（普通界面，故事 34）：状态矩阵下的只读投影、不可信降级与修改入口意图记录
-///   （本模式不弹真实 UAC）；实况模式读取本机真实状态；
-/// - 编辑器侧（提权进程，故事 35–39）：在 QA 证据目录内的隔离夹具上逐场景驱动既有保存规则——
-///   首次设置必须密码、账号未变密码留空保留旧密码、换账号必须新密码、校验失败与存储失败零谎报、
-///   凭据走 DPAPI 密文且不落明文（故事 36）、认证暂停标记逐字节保持（故事 39）。
-/// 夹具只写 QA 证据目录，绝不触碰本机真实受限目录，也不发起真实网络请求。
+/// - 主窗口设置页（#41）：状态矩阵下的只读事实与非秘密配置投影、真实表单控件，
+///   以及首次设置、保留密码、换账号、校验失败、取消授权、结果未知、存储失败、保留原值等十一条保存路径；
+///   保存经 QA 夹具内的真实 <see cref="ElevatedSettings"/> 规则，不弹真实 UAC；
+/// - 提权编辑器（#8，兼容入口 --settings）：在 QA 证据目录内的隔离夹具上逐场景驱动既有保存规则。
+/// 夹具只写 QA 证据目录，绝不触碰本机真实受限目录，也不发起真实网络请求；证据不含账号或密码。
 /// </summary>
 internal static class QaSettings
 {
-    private static readonly object modifyGate = new();
-    private static readonly List<string> modifies = [];
+    private static readonly object gate = new();
+    private static string? fixtureRoot;
+    private static string? currentScenario;
+    private static int handoffInvocations;
+    private static bool submittedKeepProxyUrl;
+    private static bool submittedKeepUuEndpoint;
+    private static bool submittedKeepEnabled;
+    private static bool submittedKeepAllowActiveDisconnect;
+    private static bool submittedKeepKeepAwakeOnAc;
+    private static bool submittedKeepAuthChannelMode;
+    private static bool submittedKeepProfile;
+    private static bool existingSettingsFound;
 
-    /// <summary>设置页 QA 的修改入口记录适配器：只记录命令意图，不弹出 UAC（生产路径为 Elevation.Launch）。</summary>
-    public static void RecordModify() => RecordModify(ElevatedOperationKind.Settings.CommandLineArgument());
-
-    private static void RecordModify(string command)
-    {
-        lock (modifyGate) modifies.Add(command);
-    }
-
-    private static int ModifyCount()
-    {
-        lock (modifyGate) return modifies.Count;
-    }
-
-    /// <summary>壳侧设置页 QA（普通界面）：只读投影矩阵 + 修改入口意图记录。</summary>
-    public static void Run(ShellController controller, MainWindow window, Action modifySettings, QaEnvironment qa, Action<int> shutdown)
+    /// <summary>主窗口设置页 QA：状态矩阵 + 十一条保存路径，截图与受控结果进入报告。</summary>
+    public static void Run(ShellController controller, MainWindow window, SettingsPage page, QaEnvironment qa, Action<int> shutdown)
     {
         Dispatcher.UIThread.Post(async () =>
         {
             var steps = new List<QaSettingsStep>();
             var actions = new List<QaSettingsAction>();
             var editorSteps = new List<QaSettingsEditorStep>();
+            var saveSteps = new List<QaSettingsSaveStep>();
+            var navigationSteps = new List<QaSettingsNavigationStep>();
             var fixturePath = Environment.GetEnvironmentVariable("AUTONET_QA_STATUS_PATH");
             var fixtureMode = fixturePath is { Length: > 0 };
-            lock (modifyGate) modifies.Clear();
 
             QaSettingsReport Build(string? error = null) => new(
                 fixtureMode ? "fixture" : "live",
@@ -55,6 +56,8 @@ internal static class QaSettings
                 steps,
                 actions,
                 editorSteps,
+                saveSteps,
+                navigationSteps,
                 error);
 
             try
@@ -74,15 +77,59 @@ internal static class QaSettings
                         else WriteStatus(fixturePath!, snapshot);
                         await controller.SelectAsync(ShellPage.Settings);
                         await controller.RefreshStatusAsync();
-                        await Task.Delay(200);
+                        await Task.Delay(220);
                         var shot = qa.SettingsShotPath("settings-" + state);
                         WindowCapture.Save(window, shot);
-                        steps.Add(Describe(state, controller, Path.GetFileName(shot)));
+                        steps.Add(Describe(state, controller, page, Path.GetFileName(shot)));
                     }
 
-                    // 修改入口意图：入口不依赖状态可信度（与既有托盘菜单一致），
-                    // 点击记录的必须是既有的 --settings 提权参数（故事 34 的接线证据）。
-                    actions.Add(DriveModify("修改入口：普通界面只发起提权请求", modifySettings));
+                    // 选项未知说明：无投影时把选项区滚入视野，证据同时显示三态“未确定”与保存语义说明。
+                    File.Delete(fixturePath!);
+                    await controller.SelectAsync(ShellPage.Settings);
+                    await controller.RefreshStatusAsync();
+                    await Task.Delay(220);
+                    var optionsNote = window.GetVisualDescendants().OfType<TextBlock>()
+                        .FirstOrDefault(item => item.Text == SettingsModel.OptionsUnknownNote && item.IsVisible)
+                        ?? throw new InvalidOperationException("无可信投影时未显示恢复选项说明");
+                    optionsNote.BringIntoView();
+                    await Task.Delay(160);
+                    var unknownShot = qa.SettingsShotPath("settings-options-unknown");
+                    WindowCapture.Save(window, unknownShot);
+                    steps.Add(Describe("options-unknown", controller, page, Path.GetFileName(unknownShot)));
+
+                    // 列表刷新（#41 第四轮）：系统新增配置后刷新设置页，真实下拉框必须出现新配置。
+                    QaProfiles.Add(OtherProfile);
+                    page.RefreshProfiles();
+                    await Task.Delay(160);
+                    var profileBox = window.GetVisualDescendants().OfType<ComboBox>()
+                        .FirstOrDefault(box => box.Items.OfType<WifiProfile>().Any());
+                    if (profileBox is null || !profileBox.Items.OfType<WifiProfile>()
+                            .Any(profile => profile.Name == OtherProfile.Name))
+                        throw new InvalidOperationException("刷新设置页后未显示新增的 Wi-Fi 配置");
+                    var refreshShot = qa.SettingsShotPath("settings-profile-refresh");
+                    WindowCapture.Save(window, refreshShot);
+                    steps.Add(Describe("profile-refresh", controller, page, Path.GetFileName(refreshShot)));
+
+                    // 跨页往返（#41 审查）：指纹缓存不得让返回的页面仍显示设置控件。
+                    WriteStatus(fixturePath!, Online());
+                    await controller.RefreshStatusAsync();
+                    await DriveNavigationAsync(controller, window, qa, navigationSteps);
+
+                    // 保存场景必须在设置页可见时驱动：截图与保存按钮名称都取自用户实际看到的控件。
+                    await controller.SelectAsync(ShellPage.Settings);
+                    await Task.Delay(220);
+
+                    fixtureRoot = Path.Combine(qa.Directory, "settings-page-fixture");
+                    var prefix = Path.GetFullPath(qa.Directory) + Path.DirectorySeparatorChar;
+                    if (!Path.GetFullPath(fixtureRoot).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("设置页 QA 夹具目录必须位于 QA 证据目录内。");
+                    if (Directory.Exists(fixtureRoot)) Directory.Delete(fixtureRoot, recursive: true);
+                    Directory.CreateDirectory(fixtureRoot);
+
+                    await DriveClearAddressKeyboardAsync(page, window, qa);
+
+                    foreach (var scenario in SaveScenarios())
+                        saveSteps.Add(await DriveSaveAsync(page, qa, window, scenario, fixtureRoot));
                 }
                 else
                 {
@@ -91,7 +138,7 @@ internal static class QaSettings
                     await Task.Delay(250);
                     var shot = qa.SettingsShotPath("settings-live");
                     WindowCapture.Save(window, shot);
-                    steps.Add(Describe("live", controller, Path.GetFileName(shot)));
+                    steps.Add(Describe("live", controller, page, Path.GetFileName(shot)));
                 }
 
                 QaReports.Write(qa.SettingsReportPath, Build());
@@ -105,7 +152,32 @@ internal static class QaSettings
         });
     }
 
-    /// <summary>编辑器侧 QA（提权进程）：隔离夹具上逐场景驱动既有保存规则、真实窗口与取消路径。</summary>
+    private static async Task DriveClearAddressKeyboardAsync(SettingsPage page, MainWindow window, QaEnvironment qa)
+    {
+        page.ApplyForQa(new SettingsDraft(FixtureProfile, "TEST-USER-1", "", "http://127.0.0.1:7897", "https://uu.example.test",
+            Enabled: true, AllowActiveDisconnect: true, KeepAwakeOnAc: true)
+        { KeepProxyUrl = true, KeepUuEndpoint = true });
+        await Task.Delay(180);
+        foreach (var name in new[] { "清空代理检测地址", "清空 UU 服务检测地址" })
+        {
+            var button = window.GetVisualDescendants().OfType<Button>()
+                .FirstOrDefault(item => item.IsVisible && AutomationProperties.GetName(item) == name)
+                ?? throw new InvalidOperationException("未找到清空地址按钮：" + name);
+            if (!button.Focus(NavigationMethod.Tab, KeyModifiers.None))
+                throw new InvalidOperationException("清空地址按钮不能取得键盘焦点：" + name);
+            button.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter, KeyModifiers = KeyModifiers.None, Source = button
+            });
+            await Task.Delay(120);
+            if (name == "清空代理检测地址" && (page.Draft.KeepProxyUrl || page.Draft.ProxyUrl != "") ||
+                name == "清空 UU 服务检测地址" && (page.Draft.KeepUuEndpoint || page.Draft.UuEndpoint != ""))
+                throw new InvalidOperationException("键盘未触发清空地址：" + name);
+        }
+        WindowCapture.Save(window, qa.SettingsShotPath("settings-clear-address-keyboard"));
+    }
+
+    /// <summary>编辑器侧 QA（提权进程，兼容入口 --settings）：隔离夹具上逐场景驱动既有保存规则。</summary>
     public static void RunEditor(QaEnvironment qa, Action<int> shutdown)
     {
         Dispatcher.UIThread.Post(async () =>
@@ -123,6 +195,8 @@ internal static class QaSettings
                 [],
                 [],
                 editorSteps,
+                [],
+                [],
                 error);
 
             try
@@ -151,6 +225,225 @@ internal static class QaSettings
                 shutdown(1);
             }
         });
+    }
+
+    /// <summary>
+    /// QA 保存交接：在隔离夹具内调用真实 <see cref="ElevatedSettings"/> 规则；取消与结果未知
+    /// 场景直接返回受控结果，不写任何文件。生产路径从不经过这里。
+    /// </summary>
+    internal static async Task<HandoffResult> SaveForQaAsync(SettingsDraft draft, CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate) handoffInvocations++;
+        var scenario = currentScenario ?? "page-first-setup";
+        if (scenario == "page-uac-cancelled") return new(HandoffOutcome.Cancelled);
+        if (scenario == "page-outcome-unknown") return new(HandoffOutcome.OutcomeUnknown);
+        // 忙态场景：保持交接未完成，让 QA 观察保存按钮与编辑控件的忙态。
+        if (scenario == "page-busy-name") await Task.Delay(700);
+        var root = fixtureRoot ?? throw new InvalidOperationException("设置页 QA 夹具未初始化。");
+        var directory = Path.Combine(root, scenario);
+        Directory.CreateDirectory(directory);
+        // 证据：提交的草稿是否带“保留原值”标记，以及接收端此刻能否读到夹具设置。
+        lock (gate)
+        {
+            submittedKeepProxyUrl = draft.KeepProxyUrl;
+            submittedKeepUuEndpoint = draft.KeepUuEndpoint;
+            submittedKeepEnabled = draft.KeepEnabled;
+            submittedKeepAllowActiveDisconnect = draft.KeepAllowActiveDisconnect;
+            submittedKeepKeepAwakeOnAc = draft.KeepAwakeOnAcKept;
+            submittedKeepAuthChannelMode = draft.KeepAuthChannelMode;
+            submittedKeepProfile = draft.KeepProfile;
+            existingSettingsFound = File.Exists(Path.Combine(directory, "settings.json"));
+        }
+        var editor = CreateFixtureEditor(
+            Path.Combine(directory, "settings.json"),
+            Path.Combine(directory, "credentials.dpapi"),
+            failSettingsStore: scenario == "page-store-failed");
+        var result = editor.Save(draft);
+        return new(HandoffOutcome.Completed, result.Outcome);
+    }
+
+    private sealed record SaveScenario(
+        string Name,
+        string? SeedUsername,
+        string SeedPassword,
+        string? SeedProxyUrl,
+        string? SeedUuEndpoint,
+        string Username,
+        string Password,
+        string ProxyUrl,
+        string UuEndpoint,
+        bool KeepProxyUrl,
+        bool KeepUuEndpoint,
+        bool DelayHandoff,
+        string Intent,
+        bool SeedEnabled = true,
+        bool SeedAllowActiveDisconnect = true,
+        bool SeedKeepAwakeOnAc = true,
+        string SeedAuthChannelMode = AuthChannelModes.ManualOnly,
+        bool KeepOptions = false,
+        WifiProfile? SeedProfile = null,
+        bool KeepProfile = false,
+        bool NullProfile = false);
+
+    private static IEnumerable<SaveScenario> SaveScenarios()
+    {
+        // 首次设置：账号密码齐备，设置与 DPAPI 密文产生，无明文。
+        yield return new("page-first-setup", null, "", null, null, "TEST-USER-1", "TEST-PASSWORD-1", "", "",
+            false, false, false, "首次设置：保存成功，密码清除，认证暂停保持");
+        // 账号未变且密码留空：保留已保存密码（接收端按既有规则判定）。
+        yield return new("page-keep-password", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1", "", "",
+            "", false, false, false, "账号未变且密码留空：保留旧密码");
+        // 换账号且密码留空：接收端拒绝，零写入。
+        yield return new("page-change-account-required", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-2", "",
+            "", "", false, false, false, "换账号且密码留空：拒绝并保留原凭据");
+        // 校验失败：普通进程在交接前拦截，交接未发起，零写入。
+        yield return new("page-validation-failed", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1", "",
+            "http://remote.example.com:8080", "", false, false, false, "代理地址不合法：交接前拒绝，零写入");
+        // 取消/拒绝授权：零写入，结果文案明确。
+        yield return new("page-uac-cancelled", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1",
+            "TEST-PASSWORD-1", "", "", false, false, false, "取消管理员授权：零写入");
+        // 回执丢失：结果未知，不宣称零写入。
+        yield return new("page-outcome-unknown", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1",
+            "TEST-PASSWORD-1", "", "", false, false, false, "保存结果未知：如实报告可能已写入");
+        // 存储失败：先凭据后设置，凭据部分写入、设置未写入，如实报告。
+        yield return new("page-store-failed", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1",
+            "TEST-PASSWORD-1", "", "", false, false, false, "设置写入失败：如实报告已发生的部分写入");
+        // 地址含未回显的秘密：页面只看到来源，未编辑时接收端必须保留完整原值。
+        yield return new("page-keep-redacted-url", "TEST-USER-1", "TEST-PASSWORD-1",
+            "http://127.0.0.1:7897/TEST-URL-SECRET?token=TEST-URL-SECRET",
+            "https://uu.example.test/TEST-URL-SECRET",
+            "TEST-USER-1", "", "http://127.0.0.1:7897", "https://uu.example.test",
+            true, true, false, "地址含未回显秘密：未编辑时保存保留完整原值");
+        // 无投影时未编辑的恢复选项：页面显示“未确定”，接收端保留受限存储中的关闭状态。
+        yield return new("page-keep-options", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1", "", "", "",
+            false, false, false, "无投影未编辑选项：显示未确定并保留已保存的关闭状态",
+            SeedEnabled: false, SeedAllowActiveDisconnect: false, SeedKeepAwakeOnAc: false,
+            SeedAuthChannelMode: AuthChannelModes.Off, KeepOptions: true);
+        // 未在页面选择 Wi-Fi（KeepProfile）：接收端保留受限存储中的守护目标，不被页面旧选择覆盖。
+        yield return new("page-keep-profile", "TEST-USER-1", "TEST-PASSWORD-1", null, null, "TEST-USER-1", "", "", "",
+            false, false, false, "未选择 Wi-Fi：保留受限存储中的守护目标",
+            SeedProfile: OtherProfile, KeepProfile: true, NullProfile: true);
+        // 保存忙态：保存期间禁用编辑，保存按钮可见文字与自动化名称同步。
+        yield return new("page-busy-name", null, "", null, null, "TEST-USER-1", "TEST-PASSWORD-1", "", "",
+            false, false, true, "保存期间禁用编辑且无障碍名称同步忙态");
+    }
+
+    private static async Task<QaSettingsSaveStep> DriveSaveAsync(
+        SettingsPage page, QaEnvironment qa, MainWindow window, SaveScenario scenario, string root)
+    {
+        var directory = Path.Combine(root, scenario.Name);
+        Directory.CreateDirectory(directory);
+        var settingsPath = Path.Combine(directory, "settings.json");
+        var credentialPath = Path.Combine(directory, "credentials.dpapi");
+        var blockPath = Path.Combine(directory, "auth-block.txt");
+        var safety = new SafetyStateStore(directory);
+        if (!File.Exists(blockPath)) safety.BlockAuthentication(new AuthenticationBlock(PortalFailure.BindingRejected));
+        if (scenario.SeedUsername is { } seed)
+        {
+            WriteFixtureSettings(settingsPath, scenario.SeedProxyUrl, scenario.SeedUuEndpoint,
+                scenario.SeedEnabled, scenario.SeedAllowActiveDisconnect, scenario.SeedKeepAwakeOnAc,
+                scenario.SeedAuthChannelMode, scenario.SeedProfile);
+            WriteFixtureCredentials(credentialPath, new Credentials(seed, scenario.SeedPassword));
+        }
+        var blockBefore = File.ReadAllBytes(blockPath);
+        var settingsBefore = File.Exists(settingsPath) ? File.ReadAllBytes(settingsPath) : [];
+        var credentialsBefore = File.Exists(credentialPath) ? File.ReadAllBytes(credentialPath) : [];
+
+        lock (gate)
+        {
+            currentScenario = scenario.Name;
+            handoffInvocations = 0;
+        }
+
+        page.ApplyForQa(new SettingsDraft(
+            scenario.NullProfile ? null : FixtureProfile,
+            scenario.Username, scenario.Password, scenario.ProxyUrl, scenario.UuEndpoint,
+            Enabled: true, AllowActiveDisconnect: true, KeepAwakeOnAc: true)
+        {
+            KeepProfile = scenario.KeepProfile,
+            KeepProxyUrl = scenario.KeepProxyUrl,
+            KeepUuEndpoint = scenario.KeepUuEndpoint,
+            KeepEnabled = scenario.KeepOptions,
+            KeepAllowActiveDisconnect = scenario.KeepOptions,
+            KeepAwakeOnAcKept = scenario.KeepOptions,
+            KeepAuthChannelMode = scenario.KeepOptions
+        });
+        await Task.Delay(160);
+        var optionsUnknown = !page.Content.ConfigProjected &&
+            (page.Draft.KeepEnabled || page.Draft.KeepAllowActiveDisconnect ||
+             page.Draft.KeepAwakeOnAcKept || page.Draft.KeepAuthChannelMode);
+        var saveTask = page.SaveAsync();
+        var nameDuringSave = "";
+        if (scenario.DelayHandoff)
+        {
+            // 交接故意延迟：观察保存期间按钮的可见文字/自动化名称与编辑控件禁用状态。
+            await Task.Delay(240);
+            nameDuringSave = SaveButtonName(window);
+        }
+        var result = await saveTask;
+        await Task.Delay(180);
+        var nameAfterSave = SaveButtonName(window);
+        // 保存结果与按钮位于页面下部：截图前滚到底，让证据显示用户实际看到的受控结果文案。
+        ScrollToEnd(window);
+        await Task.Delay(140);
+
+        var shot = qa.SettingsShotPath("settings-" + scenario.Name);
+        WindowCapture.Save(window, shot);
+
+        var blockAfter = File.ReadAllBytes(blockPath);
+        var settingsAfter = File.Exists(settingsPath) ? File.ReadAllBytes(settingsPath) : [];
+        var credentialsAfter = File.Exists(credentialPath) ? File.ReadAllBytes(credentialPath) : [];
+        var plaintextFree = credentialsAfter.Length == 0 ||
+            (!SettingsFixture.ContainsUtf8(credentialsAfter, scenario.Password) &&
+             !SettingsFixture.ContainsUtf8(credentialsAfter, scenario.Username));
+        int invocations;
+        bool keepProxy, keepUu, hadSettings, keepEnabled, keepDisconnect, keepAwake, keepChannel, keepProfile;
+        lock (gate)
+        {
+            invocations = handoffInvocations;
+            keepProxy = submittedKeepProxyUrl;
+            keepUu = submittedKeepUuEndpoint;
+            keepEnabled = submittedKeepEnabled;
+            keepDisconnect = submittedKeepAllowActiveDisconnect;
+            keepAwake = submittedKeepKeepAwakeOnAc;
+            keepChannel = submittedKeepAuthChannelMode;
+            keepProfile = submittedKeepProfile;
+            hadSettings = existingSettingsFound;
+        }
+        // 落盘事实：保留标记为真时，夹具设置里未编辑的选项必须仍是种子值。
+        var saved = settingsAfter.Length == 0 ? null
+            : JsonSerializer.Deserialize<Settings>(Storage.ReadShared(settingsPath), Storage.Json);
+
+        return new QaSettingsSaveStep(
+            scenario.Name,
+            result.State.ToString(),
+            result.Message,
+            PasswordCleared: page.Draft.Password.Length == 0,
+            HandoffInvoked: invocations > 0,
+            SecretInMessage: scenario.Password.Length > 0 &&
+                result.Message.Contains(scenario.Password, StringComparison.Ordinal),
+            BlockUntouched: blockBefore.SequenceEqual(blockAfter),
+            SettingsWritten: !settingsBefore.SequenceEqual(settingsAfter),
+            CredentialsWritten: !credentialsBefore.SequenceEqual(credentialsAfter),
+            CredentialPlaintextFree: plaintextFree,
+            SaveNameDuringSave: nameDuringSave,
+            SaveNameAfter: nameAfterSave,
+            KeepProfile: keepProfile,
+            KeepProxyUrl: keepProxy,
+            KeepUuEndpoint: keepUu,
+            ExistingSettingsFound: hadSettings,
+            KeepEnabled: keepEnabled,
+            KeepAllowActiveDisconnect: keepDisconnect,
+            KeepKeepAwakeOnAc: keepAwake,
+            KeepAuthChannelMode: keepChannel,
+            OptionsUnknown: optionsUnknown,
+            EnabledAfter: saved?.Enabled,
+            AllowActiveDisconnectAfter: saved?.AllowActiveDisconnect,
+            KeepAwakeOnAcAfter: saved?.KeepAwakeOnAc,
+            AuthChannelModeAfter: saved?.AuthChannelMode,
+            File: Path.GetFileName(shot));
     }
 
     private sealed record Scenario(
@@ -219,7 +512,8 @@ internal static class QaSettings
         var credentialsAfter = File.Exists(credentialPath) ? File.ReadAllBytes(credentialPath) : [];
         var blockAfter = File.ReadAllBytes(blockPath);
         var credentialPlaintextFree = credentialsAfter.Length == 0 ||
-            (!SearchUtf8(credentialsAfter, scenario.Password) && !SearchUtf8(credentialsAfter, scenario.Username));
+            (!SettingsFixture.ContainsUtf8(credentialsAfter, scenario.Password) &&
+             !SettingsFixture.ContainsUtf8(credentialsAfter, scenario.Username));
 
         return new QaSettingsEditorStep(
             scenario.Name,
@@ -352,30 +646,86 @@ internal static class QaSettings
             Storage.AtomicWrite(settingsPath, JsonSerializer.Serialize(settings, Storage.Json));
         });
 
-    private static QaSettingsAction DriveModify(string context, Action modifySettings)
+    /// <summary>滚动到页面宿主外层（TextBox 模板内部也有 ScrollViewer，不能取第一个）。</summary>
+    private static void ScrollToEnd(MainWindow window)
     {
-        const string expected = "--settings";
-        var before = ModifyCount();
-        modifySettings();
-        var after = ModifyCount();
-        if (after != before + 1) throw new InvalidOperationException("修改入口未记录命令：" + context);
-        string? command;
-        lock (modifyGate) command = modifies[^1];
-        if (command != expected) throw new InvalidOperationException($"命令意图不符：期望 {expected}，实际 {command}（{context}）");
-        return new QaSettingsAction(context, expected, true, command);
+        var host = window.GetVisualDescendants().OfType<ContentControl>().FirstOrDefault(c => c.Name == "pageHost");
+        host?.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault()?.ScrollToEnd();
     }
 
-    private static QaSettingsStep Describe(string state, ShellController controller, string? file)
+    /// <summary>保存按钮的自动化名称（保存期间应为忙态文字，结束后恢复）。</summary>
+    private static string SaveButtonName(MainWindow window) =>
+        window.GetVisualDescendants().OfType<Button>()
+            .Select(AutomationProperties.GetName)
+            .FirstOrDefault(name => name is "保存设置" or "正在保存…") ?? "";
+
+    /// <summary>页面宿主实际显示的页面标题；用于发现跨页指纹缓存导致的错页。</summary>
+    private static string PageTitle(MainWindow window)
+    {
+        var host = window.GetVisualDescendants().OfType<ContentControl>().FirstOrDefault(c => c.Name == "pageHost");
+        return host?.GetVisualDescendants().OfType<TextBlock>()
+            .FirstOrDefault(text => Math.Abs(text.FontSize - 26) < 0.1 && text.Text is { Length: > 0 })?.Text ?? "";
+    }
+
+    /// <summary>
+    /// 跨页往返（#41 审查）：先访问概览/诊断/日志，再进设置，再返回同一页面；每次记录页面宿主
+    /// 实际显示的标题与截图。指纹缓存若未清理，返回时会停留在设置控件上。
+    /// </summary>
+    private static async Task DriveNavigationAsync(
+        ShellController controller, MainWindow window, QaEnvironment qa, List<QaSettingsNavigationStep> steps)
+    {
+        var sequence = new (ShellPage From, ShellPage To)[]
+        {
+            (ShellPage.Settings, ShellPage.Overview),
+            (ShellPage.Overview, ShellPage.Settings),
+            (ShellPage.Settings, ShellPage.Overview),
+            (ShellPage.Overview, ShellPage.Settings),
+            (ShellPage.Settings, ShellPage.Diagnostics),
+            (ShellPage.Diagnostics, ShellPage.Settings),
+            (ShellPage.Settings, ShellPage.Diagnostics),
+            (ShellPage.Diagnostics, ShellPage.Settings),
+            (ShellPage.Settings, ShellPage.Logs),
+            (ShellPage.Logs, ShellPage.Settings),
+            (ShellPage.Settings, ShellPage.Logs)
+        };
+        var index = 0;
+        foreach (var (from, to) in sequence)
+        {
+            await controller.SelectAsync(to);
+            await Task.Delay(180);
+            var shot = qa.SettingsShotPath(
+                "settings-nav-" + index++ + "-" + to.ToString().ToLowerInvariant());
+            WindowCapture.Save(window, shot);
+            steps.Add(new QaSettingsNavigationStep(from.ToString(), to.ToString(), PageTitle(window), Path.GetFileName(shot)));
+        }
+    }
+
+    private static QaSettingsStep Describe(string state, ShellController controller, SettingsPage page, string? file)
     {
         if (controller.Content is not SettingsContent settings)
             throw new InvalidOperationException("设置页内容未就绪：" + state);
+        // 无投影且未编辑的恢复选项在界面上显示为“未确定”（三态未选）并给出说明；
+        // OptionsKnown=false 时脚本要求截图与说明同时存在。
+        var optionsKnown = settings.ConfigProjected ||
+            !(page.Draft.KeepEnabled || page.Draft.KeepAllowActiveDisconnect ||
+              page.Draft.KeepAwakeOnAcKept || page.Draft.KeepAuthChannelMode);
         return new QaSettingsStep(
             state,
             settings.Trusted,
             settings.RecoveryState,
             settings.GuardedNetwork,
             SettingsModel.PortalLine.Trim(),
-            settings.ModifyLabel,
+            settings.ConfigProjected,
+            settings.WifiProfile,
+            settings.ProxyUrlDisplay,
+            settings.ProxyUrlRedacted,
+            settings.UuEndpointDisplay,
+            settings.UuEndpointRedacted,
+            settings.Enabled,
+            settings.AllowActiveDisconnect,
+            settings.KeepAwakeOnAc,
+            settings.AuthChannelMode,
+            optionsKnown,
             file);
     }
 
@@ -383,6 +733,13 @@ internal static class QaSettings
     {
         yield return ("online", Online());
         yield return ("online-disabled", Online() with { Enabled = false });
+        yield return ("online-redacted", Online() with
+        {
+            ProxyUrlDisplay = "http://127.0.0.1:7897",
+            ProxyUrlRedacted = true,
+            UuEndpointDisplay = "https://uu.example.test",
+            UuEndpointRedacted = true
+        });
         yield return ("online-suspended", Online() with
         {
             CredentialsBlocked = true,
@@ -405,17 +762,43 @@ internal static class QaSettings
         Wifi = "TEST-AP-1",
         Portal = "未查询（外网检查已通过）",
         Tunnel = "系统路径可达，出口未核验",
-        Uu = "未核验"
+        Uu = "未核验",
+        SettingsProjected = true,
+        InterfaceId = FixtureProfile.InterfaceId,
+        WifiProfile = FixtureProfile.Name,
+        ProxyUrlDisplay = "http://127.0.0.1:7897",
+        ProxyUrlRedacted = false,
+        UuEndpointDisplay = "https://uu.example.test",
+        UuEndpointRedacted = false,
+        AllowActiveDisconnect = true,
+        KeepAwakeOnAc = true,
+        AuthChannelMode = AuthChannelModes.ManualOnly
     };
 
     private static readonly WifiProfile FixtureProfile = SettingsFixture.Profile;
 
-    private static void WriteFixtureSettings(string path) => Storage.AtomicWrite(path,
-        JsonSerializer.Serialize(new Settings
+    /// <summary>QA 可枚举的配置列表；运行中追加用于验证设置页的列表刷新。</summary>
+    private static readonly List<WifiProfile> QaProfiles = [FixtureProfile];
+    internal static IReadOnlyList<WifiProfile> Profiles => QaProfiles;
+
+    /// <summary>另一个已保存配置：用于验证 KeepProfile 不会被页面的默认选择覆盖。</summary>
+    private static readonly WifiProfile OtherProfile = new(
+        "66666666-7777-8888-9999-AAAAAAAAAAAA", "TEST-ADAPTER-2", "TEST-AP-2", AllUsers: true, Connected: false);
+
+    private static void WriteFixtureSettings(string path, string? proxyUrl = null, string? uuEndpoint = null,
+        bool enabled = true, bool allowActiveDisconnect = true, bool keepAwakeOnAc = true,
+        string authChannelMode = AuthChannelModes.ManualOnly, WifiProfile? profile = null) =>
+        Storage.AtomicWrite(path, JsonSerializer.Serialize(new Settings
         {
-            InterfaceId = FixtureProfile.InterfaceId,
-            WifiProfile = FixtureProfile.Name,
-            PortalOrigin = "https://login.csust.edu.cn"
+            InterfaceId = (profile ?? FixtureProfile).InterfaceId,
+            WifiProfile = (profile ?? FixtureProfile).Name,
+            PortalOrigin = "https://login.csust.edu.cn",
+            ProxyUrl = proxyUrl ?? "",
+            UuEndpoint = uuEndpoint ?? "",
+            Enabled = enabled,
+            AllowActiveDisconnect = allowActiveDisconnect,
+            KeepAwakeOnAc = keepAwakeOnAc,
+            AuthChannelMode = authChannelMode
         }, Storage.Json));
 
     /// <summary>夹具凭据读写与明文扫描：共享夹具的既有 DPAPI 逻辑（路径由场景给出）。</summary>
@@ -424,9 +807,6 @@ internal static class QaSettings
 
     private static Credentials? ReadFixtureCredentials(string path) =>
         SettingsFixture.ReadCredentials(path);
-
-    private static bool SearchUtf8(byte[] haystack, string needle) =>
-        SettingsFixture.ContainsUtf8(haystack, needle);
 
     private static async Task ShowNoticeEvidenceAsync(string path, string heading, string body)
     {

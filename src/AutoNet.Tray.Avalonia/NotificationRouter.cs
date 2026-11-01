@@ -154,6 +154,21 @@ internal sealed class NotificationRouter
             "AutoNet 需要人工认证",
             "自动认证的结果未能确认，等待人工处理；请查看网络诊断页。",
             Warning: true),
+        [NotificationCodes.SubmissionBudgetExhausted] = new(
+            NotificationCodes.SubmissionBudgetExhausted,
+            "AutoNet · 提交额度已耗尽",
+            "首次提交后的两次额外自动提交已用尽，已停止自动提交；继续只读复检。门户确认成功或手动重新开始认证后重置额度。",
+            Warning: true),
+        [NotificationCodes.SubmissionBudgetNearLimit] = new(
+            NotificationCodes.SubmissionBudgetNearLimit,
+            "AutoNet · 提交额度即将用尽",
+            "本次故障只剩最后一次自动提交机会；再失败后停止自动提交。",
+            Warning: true),
+        [NotificationCodes.SubmissionBudgetReset] = new(
+            NotificationCodes.SubmissionBudgetReset,
+            "AutoNet · 提交额度已重置",
+            "门户确认成功或已手动重新开始认证，提交额度已重置；重启和保存设置不会重置。",
+            Warning: false),
         [NotificationCodes.PortalLayoutChanged] = new(
             NotificationCodes.PortalLayoutChanged,
             "AutoNet · 门户结构疑似变化",
@@ -229,10 +244,26 @@ internal sealed class NotificationRouter
         if (!NotificationCodes.IsKnown(current.Code)) return; // 故事 60：无动作、无文案、不记录
         // 词表缺席（复检过程）= 只在界面显示的事件：绝不提醒（故事 54）。
         if (!Vocabulary.TryGetValue(current.Code, out var alert)) return;
+        alert = ForSnapshot(alert, snapshot);
         if (consumed.TryGetValue(current.Code, out var seen) && seen == current.At) return; // 故事 58
         // 呈现失败不记录：同一事件下轮重试（至少一次语义）；呈现成功才落消费记录。
         if (!present(alert)) return;
         Remember(current);
+    }
+
+    /// <summary>词表耗尽正文中的复检子句；只替换这一句，其余措辞保持单一来源。</summary>
+    private const string ActiveRecheckClause = "继续只读复检。";
+    private const string SuspendedRecheckClause = "校园 Wi-Fi 当前不可用，暂不发起只读复检，恢复连接后继续。";
+
+    /// <summary>
+    /// 耗尽通知的复检说明跟随网络条件：服务只在校园 Wi-Fi 就绪时执行低频只读复检，
+    /// Wi-Fi 未连接、等待 IPv4 或网卡未就绪时复检被跳过，通知不能声称正在继续复检。
+    /// 其余词条与网络条件无关，保持词表原文。
+    /// </summary>
+    private static NotificationAlert ForSnapshot(NotificationAlert alert, StatusSnapshot snapshot)
+    {
+        if (alert.Code != NotificationCodes.SubmissionBudgetExhausted || snapshot.WifiLinkCode == WifiLinkCodes.Ready) return alert;
+        return alert with { Body = alert.Body.Replace(ActiveRecheckClause, SuspendedRecheckClause, StringComparison.Ordinal) };
     }
 
     /// <summary>把事件记入内存与持久消费记录；保存失败只放弃持久化（会话内仍然防重弹）。</summary>

@@ -169,6 +169,43 @@ internal static class UnblockRegression
             }
             finally { fixture.Dispose(); }
         }),
+        ("解除回归：门户已登录且网关无重定向时仍可审计解除", async () =>
+        {
+            var handler = new MonitorHttp { PortalResult = "1", GatewayLocation = null };
+            using var http = new HttpClient(handler);
+            var portal = new DrcomPortal(http, new Uri("https://login.csust.edu.cn"));
+            var fixture = new Fixture();
+            try
+            {
+                var result = await fixture.Build(confirm: true, recheck: (_, _, ct) => portal.DiagnoseAsync(ct)).RunAsync();
+                Require(result.Released, "门户已登录时网关不重定向不应阻止人工解除：" + result.Message);
+                Require(!fixture.BlockFileExists && fixture.AuditLines == 1, "解除必须保留审计记录");
+                Require(handler.Requests.All(uri => uri.AbsolutePath != "/eportal/portal/login"), "解除期间不得提交凭据");
+            }
+            finally { fixture.Dispose(); }
+        }),
+        ("解除回归：门户状态未知或网关重定向缺参数仍保留暂停", async () =>
+        {
+            foreach (var handler in new[]
+            {
+                new MonitorHttp { PortalResult = "0", GatewayLocation = null },
+                new MonitorHttp { StatusJson = "dr1001({\"code\":200})", GatewayLocation = null },
+                new MonitorHttp { PortalResult = "1", GatewayLocation = "https://login.csust.edu.cn/?wlanuserip=10.0.0.1" }
+            })
+            {
+                using var http = new HttpClient(handler);
+                var portal = new DrcomPortal(http, new Uri("https://login.csust.edu.cn"));
+                var fixture = new Fixture();
+                try
+                {
+                    var result = await fixture.Build(confirm: true, recheck: (_, _, ct) => portal.DiagnoseAsync(ct)).RunAsync();
+                    Require(result.Outcome == UnblockOutcome.RecheckFailed, "复核失败必须保留暂停：" + result.Message);
+                    Require(fixture.BlockFileExists && fixture.AuditLines == 0, "复核失败不得解除或写解除审计");
+                    Require(handler.Requests.All(uri => uri.AbsolutePath != "/eportal/portal/login"), "复核不得提交凭据");
+                }
+                finally { fixture.Dispose(); }
+            }
+        }),
         ("解除回归：拒绝 UAC 时没有设置、认证阻断或服务副作用", () => Sync(() =>
         {
             var directory = Path.Combine(Path.GetTempPath(), "autonet-unblock-uac-" + Guid.NewGuid().ToString("N"));

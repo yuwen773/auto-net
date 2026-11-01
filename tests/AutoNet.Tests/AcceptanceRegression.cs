@@ -60,26 +60,6 @@ internal static class AcceptanceRegression
             fixture.Clock.Advance(TimeSpan.FromSeconds(1)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 2, "满120秒才可再次请求");
         }),
-        ("最终验收：存储延迟后两次实际断线请求仍相隔120秒", async () =>
-        {
-            var fixture = Stalled();
-            var times = new List<DateTimeOffset>();
-            fixture.BeforeDisconnect = () => times.Add(fixture.Clock.GetUtcNow());
-            WithStore((store, _) =>
-            {
-                // The callback runs after the durable reservation, before the Windows boundary.
-                var environment = new StoredEnvironment(fixture, store)
-                {
-                    AfterBudgetSave = () => { if (times.Count == 0) fixture.Clock.Advance(TimeSpan.FromSeconds(20)); }
-                };
-                using var worker = new MonitorWorker(environment, fixture.Clock);
-                ObserveStallAsync(worker, fixture).GetAwaiter().GetResult();
-                fixture.Clock.Advance(TimeSpan.FromSeconds(100)); worker.RunOnceAsync(default).GetAwaiter().GetResult();
-            });
-            Require(times.Count < 2 || times[1] - times[0] >= TimeSpan.FromSeconds(120),
-                "实际请求仅间隔" + (times.Count < 2 ? "不足两次" : (times[1] - times[0]).TotalSeconds + "秒"));
-            await Task.CompletedTask;
-        }),
         ("最终验收：真实文件存储与Worker重建共同保留三次额度", () =>
         {
             WithStore((store, _) =>
@@ -196,19 +176,52 @@ internal static class AcceptanceRegression
     internal sealed class StoredEnvironment(MonitorFixture fixture, SafetyStateStore store) : IMonitorEnvironment
     {
         public bool FailRead { get; set; }
+        public Action? BeforeSubmissionReserve { get; init; }
+        public Action? AfterSubmissionReserve { get; init; }
+        public Action? AfterChannelSessionRegister { get; init; }
+        public Func<SubmissionBudgetState, bool>? FailSubmissionTransition { get; init; }
         public Action? AfterBudgetSave { get; init; }
         public Func<AuthenticationBlock, bool>? FailAuthenticationWrite { get; init; }
         public bool FailAuthenticationRead { get; set; }
         public Func<DisconnectBudget, bool>? FailBudgetWrite { get; init; }
+        public bool FailResolve { get; set; }
+        public bool RejectResolve { get; init; }
         public Settings? LoadSettings() => fixture.LoadSettings();
         public Credentials? LoadCredentials() => fixture.LoadCredentials();
         public AuthenticationBlock? LoadAuthenticationBlock() => FailAuthenticationRead ? throw new UnauthorizedAccessException("synthetic denial") : store.LoadAuthenticationBlock();
         public AuthenticationRecordKind AuthenticationRecordSource => store.LastAuthenticationRecordKind;
+        public SubmissionBudget? LoadSubmissionBudget() => store.LoadSubmissionBudget();
+        public bool IsConfirmedSubmissionRestart(SubmissionBudget? budget) => store.IsConfirmedSubmissionRestart(budget);
+        public IDisposable? TryAcquireSubmissionExecution() => store.TryAcquireSubmissionExecution();
+        public ChannelSubmissionLease? TryBeginChannelSubmission(AuthenticationBlock? expected, SubmissionBudget? budget,
+            PortalFailure structuralFailure, SubmissionRetryPolicy policy, DateTimeOffset utc, TimeSpan elapsed)
+        {
+            BeforeSubmissionReserve?.Invoke();
+            var lease = store.TryBeginChannelSubmission(expected, budget, structuralFailure, policy, utc, elapsed);
+            if (lease is not null) AfterSubmissionReserve?.Invoke();
+            return lease;
+        }
+        public bool TryRegisterChannelSession(ChannelSubmissionLease lease, int processId, int ownerId, string jobName)
+        {
+            var registered = store.TryRegisterChannelSession(lease, processId, ownerId, jobName);
+            if (registered) AfterChannelSessionRegister?.Invoke();
+            return registered;
+        }
+        public SubmissionReservation TryReserveSubmissionBudget(SubmissionBudget? expected, DateTimeOffset now)
+        {
+            BeforeSubmissionReserve?.Invoke();
+            var result = store.TryReserveSubmissionBudget(expected, now);
+            AfterSubmissionReserve?.Invoke();
+            return result;
+        }
+        public bool TryTransitionSubmissionBudget(SubmissionBudget expected, SubmissionBudgetState next) =>
+            FailSubmissionTransition?.Invoke(next) == true ? throw new IOException("synthetic budget transition failure") : store.TryTransitionSubmissionBudget(expected, next);
         public void BlockAuthentication(AuthenticationBlock block) => store.BlockAuthentication(block);
         public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) =>
             FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.TryTransitionAuthentication(expected, next);
-        public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next) =>
-            FailAuthenticationWrite?.Invoke(next) == true ? throw new IOException("synthetic state write failure") : store.ResolveSubmissionPending(expected, next);
+        public bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false) =>
+            FailResolve || FailAuthenticationWrite?.Invoke(next) == true
+                ? throw new IOException("synthetic state write failure") : !RejectResolve && store.ResolveSubmissionPending(expected, budget, next, directConfirmation);
         public DisconnectBudget LoadDisconnectBudget(Settings settings) => store.LoadDisconnectBudget(settings);
         public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget)
         {

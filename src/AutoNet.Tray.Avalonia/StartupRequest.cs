@@ -7,6 +7,7 @@ internal enum ElevatedOperationKind
     EnableRecovery,
     DisableRecovery,
     UnblockAuthentication,
+    RestartAuthentication,
     /// <summary>诊断包导出（#12）：提权进程按既有参数携带的用户所选目标路径执行只读采集。</summary>
     DiagnosticsExport
 }
@@ -25,6 +26,7 @@ internal sealed record StartupRequest(bool StartHidden, ElevatedOperationKind? E
         if (enable) operations.Add(ElevatedOperationKind.EnableRecovery);
         if (disable) operations.Add(ElevatedOperationKind.DisableRecovery);
         if (args.Contains("--unblock-auth")) operations.Add(ElevatedOperationKind.UnblockAuthentication);
+        if (args.Contains("--restart-auth")) operations.Add(ElevatedOperationKind.RestartAuthentication);
         // #12：--export-diagnostics <保存路径>——提权采集目标在普通界面选定后逐字传递，
         // 提权身份不得替换用户已选位置（UI-MIGRATION-SPEC 决策 12）。
         string? exportTarget = null;
@@ -51,6 +53,7 @@ internal static class ElevatedOperations
         ElevatedOperationKind.EnableRecovery => "--enable-recovery",
         ElevatedOperationKind.DisableRecovery => "--disable-recovery",
         ElevatedOperationKind.UnblockAuthentication => "--unblock-auth",
+        ElevatedOperationKind.RestartAuthentication => "--restart-auth",
         ElevatedOperationKind.DiagnosticsExport => "--export-diagnostics",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
@@ -61,6 +64,7 @@ internal static class ElevatedOperations
         ElevatedOperationKind.EnableRecovery => "开启自动恢复",
         ElevatedOperationKind.DisableRecovery => "关闭自动恢复",
         ElevatedOperationKind.UnblockAuthentication => "解除认证暂停",
+        ElevatedOperationKind.RestartAuthentication => "重新开始认证",
         ElevatedOperationKind.DiagnosticsExport => "导出诊断包",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };

@@ -17,8 +17,9 @@ public static class LogEventClassifier
                     or "SafetyStateWriteStarted" or "SafetyStateWritten" or "DisconnectRecheck" => LogEventCategory.Recovery,
                 "PortalStep" or "SubmissionAuthorized" or "SubmissionNotAuthorized"
                     or "SubmissionRechecking" or "SubmissionResolved" or "SubmissionUnresolved"
+                    or "SubmissionBudgetExhausted" or "SubmissionBudgetNearLimit" or "SubmissionBudgetReset"
                     or "PortalLayoutChanged" or "BrowserFallbackRequested"
-                    or "AuthChannelStarted" or "AuthChannelResult" or "AuthChannelNeedsHuman"
+                    or "AuthChannelStarted" or "AuthChannelResult" or "AuthChannelNeedsHuman" or "AuthChannelTakeover"
                     => LogEventCategory.Authentication,
                 _ => LogEventCategory.Other
             };

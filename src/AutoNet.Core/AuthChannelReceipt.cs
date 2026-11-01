@@ -9,6 +9,15 @@ namespace AutoNet.Core;
 /// </summary>
 public static class AuthChannelReceipt
 {
+    public static AuthChannelConclusion ClassifyPage(string url, string text)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var page) || page.Scheme != "https" || page.Port != 443 ||
+            !page.Host.Equals("login.csust.edu.cn", StringComparison.OrdinalIgnoreCase) || page.UserInfo != "")
+            return AuthChannelConclusion.Unknown;
+        return text.Contains("data-portal-error", StringComparison.Ordinal) || text.Contains("登录失败", StringComparison.Ordinal) ||
+            text.Contains("密码错误", StringComparison.Ordinal) ? AuthChannelConclusion.NotLoggedIn : AuthChannelConclusion.Unknown;
+    }
+
     public static LoginResult? MapToSubmissionOutcome(AuthChannelConclusion conclusion) => conclusion switch
     {
         AuthChannelConclusion.LoggedIn => LoginResult.Accepted,

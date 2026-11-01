@@ -30,7 +30,9 @@ internal enum QaMode
     /// <summary>诊断包导出 QA：普通界面选路径、提权交接与结果显示的逐场景证据（scripts/qa-avalonia-export.ps1 使用）。</summary>
     ExportDiagnostics,
     /// <summary>可访问性与缩放 QA：键盘导航/焦点/触发、可访问名称动态更新与受控缩放的逐项证据（scripts/qa-avalonia-accessibility.ps1 使用，迁移工单 #14）。</summary>
-    Accessibility
+    Accessibility,
+    /// <summary>认证页 QA：七种状态、宿主附着一次、刷新不丢输入与运行时缺失提示的逐场景证据（scripts/qa-avalonia-auth.ps1 使用，工单 #37）。</summary>
+    AuthPage
 }
 
 /// <summary>
@@ -62,12 +64,28 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
             "portal-open" => QaMode.PortalOpen,
             "export-diagnostics" => QaMode.ExportDiagnostics,
             "accessibility" => QaMode.Accessibility,
+            "auth-page" => QaMode.AuthPage,
             _ => QaMode.None
         };
-        return new QaEnvironment(mode, Path.GetFullPath(directory));
+        return new QaEnvironment(mode, Path.GetFullPath(directory)) { MutexSuffix = ParseMutexSuffix() };
     }
 
+    /// <summary>
+    /// 可选 QA 单实例后缀（AUTONET_QA_MUTEX_SUFFIX）。同一台机器上并行运行多个 QA 场景
+    /// （例如多个工作树）或与旧版候选托盘并存时，用它隔离互斥；未设置时保持既有 QA 互斥名。
+    /// 只接受 ASCII 字母、数字与连字符，最长 32 字符；非法值回落到空后缀，
+    /// 避免拼接出意外内核对象名。#41 使用同一变量与同一字符集（未限长），现已统一为本解析器。
+    /// </summary>
+    public string MutexSuffix { get; init; } = "";
+
     public bool Active => Directory.Length != 0;
+
+    private static string ParseMutexSuffix()
+    {
+        var suffix = Environment.GetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX");
+        if (string.IsNullOrEmpty(suffix) || suffix.Length > 32) return "";
+        return suffix.All(c => char.IsAsciiLetterOrDigit(c) || c == '-') ? suffix : "";
+    }
 
     public string LifecycleReportPath => Path.Combine(Directory, "lifecycle.json");
     public string ElevationRecordPath => Path.Combine(Directory, "elevation.json");
@@ -91,6 +109,7 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string ExportElevatedReportPath => Path.Combine(Directory, "export-elevated.json");
     public string ExportResultPath => Path.Combine(Directory, "export-result.json");
     public string AccessibilityReportPath => Path.Combine(Directory, "accessibility.json");
+    public string AuthPageReportPath => Path.Combine(Directory, "auth-page.json");
     public string ParseErrorReportPath => Path.Combine(Directory, "parse-error.json");
 
     public string ShellShotPath(string name) => Path.Combine(Directory, name + ".png");
@@ -110,6 +129,8 @@ internal sealed record QaEnvironment(QaMode Mode, string Directory)
     public string PortalOpenShotPath(string name) => Path.Combine(Directory, name + ".png");
 
     public string AccessibilityShotPath(string name) => Path.Combine(Directory, name + ".png");
+
+    public string AuthPageShotPath(string name) => Path.Combine(Directory, name + ".png");
 }
 
 /// <summary>QA 证据写入。仅包含虚构/本机路径信息，不含凭据。</summary>
@@ -161,10 +182,13 @@ internal sealed record QaOverviewStep(
     string Title,
     bool AuthVisible,
     string AuthTitle,
+    string AuthNote,
     string RecoveryLabel,
     bool RecoveryEnabled,
     bool UnblockVisible,
     bool UnblockEnabled,
+    string SubmissionValue,
+    string SubmissionNote,
     string? File);
 
 /// <summary>一次动作驱动：上下文、明确意图、是否发起、实际记录到的命令。</summary>
@@ -273,8 +297,8 @@ internal sealed record QaUnblockReport(
     string? Error = null);
 
 /// <summary>
-/// 设置页一步证据（#8 普通界面侧）：状态可信度、只读事实行与修改入口标签——
-/// 普通界面不读取受限配置、不显示凭据（故事 34、36 的呈现侧）。
+/// 设置页一步证据（#8 / #41 普通界面侧）：状态可信度、只读事实行、非秘密配置投影与
+/// 密码规则呈现——普通界面不读取受限配置、不显示凭据（故事 51、55 的呈现侧）。
 /// </summary>
 internal sealed record QaSettingsStep(
     string State,
@@ -282,11 +306,57 @@ internal sealed record QaSettingsStep(
     string RecoveryState,
     string GuardedNetwork,
     string PortalLine,
-    string ModifyLabel,
+    bool ConfigProjected,
+    string WifiProfile,
+    string ProxyUrlDisplay,
+    bool ProxyUrlRedacted,
+    string UuEndpointDisplay,
+    bool UuEndpointRedacted,
+    bool Enabled,
+    bool AllowActiveDisconnect,
+    bool KeepAwakeOnAc,
+    string AuthChannelMode,
+    /// <summary>页面上的恢复选项是否显示为确定值；无投影且未编辑时为 false（显示“未确定”）。</summary>
+    bool OptionsKnown,
     string? File);
 
 /// <summary>一次修改入口驱动：预期命令与实际记录的命令（QA 模式只记录，不弹 UAC）。</summary>
 internal sealed record QaSettingsAction(string Context, string Expected, bool Launched, string? Command);
+
+/// <summary>
+/// 设置页一次保存驱动（#41）：场景、受控结果、密码是否清除、交接是否发起，以及夹具内的
+/// 落盘事实。只记录布尔事实与受控消息，绝不记录账号或密码。
+/// </summary>
+internal sealed record QaSettingsSaveStep(
+    string Scenario,
+    string State,
+    string Message,
+    bool PasswordCleared,
+    bool HandoffInvoked,
+    bool SecretInMessage,
+    bool BlockUntouched,
+    bool SettingsWritten,
+    bool CredentialsWritten,
+    bool CredentialPlaintextFree,
+    string SaveNameDuringSave,
+    string SaveNameAfter,
+    bool KeepProfile,
+    bool KeepProxyUrl,
+    bool KeepUuEndpoint,
+    bool ExistingSettingsFound,
+    bool KeepEnabled,
+    bool KeepAllowActiveDisconnect,
+    bool KeepKeepAwakeOnAc,
+    bool KeepAuthChannelMode,
+    bool OptionsUnknown,
+    bool? EnabledAfter,
+    bool? AllowActiveDisconnectAfter,
+    bool? KeepAwakeOnAcAfter,
+    string? AuthChannelModeAfter,
+    string? File);
+
+/// <summary>跨页往返一步证据：目标页与页面宿主实际显示的标题，用于发现指纹缓存导致的错页。</summary>
+internal sealed record QaSettingsNavigationStep(string From, string To, string PageTitle, string? File);
 
 /// <summary>
 /// 设置编辑器一步证据（#8 提权侧）：场景结果、settings.json / credentials.dpapi 的落盘事实、
@@ -315,6 +385,8 @@ internal sealed record QaSettingsReport(
     List<QaSettingsStep> Steps,
     List<QaSettingsAction> Actions,
     List<QaSettingsEditorStep> EditorSteps,
+    List<QaSettingsSaveStep> SaveSteps,
+    List<QaSettingsNavigationStep> NavigationSteps,
     string? Error = null);
 
 /// <summary>

@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
 工单 #19 QA：verify-bundle.ps1 的负向夹具自测。
-构造临时夹具包，验证五个场景的退出码：通过 / 篡改哈希 / 源提交不符 / 清单缺项 / 清单多余项。
+构造临时夹具包，验证完整性失败与合法文件名、嵌套清单的退出码。
 证据落 artifacts/validation/qa-verify-bundle/。不读取凭据或真实校园网配置。
 #>
 param([string]$RepoRoot = (Split-Path $PSScriptRoot -Parent))
@@ -12,16 +12,20 @@ $verify = Join-Path $PSScriptRoot 'verify-bundle.ps1'
 $report = [System.Collections.Generic.List[string]]::new()
 $report += "=== verify-bundle QA（$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')）==="
 
+function Write-FixtureManifest([string]$Dir) {
+    $manifest = Join-Path $Dir 'SHA256SUMS.txt'
+    $sums = foreach ($f in Get-ChildItem -LiteralPath $Dir -File -Recurse | Where-Object FullName -ne $manifest) {
+        $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$h  $([IO.Path]::GetRelativePath($Dir, $f.FullName).Replace('\','/'))"
+    }
+    $sums | Set-Content -LiteralPath (Join-Path $Dir 'SHA256SUMS.txt') -Encoding utf8
+}
 function New-FixtureBundle([string]$Dir, [string]$SourceCommit) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Dir 'service') | Out-Null
     Set-Content -LiteralPath (Join-Path $Dir 'service\A.exe') -Value 'payload-A'
     Set-Content -LiteralPath (Join-Path $Dir 'service\B.exe') -Value 'payload-B'
     Set-Content -LiteralPath (Join-Path $Dir 'BUILD-ID.txt') -Value "AutoNet 发布包构建标识`n源提交：$SourceCommit"
-    $sums = foreach ($f in Get-ChildItem -LiteralPath $Dir -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt') {
-        $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        "$h  $([IO.Path]::GetRelativePath($Dir, $f.FullName).Replace('\','/'))"
-    }
-    $sums | Set-Content -LiteralPath (Join-Path $Dir 'SHA256SUMS.txt') -Encoding utf8
+    Write-FixtureManifest $Dir
 }
 $good = 'a' * 40
 $base = Join-Path ([IO.Path]::GetTempPath()) ("verify-bundle-qa-" + [guid]::NewGuid().ToString('N'))
@@ -57,6 +61,24 @@ $sums | Set-Content -LiteralPath (Join-Path $dir 'SHA256SUMS.txt') -Encoding utf
 & pwsh.exe -NoLogo -NoProfile -File $verify -Bundle $dir *> ($out = Join-Path $evidence 'case5-extra.txt')
 $cases += ,@('清单多余项', $LASTEXITCODE, 3, $out)
 
+# 场景 6：嵌套的同名清单也是普通包内文件，不得绕过覆盖检查 → 3
+$dir = Join-Path $base 'nested-unlisted'; New-FixtureBundle $dir $good
+Set-Content -LiteralPath (Join-Path $dir 'service/SHA256SUMS.txt') -Value 'unlisted payload'
+& pwsh.exe -NoLogo -NoProfile -File $verify -Bundle $dir *> ($out = Join-Path $evidence 'case6-nested-unlisted.txt')
+$cases += ,@('嵌套清单未入根清单', $LASTEXITCODE, 3, $out)
+
+# 场景 7：嵌套清单纳入根清单并核验哈希 → 0
+Write-FixtureManifest $dir
+& pwsh.exe -NoLogo -NoProfile -File $verify -Bundle $dir *> ($out = Join-Path $evidence 'case7-nested-listed.txt')
+$cases += ,@('嵌套清单已入根清单', $LASTEXITCODE, 0, $out)
+
+# 场景 8：合法的单字符文件名 → 0
+$dir = Join-Path $base 'single-character'; New-FixtureBundle $dir $good
+Set-Content -LiteralPath (Join-Path $dir 'x') -Value 'single-character payload'
+Write-FixtureManifest $dir
+& pwsh.exe -NoLogo -NoProfile -File $verify -Bundle $dir *> ($out = Join-Path $evidence 'case8-single-character.txt')
+$cases += ,@('单字符文件名', $LASTEXITCODE, 0, $out)
+
 $failed = 0
 foreach ($c in $cases) {
     $ok = $c[1] -eq $c[2]
@@ -66,5 +88,10 @@ foreach ($c in $cases) {
 $report += ("结论：{0}/{1} 通过" -f ($cases.Count - $failed), $cases.Count)
 $report | Set-Content -LiteralPath (Join-Path $evidence 'report.txt') -Encoding utf8
 Get-Content -LiteralPath (Join-Path $evidence 'report.txt')
-Remove-Item -LiteralPath $base -Recurse -Force
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+$cleanupTarget = [IO.Path]::GetFullPath($base)
+if (-not $cleanupTarget.StartsWith($tempRoot + 'verify-bundle-qa-', [StringComparison]::OrdinalIgnoreCase)) {
+    throw '拒绝清理临时夹具目录范围外的路径'
+}
+Remove-Item -LiteralPath $cleanupTarget -Recurse -Force
 exit $(if ($failed -gt 0) { 1 } else { 0 })

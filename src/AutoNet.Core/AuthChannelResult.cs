@@ -28,7 +28,8 @@ public static class AuthChannelResultFile
         if (root.ValueKind != System.Text.Json.JsonValueKind.Object) { throw new FormatException("root"); }
         var conclusionText = RequireString(root, "conclusion");
         if (!Enum.TryParse<AuthChannelConclusion>(conclusionText, ignoreCase: false, out var conclusion)
-            || !Enum.IsDefined(conclusion))
+            || !Enum.IsDefined(conclusion)
+            || !string.Equals(conclusionText, conclusion.ToString(), StringComparison.Ordinal))
         {
             throw new FormatException("conclusion");
         }

@@ -119,7 +119,18 @@ internal sealed class UnblockAuthentication(
             return new UnblockResult(UnblockOutcome.NotReady, "请先连接指定校园 Wi-Fi 并取得 IPv4。", stages);
 
         var diagnosis = await recheck(settings, link, cancellationToken);
-        if (diagnosis.Failure != PortalFailure.None)
+        // 门户已登录且网关不重定向时，诊断拿不到 MAC/AC 上下文，以 MissingGatewayParameters 收尾。
+        // 此时网络本身已认证、没有可提交的凭据，缺少网关上下文不应把人工解除永久挡住。
+        // 其余失败（状态未知、响应结构变化、已发出凭据请求）仍然阻断。
+        var onlineWithoutGatewayContext = diagnosis is
+        {
+            ObservedState: PortalState.LoggedIn,
+            Stage: PortalStage.Submission,
+            Failure: PortalFailure.MissingGatewayParameters,
+            CredentialRequestStarted: false,
+            Evidence.RedirectPresent: false
+        };
+        if (diagnosis.Failure != PortalFailure.None && !onlineWithoutGatewayContext)
             return new UnblockResult(UnblockOutcome.RecheckFailed, "前置复核未通过，保留认证暂停：" + diagnosis.SafeSummary, stages);
 
         // 3) 修订核对：诊断期间设置或校园 Wi-Fi 变化即中止，绝不按过期事实解除。

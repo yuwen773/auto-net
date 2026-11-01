@@ -8,14 +8,32 @@ namespace AutoNet.Tray.Avalonia;
 internal static class Program
 {
     /// <summary>
-    /// 普通托盘单实例互斥名。迁移期间独立命名，避免与本机已安装的 WinForms 托盘
-    /// （Local\AutoNet.Tray）相互阻塞；候选包替换旧实现时（工单 #15）必须改回原名。
+    /// 正式托盘沿用既有安装身份；只有显式 QA 场景使用独立互斥，避免干扰已安装实例。
+    /// QA 报告与进程入口按同一规则选择身份。设置 AUTONET_QA_MUTEX_SUFFIX 时再追加后缀，
+    /// 用于并行 QA 工作树或与旧版候选托盘（其互斥名恰为 QA 默认名）并存时隔离。
     /// </summary>
-    internal const string MutexName = @"Local\AutoNet.Tray.Avalonia";
+    internal static string MutexName => ResolveMutexName(QaEnvironment.FromProcess());
+
+    /// <summary>
+    /// 正式托盘沿用既有安装身份；只有显式 QA 场景使用独立互斥，避免干扰已安装实例。
+    /// 同一台机器上可能同时存在旧预览版安装（其正式实例曾占用固定 QA 名）或并行工作树的 QA 进程，
+    /// 因此 QA 可用 <c>AUTONET_QA_MUTEX_SUFFIX</c> 追加受控后缀，取得本次运行的独立互斥身份；
+    /// 未设置后缀时保持既有固定名。后缀的读取与字符集校验集中在 <see cref="QaEnvironment"/>，
+    /// #37 与 #41 使用同一变量，这里只消费解析结果。
+    /// </summary>
+    internal static string ResolveMutexName(QaEnvironment qa) => !qa.Active
+        ? @"Local\AutoNet.Tray"
+        : qa.MutexSuffix.Length == 0
+            ? @"Local\AutoNet.Tray.Avalonia"
+            : @"Local\AutoNet.Tray.Avalonia." + qa.MutexSuffix;
 
     [STAThread]
     private static int Main(string[] args)
     {
+        // #30：凭据交接助手先于普通参数解析、QA 参数记录与单实例；无效交接也不能打开设置窗口。
+        if (args.Contains(SettingsHandoffLauncher.Command))
+            return SettingsHandoffLauncher.RunReceiverAsync(args).GetAwaiter().GetResult();
+
         StartupRequest request;
         try
         {
@@ -66,7 +84,8 @@ internal static class Program
         if (decision.Kind is StartupActionKind.RequestElevation)
             return RequestElevation(decision.Operation!.Value, qa, request.ExportTargetPath);
 
-        using var instance = SingleInstance.Acquire(MutexName);
+        var mutexName = ResolveMutexName(qa);
+        using var instance = SingleInstance.Acquire(mutexName);
         if (!instance.Acquired)
         {
             decision = StartupRouter.Decide(request, isAdministrator, anotherInstanceRunning: true);
@@ -79,7 +98,7 @@ internal static class Program
                     phase = "already-running",
                     reportedBy = Environment.ProcessId,
                     processPath = Environment.ProcessPath,
-                    mutex = MutexName,
+                    mutex = mutexName,
                     at = QaReports.Timestamp()
                 });
                 return 3;

@@ -17,15 +17,15 @@ internal sealed class ConfirmWindow : Window
     /// <summary>用户选择：true 确认，false 取消（含直接关闭窗口）。</summary>
     public Task<bool> Answer => answer.Task;
 
-    public static ConfirmWindow Create(string heading, string body)
+    public static ConfirmWindow Create(string heading, string body, string confirmText = "确认解除", bool cancelByDefault = false)
     {
         var dialog = new ConfirmWindow();
         var headingBlock = new TextBlock { Text = heading, FontSize = 18, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
         var bodyBlock = new TextBlock { Text = body, TextWrapping = TextWrapping.Wrap, Opacity = 0.85, LineHeight = 21 };
 
         // 破坏性确认：默认与 Esc 都是“否”，确认键必须被显式点击。
-        var cancel = new Button { Content = "取消", MinWidth = 96, HorizontalAlignment = HorizontalAlignment.Right, IsCancel = true };
-        var confirm = new Button { Content = "确认解除", MinWidth = 108, HorizontalAlignment = HorizontalAlignment.Right, IsDefault = true };
+        var cancel = new Button { Content = "取消", MinWidth = 96, HorizontalAlignment = HorizontalAlignment.Right, IsCancel = true, IsDefault = cancelByDefault };
+        var confirm = new Button { Content = confirmText, MinWidth = 108, HorizontalAlignment = HorizontalAlignment.Right, IsDefault = !cancelByDefault };
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -62,9 +62,9 @@ internal sealed class ConfirmWindow : Window
     }
 
     /// <summary>在当前界面线程上显示确认对话框并等待用户选择；调用方负责把结果交给 <see cref="UnblockAuthentication"/>。</summary>
-    public static Task<bool> AskAsync(string heading, string body)
+    public static Task<bool> AskAsync(string heading, string body, string confirmText = "确认解除", bool cancelByDefault = false)
     {
-        var dialog = Create(heading, body);
+        var dialog = Create(heading, body, confirmText, cancelByDefault);
         dialog.Show();
         return dialog.Answer;
     }

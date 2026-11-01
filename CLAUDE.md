@@ -17,6 +17,7 @@ pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1            # Release build +
 pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1 -Publish   # also builds artifacts/AutoNet-win-x64/
 pwsh.exe -NoLogo -NoProfile -File scripts/qa-tray.ps1          # renders tray/log UI to artifacts/ui-qa/*.png
 pwsh.exe -NoLogo -NoProfile -File scripts/qa-avalonia-prototype.ps1  # Avalonia prototype QA: publish/single-file, lifecycle, single instance + elevation, themes, installer layout
+pwsh.exe -NoLogo -NoProfile -File scripts/check-released-reader.ps1   # 回滚兼容判定校验：冻结的 v0.3.1 读取副本与真实旧版逐条比对（工单 #36）
 ```
 
 `build.ps1` resolves the SDK from `.tools/dotnet/dotnet.exe` first, then PATH. It runs the tests by invoking `tests/AutoNet.Tests/bin/Release/net10.0-windows/AutoNet.Tests.dll` and fails the build on a nonzero exit. Build evidence (`build.json`, `tests.txt`) lands in the gitignored `artifacts/validation/`.
@@ -117,6 +118,24 @@ If every IPv4 source is temporarily unavailable, return `Rejected/MissingClientI
 
 Only one action runs per tick, and every action goes through `policy.Attempted()` for backoff, so an action cannot be retried before its cooldown regardless of how often the loop spins.
 
+### The auth page browser has one exit: the allowlist proxy
+
+`AuthPageWebViewHost` (`src/AutoNet.Tray.Avalonia/`) embeds WebView2 through Avalonia's `NativeControlHost` and gives it exactly one network path: a loopback `AuthChannelProxy` started in the same process. The proxy is the boundary — the `NavigationStarting` origin check is defence in depth only, never the isolation argument.
+
+- `ProxyHostPolicy` allows the single fixed portal host, normalizing **both** sides (trim, trailing dot, IDN, lowercase) and rejecting suffix/subdomain/parent lookalikes and literal IPs. Plaintext is allowed only on 80 and CONNECT only on 443; request bodies and protocol upgrades (WebSocket) are rejected.
+- Outbound connections go through `DirectNetwork.ConnectAsync`, which pins `IP_UNICAST_IF` and the source address to the selected campus adapter, so traffic cannot leak onto the default route's TUN. `AuthChannelProxy.StartAsync` exposes that connector internally for regression only; there is no host-to-address mapping hook.
+- `AuthPageNetworkBoundary` fails closed: missing runtime, unready campus link, or a proxy that will not start yields `RuntimeMissing`/`NetworkBoundaryUnavailable`, never a direct connection. The browser is launched with `--proxy-server` + `--proxy-bypass-list=<-loopback>`; QUIC and WebRTC non-proxied UDP are disabled. System proxy settings are never read or written.
+- The campus link comes from the trusted status projection (`App.ReadProjectedLink`), not `Storage.LoadSettings` — the non-elevated tray cannot read `private/`. Browser and tray share a `ChannelProcessJob`; the proxy rejects loopback clients outside that job.
+- The page never runs a second browser (ADR-0017): while an embedded auth-channel session is active (`AuthChannelLauncher.SessionActive`), `IAuthPageBrowserHost.Refresh()` tears down the page's own proxy and browser and projects `ChannelSessionActive`; when the session ends the coordinator re-attaches once, and only if the page was opened before. The page's carrier is projection only — it never submits credentials.
+
+### The virtual pointer lives inside the channel page
+
+The display auth page cannot host a pointer over its WebView2 HWND and never fills forms (ADR-0016/0017), so the virtual pointer and manual takeover are implemented in the **channel's** page (`AuthPagePointer.cs`, ADR-0018): a `position:fixed`, `pointer-events:none` DOM overlay installed via `AddScriptToExecuteOnDocumentCreatedAsync`. It must stay a page overlay — never `SetCursorPos`, CDP input, or a real OS pointer.
+
+- `AuthPagePointerPolicy` is the pure state machine: pointer visibility, step hints, takeover and resume. Invariants: the pointer appears only when a real step starts; failed/skipped/unavailable targets degrade to a controlled Chinese hint; the overlay never renders account, password, cookie, or page text; reduced motion (Windows `SPI_GETCLIENTAREAANIMATION` or `prefers-reduced-motion`) renders statically; interaction detection has documented blind spots and must never be described as intercepting every manual submission.
+- `AuthChannelWindow` runs the four real steps (account, password, agreement, submit) through `AuthPagePointerScript.Step`, which skips fields the user touched (`autonetTouched`) or that are already non-empty, and stops before submitting if the origin, form, or target is not as expected. The overlay must be installed or steps fail closed.
+- Takeover pauses auto fill/submit at the workflow level: `AuthChannelWorkflow` returns `Waiting` without reserving the shared submission budget. Per ADR-0019, a takeover ends in read-only observation, not a return to auto fill/submit: 15 idle seconds only clears the "正在手动操作" hint, and the human-assist window stays alive to observe read-only (`AuthChannelHumanWait`, 2s page/online polling) — on confirmed online it writes a final `LoggedIn` and exits early. The workflow-level resume seam (`TryResumeAutoAsync`) is retained for regression but is not reached in the current lifecycle, where the human-assist wait holds the workflow. The tray consumes a newer result per session by `detectedAt` (so two notifications are possible); `InteractionRequired` is never auto-cleared. The channel window stays offscreen (user decision); live manual takeover and observation remain unverified.
+
 ### Auxiliary checks are advisory
 
 `HealthChecks.SystemPathAsync` samples DNS + `GetBestInterface` once and names a `RouteSelection` (`Tun` / `Wifi` / `Unknown`) — explicitly labelled as inference, not proof of physical egress. `UuService` reports whether the `GameViewerService` service is running and how many established TCP connections its processes hold, always with "会话待实测". None of this feeds into recovery decisions; it exists so the tray can display why traffic still isn't reaching the internet when the campus probe passes.
@@ -155,3 +174,15 @@ Green tests do not demonstrate the ~15-second recovery target — that requires 
 ### Domain docs
 
 单一领域上下文：根目录 `CONTEXT.md` 与 `docs/adr/`。见 `docs/agents/domain.md`。
+
+## Worktree hygiene
+
+Worktrees must not outlive the task that created them. This applies to every worktree, including the ones subagents spawn under `.claude/worktrees/agent-*`.
+
+- When the task finishes, delete the worktree and its branch.
+- Delete the worktree's dedicated build output directory as well (`artifacts/`, `**/bin/`, `**/obj/` inside that worktree).
+- Before removal, pick one of two paths:
+  1. Merge the work into `main`; or
+  2. If it is not merged, commit the outstanding changes on that branch first, tag it `archive/<worktree-name>` to preserve the state, then run `git worktree remove` followed by `git branch -D`.
+- The session that orchestrated a subagent owns cleanup of the worktrees that subagent created.
+- If a worktree genuinely has to stay (awaiting user decision, unresolved conflicts, work still in progress), name its path and the reason in the final reply. Never leave one behind silently.

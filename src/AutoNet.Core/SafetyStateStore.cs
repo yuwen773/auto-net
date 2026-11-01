@@ -28,11 +28,12 @@ public sealed record AuthenticationBlock(PortalFailure Failure = PortalFailure.N
     public int RetryDelaySeconds { get; init; }
     public DateTimeOffset RetryNotBefore { get; init; }
     public Guid Revision { get; init; }
+    public PortalFailure ChannelFallbackCause { get; init; }
     public bool BlocksSubmissions => State is not (AuthenticationState.Ready or AuthenticationState.RetryCoolingDown);
 }
 
 // Uses the installer's restricted private directory; fixtures supply an isolated directory.
-public sealed class SafetyStateStore(string directory)
+public sealed partial class SafetyStateStore(string directory)
 {
     private string AuthBlockPath => Path.Combine(directory, "auth-block.txt");
     public AuthenticationRecordKind LastAuthenticationRecordKind { get; private set; } = AuthenticationRecordKind.NotRead;
@@ -88,7 +89,9 @@ public sealed class SafetyStateStore(string directory)
                 AuthenticationState.InteractionRequired => block.Failure == PortalFailure.InteractionRequired,
                 _ => true
             };
-            if (!consistent) { LastAuthenticationRecordKind = AuthenticationRecordKind.InconsistentState; return new(); }
+            if (!consistent || block.ChannelFallbackCause != PortalFailure.None &&
+                (block.State != AuthenticationState.InteractionRequired || block.Attempts != 3 || !PortalLayoutSignal.IsStructural(block.ChannelFallbackCause)))
+                { LastAuthenticationRecordKind = AuthenticationRecordKind.InconsistentState; return new(); }
             LastAuthenticationRecordKind = AuthenticationRecordKind.CurrentRecord;
             return block;
         }

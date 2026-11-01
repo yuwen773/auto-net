@@ -107,6 +107,7 @@ internal static class AccessibilityRegression
                 ShellAccessibility.PortalOpen(portalEntry),
                 ShellAccessibility.Export(DiagnosticsExportState.Initial),
                 ShellAccessibility.NavItem(ShellPage.Overview),
+                ShellAccessibility.NavItem(ShellPage.Authentication),
                 ShellAccessibility.NavItem(ShellPage.Diagnostics),
                 ShellAccessibility.NavItem(ShellPage.Logs),
                 ShellAccessibility.NavItem(ShellPage.Settings),

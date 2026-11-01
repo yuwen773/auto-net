@@ -20,12 +20,13 @@ internal static class OverviewRegression
             Require(content.StatusExplanation == "校园网 HTTPS 内容检查已通过。");
             Require(content.NextStep == "无需操作，保持当前连接即可。");
 
-            Require(content.Progress.Select(row => row.Caption).SequenceEqual(["主动断线额度", "下次允许重试", "最近一次恢复"]),
-                "进度必须覆盖断线额度、重试时间与最近恢复");
-            Require(content.Progress[0].Value == "本次故障主动断线额度：0/3 次");
-            Require(content.Progress[1].Value == "当前无需重试");
-            Require(content.Progress[1].Note == "额度在连续在线 60 秒后重置；每次断线请求至少间隔 120 秒。");
-            Require(content.Progress[2].Value == "尚无恢复记录。");
+            Require(content.Progress.Select(row => row.Caption).SequenceEqual(["认证提交额度", "主动断线额度", "下次允许重试", "最近一次恢复"]),
+                "进度必须覆盖提交额度、断线额度、重试时间与最近恢复");
+            Require(content.Progress[0].Value == "额度状态不可确认", "旧版快照缺额度字段时必须安全降级");
+            Require(content.Progress[1].Value == "本次故障主动断线额度：0/3 次");
+            Require(content.Progress[2].Value == "当前无需重试");
+            Require(content.Progress[2].Note == "额度在连续在线 60 秒后重置；每次断线请求至少间隔 120 秒。");
+            Require(content.Progress[3].Value == "尚无恢复记录。");
 
             Require(content.Recovery == new RecoverySwitchState("已开启", "关闭自动恢复", true, RecoveryIntent.Disable));
             Require(!content.Unblock.Visible && !content.HasTechnical);
@@ -38,9 +39,9 @@ internal static class OverviewRegression
                 State = "认证状态未知", Direct = "外网不可达或未知",
                 NextAttempt = next, LastRecoveryAt = recovered, LastRecoverySeconds = 12.5
             }, TimeSpan.Zero));
-            Require(recorded.Progress[1].Value == next.ToLocalTime().ToString("HH:mm:ss") + "（等待期间继续检测）");
-            Require(recorded.Progress[2].Value == recovered.ToLocalTime().ToString("MM-dd HH:mm:ss") + " · 观测耗时 12.5 秒");
-            Require(recorded.Progress[2].Note.Contains("无法区分"), "恢复记录必须保留观测口径声明");
+            Require(recorded.Progress[2].Value == next.ToLocalTime().ToString("HH:mm:ss") + "（等待期间继续检测）");
+            Require(recorded.Progress[3].Value == recovered.ToLocalTime().ToString("MM-dd HH:mm:ss") + " · 观测耗时 12.5 秒");
+            Require(recorded.Progress[3].Note.Contains("无法区分"), "恢复记录必须保留观测口径声明");
         })),
         ("概览回归：在线与认证暂停并存分列且不改写联网事实", () => Sync(() =>
         {
@@ -246,6 +247,17 @@ internal static class OverviewRegression
             var failed = new OverviewActions(_ => Task.FromException<StatusReading>(new IOException("夹具读取失败")), launched.Add);
             Require(!await failed.RequestUnblockAsync());
             Require(launched.Count == 1);
+        }),
+        ("概览动作：重新开始认证仅在可信状态下发起独立提权操作", async () =>
+        {
+            var launched = new List<ElevatedOperationKind>();
+            var reading = Reading(Online(), TimeSpan.Zero);
+            var actions = new OverviewActions(_ => Task.FromResult(reading), launched.Add);
+            Require(await actions.RequestRestartAuthenticationAsync());
+            Require(launched.SequenceEqual([ElevatedOperationKind.RestartAuthentication]));
+            Require(StartupRequest.Parse(["--restart-auth"]).ElevatedOperation == ElevatedOperationKind.RestartAuthentication);
+            reading = Reading(null);
+            Require(!await actions.RequestRestartAuthenticationAsync() && launched.Count == 1);
         }),
         ("概览回归：提权恢复操作按明确目标改写设置且缺设置时不写入", () => Sync(() =>
         {

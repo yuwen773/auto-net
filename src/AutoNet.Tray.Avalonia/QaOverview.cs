@@ -137,10 +137,13 @@ internal static class QaOverview
             overview.StatusTitle,
             overview.Auth.Visible,
             overview.Auth.Title,
+            overview.Auth.Note,
             overview.Recovery.Label,
             overview.Recovery.Enabled,
             overview.Unblock.Visible,
             overview.Unblock.Enabled,
+            overview.Submission.Value,
+            overview.Submission.Note,
             file);
     }
 
@@ -189,6 +192,79 @@ internal static class QaOverview
     private static IEnumerable<(string State, StatusSnapshot? Snapshot)> Matrix()
     {
         yield return ("online", Online());
+        yield return ("budget-near-limit", OfflinePending() with
+        {
+            SubmissionBudgetCode = SubmissionBudgetCodes.NearLimit,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Waiting),
+            SubmissionAttempts = 2, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = false,
+            SubmissionNextPossibleAt = DateTimeOffset.UtcNow.AddSeconds(90)
+        });
+        yield return ("budget-exhausted", OfflinePending() with
+        {
+            SubmissionBudgetCode = SubmissionBudgetCodes.Exhausted,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Exhausted),
+            SubmissionAttempts = 3, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = true
+        });
+        // 提交待决但校园 Wi-Fi 未连接：复检被跳过，文案必须说明等待网络条件恢复。
+        yield return ("budget-exhausted-wifi-down", OfflinePending() with
+        {
+            Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Disconnected,
+            SubmissionBudgetCode = SubmissionBudgetCodes.Exhausted,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Exhausted),
+            SubmissionAttempts = 3, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = true
+        });
+        // 首次尚未提交凭据且外网在线：InternetOnline 不代表存在提交结果复检链。
+        yield return ("budget-online-no-pending", Online() with
+        {
+            SubmissionBudgetCode = SubmissionBudgetCodes.Unused,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.InternetOnline),
+            SubmissionAttempts = 0, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = false
+        });
+        // 第三次提交同时耗尽额度并收到明确密码错误：认证列必须说明拒绝原因，额度耗尽独立呈现。
+        yield return ("budget-exhausted-rejected", OfflinePending() with
+        {
+            SubmissionBudgetCode = SubmissionBudgetCodes.Exhausted,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Exhausted),
+            SubmissionAttempts = 3, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = true,
+            AuthenticationFailure = "CredentialsRejected",
+            AuthenticationPersistentState = "CredentialsRejected"
+        });
+        // 第二次提交被绑定拒绝且额度即将用尽：认证列必须说明绑定拒绝，额度事实独立呈现。
+        yield return ("budget-near-limit-binding", OfflinePending() with
+        {
+            SubmissionBudgetCode = SubmissionBudgetCodes.NearLimit,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Concluded),
+            SubmissionAttempts = 2, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = false,
+            AuthenticationFailure = "BindingRejected",
+            AuthenticationPersistentState = "BindingRejected"
+        });
+        yield return ("budget-reset", Online() with
+        {
+            SubmissionBudgetCode = SubmissionBudgetCodes.Reset,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Authorized),
+            SubmissionAttempts = 0, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = false
+        });
+        yield return ("budget-waiting", OfflinePending() with
+        {
+            SubmissionBudgetCode = SubmissionBudgetCodes.Available,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Waiting),
+            SubmissionAttempts = 1, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = false,
+            SubmissionNextPossibleAt = DateTimeOffset.UtcNow.AddSeconds(120)
+        });
+        yield return ("budget-other-wifi", Online() with
+        {
+            State = "已切换其他 Wi-Fi", Wifi = "其他配置", WifiLinkCode = WifiLinkCodes.OtherProfile, Direct = "未检查",
+            SubmissionBudgetCode = SubmissionBudgetCodes.Exhausted,
+            SubmissionAttempts = 3, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = true
+        });
+        yield return ("budget-authorized-paused", OfflinePending() with
+        {
+            AuthenticationFailure = "CredentialsRejected", AuthenticationPersistentState = "CredentialsRejected",
+            SubmissionBudgetCode = SubmissionBudgetCodes.Unused,
+            SubmissionRetryCode = nameof(SubmissionRetryDecision.Authorized),
+            SubmissionAttempts = 0, SubmissionAttemptMax = 3, SubmissionBudgetExhausted = false
+        });
+        yield return ("budget-legacy", Online());
         yield return ("online-disabled", Online() with { Enabled = false });
         yield return ("online-suspended", Online() with
         {
@@ -219,8 +295,18 @@ internal static class QaOverview
         State = "校园网在线",
         Direct = "外网可达",
         Wifi = "已连接",
+        WifiLinkCode = WifiLinkCodes.Ready,
         Portal = "未查询（外网检查已通过）",
         Tunnel = "系统路径可达，出口未核验",
         Uu = "未核验"
+    };
+
+    private static StatusSnapshot OfflinePending() => Online() with
+    {
+        State = "需要处理认证",
+        Direct = "外网不可达或未知",
+        CredentialsBlocked = true,
+        AuthenticationFailure = "None",
+        AuthenticationPersistentState = "SubmissionPending"
     };
 }

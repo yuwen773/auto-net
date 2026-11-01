@@ -322,17 +322,29 @@ internal static class NotificationRouterRegression
             Require(NotificationConsumptionStore.DefaultPath().EndsWith("AutoNet\\notification-consumption.json", StringComparison.Ordinal),
                 "消费记录不在按用户隔离的 AutoNet 目录下");
 
+            var production = NotificationConsumptionStore.DefaultPath();
+            var pathField = typeof(NotificationConsumptionStore).GetField("path",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Require(pathField is not null, "无法检查消费记录路径");
+            var nonQa = NotificationConsumptionStore.Create(QaEnvironment.Inactive);
+            Require(string.Equals(pathField!.GetValue(nonQa) as string, production, StringComparison.OrdinalIgnoreCase),
+                "非 QA 存储未指向本机真实记录");
+
             var evidence = NewPath(out var directory);
             try
             {
                 var redirected = NotificationConsumptionStore.Create(new QaEnvironment(QaMode.Notifications, directory));
-                redirected.TrySave(new Dictionary<string, DateTimeOffset> { [NotificationCodes.InternetRecovered] = At(0) });
+                // 写入前检查实际落点，重定向失效时不能覆盖真实用户记录。
+                Require(string.Equals(pathField.GetValue(redirected) as string, evidence, StringComparison.OrdinalIgnoreCase),
+                    "QA 模式的消费记录未重定向到证据目录");
+                Require(redirected.TrySave(new Dictionary<string, DateTimeOffset> { [NotificationCodes.InternetRecovered] = At(0) }),
+                    "QA 模式的消费记录保存失败");
                 Require(File.Exists(Path.Combine(directory, NotificationConsumptionStore.FileName)),
                     "QA 模式的消费记录未落在证据目录内");
+                Require(redirected.Load().ContainsKey(NotificationCodes.InternetRecovered),
+                    "QA 模式的消费记录未写进证据目录");
             }
             finally { Directory.Delete(directory, recursive: true); }
-            Require(NotificationConsumptionStore.Create(QaEnvironment.Inactive).Load().Count == 0,
-                "非 QA 存储读取应安全回退（本机真实记录为空时）");
         })),
     ];
 

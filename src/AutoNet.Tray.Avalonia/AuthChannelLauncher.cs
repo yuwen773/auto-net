@@ -22,6 +22,7 @@ internal sealed class AuthChannelLauncher
         NoGrant,
         ModeOff,
         AlreadyConsumed,
+        Busy,
         UntrustedState,
         UacDeclined,
         StartFailed,
@@ -34,26 +35,31 @@ internal sealed class AuthChannelLauncher
     private readonly Func<string, Process?> start;
     private readonly Action<NotificationAlert>? presentAlert;
     private readonly Func<Task>? openPortalFallback;
+    private readonly Func<bool>? launchActive;
     private readonly string resultPath;
     private DateTimeOffset? consumedGrant;
     private DateTimeOffset? launchedAt;
+    private DateTimeOffset? lastConsumedAt;
     private string? lastConclusion;
+    private Process? activeProcess;
     private StatusSnapshot? lastReading;
 
     public AuthChannelLauncher(
         Func<Task<StatusSnapshot?>> refresh,
         Func<string, Process?> start,
         Action<NotificationAlert>? presentAlert = null,
-        Func<Task>? openPortalFallback = null)
+        Func<Task>? openPortalFallback = null,
+        string? resultPath = null,
+        Func<bool>? launchActive = null)
     {
         this.refresh = refresh;
         this.start = start;
         this.presentAlert = presentAlert;
         this.openPortalFallback = openPortalFallback;
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoNet");
-        Directory.CreateDirectory(dir);
-        resultPath = Path.Combine(dir, ResultFileName);
+        this.launchActive = launchActive;
+        this.resultPath = resultPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoNet", ResultFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(this.resultPath))!);
     }
 
     public string ResultPath => resultPath;
@@ -80,22 +86,28 @@ internal sealed class AuthChannelLauncher
     public async Task<ObserveOutcome> ObserveAsync(StatusSnapshot? reading)
     {
         lastReading = reading;
-        if (reading is null) { ConsumeResult(new StatusSnapshot()); return ObserveOutcome.NoGrant; }
-        ConsumeResult(reading);
+        if (reading is null) { ConsumeResult(); return ObserveOutcome.NoGrant; }
+        ConsumeResult();
         if (!reading.AuthChannelRequested || reading.AuthChannelNotBefore is not { } grant) return ObserveOutcome.NoGrant;
-        if (consumedGrant == grant) { TryConsumeResultFile(); return ObserveOutcome.AlreadyConsumed; }
+        if (consumedGrant == grant) return ObserveOutcome.AlreadyConsumed;
         // 发起前重验：快照不可信、请求消失或授予时间戳已变 → 不发起（故事 68 同型）。
         var fresh = await refresh();
         if (fresh?.AuthChannelRequested != true || fresh.AuthChannelNotBefore != grant) return ObserveOutcome.UntrustedState;
         var outcome = Launch(reading);
-        if (outcome == ObserveOutcome.Launched || outcome == ObserveOutcome.UacDeclined || outcome == ObserveOutcome.StartFailed)
+        if (outcome == ObserveOutcome.Launched || outcome == ObserveOutcome.UacDeclined || outcome == ObserveOutcome.StartFailed || outcome == ObserveOutcome.Busy)
         {
             // UAC 拒绝与启动失败同样视为本授予已消费：绝不自我重试、绝不反复打扰。
             consumedGrant = grant;
-            if (outcome != ObserveOutcome.Launched) launchedAt = null;
+            if (outcome is ObserveOutcome.UacDeclined or ObserveOutcome.StartFailed) launchedAt = null;
         }
         return outcome;
     }
+
+    /// <summary>
+    /// 内嵌认证通道会话是否正在进行（工单 #39）：本进程发起的辅助进程仍存活，或外部启动锁
+    /// 仍被持有（例如托盘重启后由上一实例启动的通道）。认证页据此不另起第二个浏览器。
+    /// </summary>
+    public bool SessionActive => IsProcessActive() || launchActive?.Invoke() == true;
 
     /// <summary>诊断页投影：模式/信号/最近结论。</summary>
     public AuthChannelLaunchState Describe(StatusSnapshot? reading) => new(
@@ -103,10 +115,13 @@ internal sealed class AuthChannelLauncher
         SignalPresent: reading?.PortalLayoutSuspected ?? false,
         Requested: reading?.AuthChannelRequested ?? false,
         LastConclusion: lastConclusion,
-        Busy: launchedAt is not null && lastConclusion is null);
+        Busy: SessionActive);
     private ObserveOutcome Launch(StatusSnapshot reading)
     {
         if (reading.AuthChannelMode == AuthChannelModes.Off) return ObserveOutcome.ModeOff;
+        lastConclusion = null;
+        lastConsumedAt = null;
+        if (SessionActive) return ObserveOutcome.Busy;
         launchedAt = DateTimeOffset.UtcNow;
         try { File.Delete(resultPath); } catch (IOException) { }
         catch (UnauthorizedAccessException) { }
@@ -118,6 +133,7 @@ internal sealed class AuthChannelLauncher
                 // UAC 拒绝 = 用户此刻不要通道；消费标记由调用方置位（同授予不重试）。
                 return ObserveOutcome.UacDeclined;
             }
+            activeProcess = process;
             return ObserveOutcome.Launched;
         }
         catch (Exception ex)
@@ -130,13 +146,35 @@ internal sealed class AuthChannelLauncher
         }
     }
 
-    private void ConsumeResult(StatusSnapshot reading)
+    private bool IsProcessActive()
     {
-        if (launchedAt is null || lastConclusion is not null) return;
+        if (activeProcess is null) return false;
+        try
+        {
+            if (!activeProcess.HasExited) return true;
+            activeProcess.Dispose();
+            activeProcess = null;
+            return false;
+        }
+        catch (InvalidOperationException) { return true; }
+        catch (System.ComponentModel.Win32Exception) { return true; }
+    }
+
+    private void ConsumeResult()
+    {
+        if (launchedAt is null) return;
         if (!AuthChannelResultFile.TryLoad(resultPath, out var result, out _) || result is null) return;
         // 回执双核对（工单 #23）：结果文件必须就是发起时约定的路径（同机同用户），且
         // 判定时刻不早于发起时刻——伪造或上一轮的陈旧结果在此被拒。
         if (!AuthChannelReceipt.Validate(result, resultPath, resultPath, launchedAt.Value, out _)) return;
+        // 工单 #40 / ADR-0019：人工等待期间允许同一会话补写更新的结果（例如手动登录成功）。
+        // 只按判定时刻去重，不因已消费过第一条就永久拒绝；重复或更旧的判定直接清理。
+        if (lastConsumedAt is { } last && result.DetectedAt <= last)
+        {
+            CleanupConsumed(result);
+            return;
+        }
+        lastConsumedAt = result.DetectedAt;
         lastConclusion = AuthChannelReceipt.MapToSubmissionOutcome(result.Conclusion)?.ToString()
             ?? "Unknown";
         // 工单 #25：受控关键通知（不静默）。失败回退系统浏览器兜底；需人工呈现窗口提示。
@@ -151,19 +189,43 @@ internal sealed class AuthChannelLauncher
             Present(NotificationCodes.AuthChannelNeedsHuman,
                 "内嵌认证通道遇到验证码或页面限制，窗口保持门户页打开，请人工完成剩余步骤。");
         }
+        else if (result.Conclusion == AuthChannelConclusion.LoggedIn)
+        {
+            // ADR-0019 §6：登录成功不自动解除认证暂停，成功通知只给出显式解除指引。
+            // 自动成功时可能本就没有暂停，因此用条件句，不虚构暂停状态。
+            Present(NotificationCodes.AuthChannelResult,
+                "内嵌认证通道已登录成功；如仍有认证暂停，可在概览页手动解除。", warning: false);
+        }
         else
         {
             Present(NotificationCodes.AuthChannelResult,
                 "内嵌认证通道结论：" + lastConclusion + "。");
         }
-        try { File.Delete(resultPath); } catch (IOException) { }
+        CleanupConsumed(result);
     }
 
-    private void Present(string code, string body) =>
-        presentAlert?.Invoke(new NotificationAlert(code, "AutoNet · 内嵌认证通道", body, Warning: true));
-
-    private void TryConsumeResultFile()
+    /// <summary>
+    /// 清理已消费的结果。删除前重新读取一次：若通道在读取与清理之间补写了更新的判定，
+    /// 保留该文件给下一轮消费（ADR-0019 §5）。重读只缩小、不消除判定与删除之间的窗口；
+    /// 通道每次会话最多补写一条结果，实际风险远小于原先“读完即删”。
+    /// </summary>
+    private void CleanupConsumed(AuthChannelResult consumed)
     {
-        if (launchedAt is not null && lastConclusion is null) ConsumeResult(new StatusSnapshot());
+        try
+        {
+            if (AuthChannelResultFile.TryLoad(resultPath, out var current, out _) && current is not null &&
+                !ShouldCleanup(consumed, current))
+                return;
+            File.Delete(resultPath);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
+
+    /// <summary>重新读取到的结果是否仍是被消费的那一条；不同的判定必须留给下一轮。</summary>
+    internal static bool ShouldCleanup(AuthChannelResult consumed, AuthChannelResult? current) =>
+        current is null || (current.DetectedAt == consumed.DetectedAt && current.Conclusion == consumed.Conclusion);
+
+    private void Present(string code, string body, bool warning = true) =>
+        presentAlert?.Invoke(new NotificationAlert(code, "AutoNet · 内嵌认证通道", body, Warning: warning));
 }

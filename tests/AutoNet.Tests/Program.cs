@@ -4,7 +4,22 @@ using System.Text;
 using System.Text.Json;
 using AutoNet.Core;
 
+// 该独立进程刻意不预注册字符集，覆盖 Avalonia 导出实际需要的解码能力。
+if (args.FirstOrDefault() == "--export-ui-test-peer")
+    return args.Length > 1 ? DiagnosticsExporterRegression.RunUiPeer(args[1]) : 2;
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args.FirstOrDefault() == "--handoff-test-peer") return await SettingsHandoffRegression.RunPeerAsync(args);
+if (args.FirstOrDefault() == "--settings-save-peer") return SettingsSaveRegression.RunSavePeer(args);
+if (args.FirstOrDefault() == "--settings-lock-peer") return SettingsSaveRegression.RunLockPeer(args);
+if (args.FirstOrDefault() == "--submission-budget-test-peer") return SubmissionBudgetRegression.RunPeer(args);
+if (args.FirstOrDefault() == "--legacy-reader-corpus") return args.Length > 1 ? LegacyStateRegression.WriteCorpus(args[1]) : 2;
+if (args.FirstOrDefault() == "--legacy-reader-probe") return args.Length > 1 ? LegacyStateRegression.RunProbe(args[1]) : 2;
+if (args.FirstOrDefault() == "--submission-retry-test-peer") return SubmissionRetryRegression.RunPeer(args);
+if (args.FirstOrDefault() == "--channel-session-test-peer") { Console.WriteLine("READY"); Console.Out.Flush(); Console.ReadLine(); return 0; }
+if (args.FirstOrDefault() == "--channel-job-test-peer") return ChannelJobRegression.RunPeer();
+if (args.FirstOrDefault() == "--proxy-job-test-peer") return await AuthChannelProxyRegression.RunPeerAsync();
+if (args.FirstOrDefault() == "--webview-proxy-peer") return await WebViewProxyRegression.RunPeerAsync(args);
+if (args.FirstOrDefault() == "--webview-proxy-check") return await WebViewProxyRegression.RunAsync();
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("正常联网不执行修复", () => Sync(() => {
@@ -130,6 +145,7 @@ tests = tests.Concat(DiagnosticsPackageRegression.Cases).ToArray();
 tests = tests.Concat(SafetyRegression.Cases).ToArray();
 tests = tests.Concat(AcceptanceRegression.Cases).ToArray();
 tests = tests.Concat(AuthenticationPersistenceRegression.Cases).ToArray();
+tests = tests.Concat(LegacyStateRegression.Cases).ToArray();
 tests = tests.Concat(RecoveryPersistenceRegression.Cases).ToArray();
 tests = tests.Concat(DisplayRegression.Cases).ToArray();
 tests = tests.Concat(LogCentreRegression.Cases).ToArray();
@@ -138,11 +154,22 @@ tests = tests.Concat(UiFreezeRegression.Cases).ToArray();
 tests = tests.Concat(AvaloniaPrototypeRegression.Cases).ToArray();
 tests = tests.Concat(AuthChannelRegression.Cases).ToArray();
 tests = tests.Concat(AvaloniaShellRegression.Cases).ToArray();
+tests = tests.Concat(AuthPageRegression.Cases).ToArray();
+tests = tests.Concat(AuthPagePointerRegression.Cases).ToArray();
+tests = tests.Concat(AuthChannelHumanWaitRegression.Cases).ToArray();
 tests = tests.Concat(OverviewRegression.Cases).ToArray();
 tests = tests.Concat(UnblockRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticsPageRegression.Cases).ToArray();
 tests = tests.Concat(LogsPageRegression.Cases).ToArray();
 tests = tests.Concat(SettingsPageRegression.Cases).ToArray();
+tests = tests.Concat(SettingsSaveRegression.Cases).ToArray();
+tests = tests.Concat(SettingsHandoffRegression.Cases).ToArray();
+tests = tests.Concat(SubmissionBudgetRegression.Cases).ToArray();
+tests = tests.Concat(SubmissionRetryRegression.Cases).ToArray();
+tests = tests.Concat(SubmissionVisibilityRegression.Cases).ToArray();
+tests = tests.Concat(AuthChannelProxyRegression.Cases).ToArray();
+tests = tests.Concat(AuthPageBoundaryRegression.Cases).ToArray();
+tests = tests.Concat(ChannelJobRegression.Cases).ToArray();
 tests = tests.Concat(ThemePreferenceRegression.Cases).ToArray();
 tests = tests.Concat(NotificationRouterRegression.Cases).ToArray();
 tests = tests.Concat(PortalOpenRegression.Cases).ToArray();

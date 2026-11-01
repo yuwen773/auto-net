@@ -22,6 +22,8 @@ internal static class ShellIcons
     {
         // 概览：房屋轮廓。
         ShellPage.Overview => "M2.6 7.4 L8 3 L13.4 7.4 M4.1 6.9 V13.1 H11.9 V6.9",
+        // 上网认证：门与进入箭头。
+        ShellPage.Authentication => "M2.6 13.2 V2.8 H8.4 M5.8 8 H14.2 M11.6 5.4 L14.2 8 L11.6 10.6",
         // 网络诊断：脉冲折线。
         ShellPage.Diagnostics => "M1.6 8 H4.4 L6 3.4 L8.6 12.6 L10.4 8 H14.4",
         // 日志：文档与行。

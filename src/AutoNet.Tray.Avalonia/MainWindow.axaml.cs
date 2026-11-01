@@ -17,12 +17,13 @@ public partial class MainWindow : Window
         LogsPage? logs = null,
         Func<string, Task>? copy = null,
         Action? openFolder = null,
-        Action? modifySettings = null,
+        SettingsPage? settings = null,
         Action? portalOpen = null,
         Func<ThemePreference>? themeProvider = null,
         Action<ThemePreference>? themeSelected = null,
         DiagnosticsExporter? diagnosticsExporter = null,
-        AuthChannelLauncher? authChannel = null)
+        AuthChannelLauncher? authChannel = null,
+        AuthPageCoordinator? authPage = null)
     {
         this.session = session;
         this.controller = controller;
@@ -30,9 +31,15 @@ public partial class MainWindow : Window
         InitializeComponent();
         if (controller is not null)
         {
-            view.Attach(controller, actions, logs, copy, openFolder, modifySettings, portalOpen, themeProvider, themeSelected, diagnosticsExporter, authChannel);
+            view.Attach(controller, actions, logs, copy, openFolder, settings, portalOpen, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);
             // 窗口每次激活时刷新一次状态；定期轮询仍由状态管道负责。
             Activated += (_, _) => _ = RefreshStatusSafelyAsync();
+            // 最小化或隐藏只调整认证页宿主的可见性；不导航、不提交、不停止后台认证（#37）。
+            PropertyChanged += (_, change) =>
+            {
+                if (change.Property == WindowStateProperty || change.Property == IsVisibleProperty)
+                    controller.SetWindowVisible(WindowState != WindowState.Minimized && IsVisible);
+            };
         }
     }
 

@@ -15,7 +15,6 @@ internal static class Theme
     public static readonly Color BrandHover = Color.FromArgb(14, 58, 106);
     public static readonly Color WindowBackground = Color.FromArgb(247, 249, 252);
     public static readonly Color Card = Color.White;
-    public static readonly Color Divider = Color.FromArgb(226, 231, 238);
     public static readonly Color Border = Color.FromArgb(219, 226, 235);
 
     // Text
@@ -47,7 +46,6 @@ internal static class Theme
     public const int CardGap = 12;
     public const int ButtonHeight = 34;
     public const int IconSize = 32;
-    public const int SmallIconSize = 16;
     public const int CornerRadius = 8;
 
     private static readonly Dictionary<(float Size, FontStyle Style), Font> fonts = [];

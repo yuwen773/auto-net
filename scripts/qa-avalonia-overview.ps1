@@ -21,9 +21,14 @@ $steps = [ordered]@{}
 $failures = [System.Collections.Generic.List[string]]::new()
 $tracked = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $savedEnvironment = @{}
-foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH')) {
+foreach ($name in @('AUTONET_QA_DIR', 'AUTONET_QA_MODE', 'AUTONET_QA_STATUS_PATH', 'AUTONET_QA_MUTEX_SUFFIX')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
 }
+
+# 本机可能仍有已安装的候选托盘占用 QA 默认互斥名；按证据目录生成一次性后缀隔离，
+# 同一次运行内的所有实例共用该后缀，单实例语义不变，也不触碰已安装进程。
+$mutexSuffix = 'q' + ([Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($evidence)))).Substring(0, 16).ToLowerInvariant()
 
 function Pass([string]$Name, $Detail) { $steps[$Name] = @{ result = 'pass'; detail = $Detail }; Write-Host ('PASS ' + $Name) }
 function Fail([string]$Name, [string]$Message) {
@@ -37,6 +42,7 @@ function Start-App {
     [Environment]::SetEnvironmentVariable('AUTONET_QA_DIR', $QaDirectory)
     [Environment]::SetEnvironmentVariable('AUTONET_QA_MODE', $QaMode)
     [Environment]::SetEnvironmentVariable('AUTONET_QA_STATUS_PATH', $StatusPath)
+    [Environment]::SetEnvironmentVariable('AUTONET_QA_MUTEX_SUFFIX', $mutexSuffix)
     $start = [Diagnostics.ProcessStartInfo]::new($Executable)
     $start.UseShellExecute = $false
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
@@ -141,6 +147,54 @@ try {
         Require ($online.Trusted -and $online.Title -eq '网络在线') '在线状态投影不符'
         Require (-not $online.AuthVisible -and -not $online.UnblockVisible) '在线且未暂停不应出现认证列或解除入口'
         Require ($online.RecoveryLabel -eq '关闭自动恢复' -and $online.RecoveryEnabled) '在线时恢复开关应提供关闭意图'
+
+        # #35 额度状态：四种状态必须可区分，旧版缺字段安全降级。
+        $near = Get-Step $report 'budget-near-limit'
+        Require ($near.SubmissionValue.Contains('2/3') -and $near.SubmissionValue.Contains('即将用尽') -and $near.SubmissionValue.Contains('等待重试')) '额度即将用尽未区分呈现'
+        Require ($near.SubmissionNote.Contains('最早下次提交')) '额度即将用尽未显示最早下次提交时刻'
+
+        $exhausted = Get-Step $report 'budget-exhausted'
+        Require ($exhausted.SubmissionValue.Contains('3/3') -and $exhausted.SubmissionValue.Contains('已耗尽') -and $exhausted.SubmissionValue.Contains('已停止自动提交')) '额度耗尽未明确停止'
+        Require ($exhausted.SubmissionNote.Contains('已停止自动提交') -and $exhausted.SubmissionNote.Contains('两次额外额度')) '额度耗尽未说明停止原因'
+        Require ($exhausted.AuthVisible -and $exhausted.AuthTitle -eq '认证提交已暂停') '额度耗尽与认证暂停未分列'
+        Require ($exhausted.AuthNote.Contains('额度已耗尽') -and $exhausted.AuthNote.Contains('只读复检')) '结果未知耗尽未说明停止原因'
+
+        # 提交待决但校园 Wi-Fi 不可用：复检被跳过，不能声称正在复检。
+        $wifiDown = Get-Step $report 'budget-exhausted-wifi-down'
+        Require ($wifiDown.SubmissionNote.Contains('校园 Wi-Fi') -and $wifiDown.SubmissionNote.Contains('待网络条件恢复') -and -not $wifiDown.SubmissionNote.Contains('继续低频只读复检')) 'Wi-Fi 不可用时额度行仍声称正在复检'
+        Require ($wifiDown.AuthNote.Contains('校园 Wi-Fi') -and -not $wifiDown.AuthNote.Contains('继续只读复检')) 'Wi-Fi 不可用时认证列仍声称正在复检'
+
+        # 首次尚未提交凭据且外网在线：不存在提交结果复检链。
+        $onlineNoPending = Get-Step $report 'budget-online-no-pending'
+        Require ($onlineNoPending.SubmissionNote.Contains('没有待确认的提交结果') -and -not $onlineNoPending.SubmissionNote.Contains('只读复检')) '无待决提交时仍声称复检'
+
+        # 明确拒绝优先于额度事实：第三次密码错误、第二次绑定拒绝都不得被额度文案掩盖。
+        $rejectedExhausted = Get-Step $report 'budget-exhausted-rejected'
+        Require ($rejectedExhausted.AuthNote.Contains('凭据') -and -not $rejectedExhausted.AuthNote.Contains('额度已耗尽')) '明确凭据拒绝被额度耗尽掩盖'
+        Require ($rejectedExhausted.SubmissionValue.Contains('已耗尽') -and $rejectedExhausted.SubmissionNote.Contains('额度已用尽')) '明确拒绝时额度耗尽事实缺失'
+        Require ($rejectedExhausted.SubmissionNote.Contains('没有进行中的提交结果复检') -and -not $rejectedExhausted.SubmissionNote.Contains('继续低频只读复检')) '明确拒绝后额度行仍声称正在复检'
+
+        $bindingNear = Get-Step $report 'budget-near-limit-binding'
+        Require ($bindingNear.AuthNote.Contains('绑定') -and -not $bindingNear.AuthNote.Contains('即将用尽')) '绑定拒绝被额度即将用尽掩盖'
+        Require ($bindingNear.SubmissionValue.Contains('2/3') -and $bindingNear.SubmissionValue.Contains('即将用尽')) '绑定拒绝时额度即将用尽事实缺失'
+
+        $reset = Get-Step $report 'budget-reset'
+        Require ($reset.SubmissionValue.Contains('已重置') -and -not $reset.SubmissionValue.Contains('已耗尽')) '额度重置未区分呈现'
+
+        $waiting = Get-Step $report 'budget-waiting'
+        Require ($waiting.SubmissionValue.Contains('1/3') -and $waiting.SubmissionValue.Contains('等待重试')) '等待重试未区分呈现'
+        Require ($waiting.SubmissionNote.Contains('最早下次提交')) '等待重试未显示最早下次提交时刻'
+
+        $otherWifi = Get-Step $report 'budget-other-wifi'
+        Require ($otherWifi.SubmissionValue.Contains('3/3') -and $otherWifi.SubmissionValue.Contains('已耗尽')) '切换其他 Wi-Fi 后额度事实缺失'
+        Require ($otherWifi.SubmissionNote.Contains('其他 Wi-Fi') -and -not $otherWifi.SubmissionNote.Contains('继续低频只读复检')) '切换其他 Wi-Fi 后错误声称继续复检'
+
+        $authorizedPaused = Get-Step $report 'budget-authorized-paused'
+        Require ($authorizedPaused.SubmissionValue.Contains('额度与间隔条件满足') -and -not $authorizedPaused.SubmissionValue.Contains('可提交')) '额度条件满足被误认为完整提交授权'
+        Require ($authorizedPaused.AuthVisible -and $authorizedPaused.AuthNote.Contains('凭据')) '额度条件满足时认证暂停事实缺失'
+
+        $legacy = Get-Step $report 'budget-legacy'
+        Require ($legacy.SubmissionValue -eq '额度状态不可确认') '旧版快照缺字段未安全降级'
 
         $disabled = Get-Step $report 'online-disabled'
         Require ($disabled.RecoveryLabel -eq '开启自动恢复' -and $disabled.RecoveryEnabled) '已关闭时恢复开关应提供开启意图'

@@ -20,6 +20,8 @@ internal static class ShellAccessibility
     /// <summary>解除认证暂停入口：名称携带当前认证事实与动作，不依据陈旧信息。</summary>
     public static string Unblock(OverviewContent content) => $"认证状态（{content.Auth.Title}），{content.Unblock.Label}";
 
+    public const string RestartAuthentication = "重新开始认证…";
+
     /// <summary>浏览器兜底开页入口（#11）：名称固定声明「需要浏览器认证」边界 + 动作标签。</summary>
     public static string PortalOpen(PortalOpenEntryState entry) => $"需要浏览器认证，{entry.Label}";
 
@@ -46,6 +48,21 @@ internal static class ShellAccessibility
 
     /// <summary>技术详情展开区（概览页）：标题固定，展开状态由控件自身状态呈现。</summary>
     public const string TechnicalDetail = "技术详情";
+
+    /// <summary>认证页状态区（#37）：只声明区域用途，具体状态由可见文字与字形共同表达。</summary>
+    public const string AuthStatus = "认证状态";
+
+    /// <summary>认证页门户地址（#37）：名称固定声明字段用途，地址文本与窗口内可见内容一致。</summary>
+    public const string AuthAddress = "门户地址";
+
+    /// <summary>认证页浏览器宿主区域（#37）：名称固定，不包含页面内容或地址。</summary>
+    public const string AuthHost = "门户页面";
+
+    /// <summary>认证页手动重试入口（#37）：只在受控失败状态下可见。</summary>
+    public const string AuthRetry = "重试加载门户页面…";
+
+    /// <summary>设置页保存按钮（#41）：自动化名称与可见文字同步，保存期间如实反映忙态。</summary>
+    public static string SettingsSave(bool saving) => saving ? "正在保存…" : "保存设置";
 
     /// <summary>设置控件可访问名称的统一入口，视图构建时链式调用。</summary>
     public static T Named<T>(T control, string name) where T : Control

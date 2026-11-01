@@ -17,13 +17,14 @@ function Fail([string]$Reason) {
 
 if (-not (Test-Path -LiteralPath $Bundle -PathType Container)) { Write-Host "VERIFY-FAIL 包目录不存在：$Bundle"; exit 2 }
 $sumsPath = Join-Path $Bundle 'SHA256SUMS.txt'
+$manifestPath = [IO.Path]::GetFullPath($sumsPath)
 $buildIdPath = Join-Path $Bundle 'BUILD-ID.txt'
 foreach ($p in @($sumsPath, $buildIdPath)) { if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Fail "缺少 $([IO.Path]::GetFileName($p))" } }
 
 # 1) 解析哈希清单
 $expected = @{}
 foreach ($line in Get-Content -LiteralPath $sumsPath) {
-    if ($line -match '^([0-9a-fA-F]{64})\s+(\S.+?)\s*$') {
+    if ($line -match '^([0-9a-fA-F]{64})\s+(\S.*?)\s*$') {
         $rel = $matches[2].Replace('\', '/')
         if ($expected.ContainsKey($rel)) { Fail "清单重复条目：$rel" }
         $expected[$rel] = $matches[1].ToLowerInvariant()
@@ -32,7 +33,7 @@ foreach ($line in Get-Content -LiteralPath $sumsPath) {
 if ($expected.Count -eq 0) { Fail '清单为空' }
 
 # 2) 清单必须与包内文件一一对应（清单自身除外）
-$actual = Get-ChildItem -LiteralPath $Bundle -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' |
+$actual = Get-ChildItem -LiteralPath $Bundle -File -Recurse | Where-Object FullName -ne $manifestPath |
     ForEach-Object { [IO.Path]::GetRelativePath($Bundle, $_.FullName).Replace('\', '/') }
 $missing = @($actual | Where-Object { -not $expected.ContainsKey($_) })
 $extra = @($expected.Keys | Where-Object { $_ -notin $actual })

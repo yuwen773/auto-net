@@ -15,7 +15,15 @@ public interface IMonitorEnvironment
     bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next);
     // ADR-0001 recheck resolution: the release audit is appended before the block clears; an
     // audit write failure surfaces as an exception and the caller must not clear the block.
-    bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next);
+    bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false);
+    SubmissionBudget? LoadSubmissionBudget();
+    bool IsConfirmedSubmissionRestart(SubmissionBudget? budget);
+    IDisposable? TryAcquireSubmissionExecution();
+    ChannelSubmissionLease? TryBeginChannelSubmission(AuthenticationBlock? expected, SubmissionBudget? budget,
+        PortalFailure structuralFailure, SubmissionRetryPolicy policy, DateTimeOffset utc, TimeSpan elapsed) => null;
+    bool TryRegisterChannelSession(ChannelSubmissionLease lease, int processId, int ownerId, string jobName) => false;
+    SubmissionReservation TryReserveSubmissionBudget(SubmissionBudget? expected, DateTimeOffset now);
+    bool TryTransitionSubmissionBudget(SubmissionBudget expected, SubmissionBudgetState next);
     DisconnectBudget LoadDisconnectBudget(Settings settings);
     void SaveDisconnectBudget(Settings settings, DisconnectBudget budget);
     bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next);
@@ -32,7 +40,7 @@ public interface IMonitorEnvironment
     void WriteDiagnosticFallback(string summary) { }
 }
 
-internal sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
+public sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
 {
     private readonly PowerGuard power = new();
     private readonly SafetyStateStore safety = new(Storage.Private);
@@ -42,7 +50,17 @@ internal sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
     public AuthenticationRecordKind AuthenticationRecordSource => safety.LastAuthenticationRecordKind;
     public void BlockAuthentication(AuthenticationBlock block) => safety.BlockAuthentication(block);
     public bool TryTransitionAuthentication(AuthenticationBlock? expected, AuthenticationBlock next) => safety.TryTransitionAuthentication(expected, next);
-    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, AuthenticationBlock next) => safety.ResolveSubmissionPending(expected, next);
+    public bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false) => safety.ResolveSubmissionPending(expected, budget, next, directConfirmation);
+    public SubmissionBudget? LoadSubmissionBudget() => safety.LoadSubmissionBudget();
+    public bool IsConfirmedSubmissionRestart(SubmissionBudget? budget) => safety.IsConfirmedSubmissionRestart(budget);
+    public IDisposable? TryAcquireSubmissionExecution() => safety.TryAcquireSubmissionExecution();
+    public ChannelSubmissionLease? TryBeginChannelSubmission(AuthenticationBlock? expected, SubmissionBudget? budget,
+        PortalFailure structuralFailure, SubmissionRetryPolicy policy, DateTimeOffset utc, TimeSpan elapsed) =>
+        safety.TryBeginChannelSubmission(expected, budget, structuralFailure, policy, utc, elapsed);
+    public bool TryRegisterChannelSession(ChannelSubmissionLease lease, int processId, int ownerId, string jobName) =>
+        safety.TryRegisterChannelSession(lease, processId, ownerId, jobName);
+    public SubmissionReservation TryReserveSubmissionBudget(SubmissionBudget? expected, DateTimeOffset now) => safety.TryReserveSubmissionBudget(expected, now);
+    public bool TryTransitionSubmissionBudget(SubmissionBudget expected, SubmissionBudgetState next) => safety.TryTransitionSubmissionBudget(expected, next);
     public DisconnectBudget LoadDisconnectBudget(Settings settings) => safety.LoadDisconnectBudget(settings);
     public void SaveDisconnectBudget(Settings settings, DisconnectBudget budget) => safety.SaveDisconnectBudget(settings, budget);
     public bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next) => safety.TryTransitionDisconnectBudget(settings, expected, next);

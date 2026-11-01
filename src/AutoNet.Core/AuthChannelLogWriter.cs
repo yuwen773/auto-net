@@ -3,8 +3,8 @@ using System.Text.Json;
 namespace AutoNet.Core;
 
 /// <summary>
-/// 内嵌认证通道的结构化日志写入（工单 #25 / ADR-0009）：通道进程把发起、可见化、
-/// 结论三事件按服务同款 schema（ActivityLog v2）追加到既有日志目录——日志页与诊断包
+/// 内嵌认证通道的结构化日志写入（工单 #25 / ADR-0009、#40）：通道进程把发起、可见化、
+/// 手动接管与结论事件按服务同款 schema（ActivityLog v2）追加到既有日志目录——日志页与诊断包
 /// 自动纳入，词表分类已在 LogEventClassifier 注册（Authentication）。追加为单行小写，
 /// 与服务的读取共享（FileShare.ReadWrite）兼容；写入失败静默（日志不反噬通道结论）。
 /// </summary>

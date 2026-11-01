@@ -2,6 +2,13 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <ApplicationIcon>../../assets/AutoNet.ico</ApplicationIcon>
+    <!-- 认证页（#38）：Avalonia 12 没有原生 WebView2 控件，按隔离原型用 NativeControlHost
+         承载 WinForms WebView2；浏览器流量只经应用自带的允许列表代理。 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- WebView2 包 lib_manual 的多目标引用提示（MSB3277）为包结构固有，与本项目无关。 -->
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+    <!-- 单文件发布契约（#2/T17）只允许 exe 与 pdb；WebView2 包内 XML 文档不是运行时依赖，不复制。 -->
+    <AllowedReferenceRelatedFileExtensions>;.pdb</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
   <!-- 发布契约：脚本传入 -p:AutoNetPublishIdentity=true 时，EXE 保持 AutoNet.Tray.exe 安装身份。
        不能改用命令行覆盖 AssemblyName：全局属性会传播到被引用工程（AutoNet.Core），
@@ -10,9 +17,17 @@
     <AssemblyName>AutoNet.Tray</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <!-- 只把 WinForms 当作 WebView2 的原生承载面；Avalonia 才是界面框架。
+         SDK 在 UseWindowsForms 下会注入 System.Windows.Forms/System.Drawing 全局 using，
+         那会让 Button/Control/TextBox 等全部产生二义性，这里显式移除。 -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.4" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../AutoNet.Core/AutoNet.Core.csproj" />

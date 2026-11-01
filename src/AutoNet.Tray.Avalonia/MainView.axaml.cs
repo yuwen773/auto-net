@@ -11,7 +11,7 @@ using ShapePath = Avalonia.Controls.Shapes.Path;
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
-/// 壳视图：左侧四页导航、页面宿主与底部状态栏。只负责把 <see cref="ShellController"/>
+/// 壳视图：左侧五页导航、页面宿主与底部状态栏。只负责把 <see cref="ShellController"/>
 /// 的选择、内容与状态渲染出来；导航与读取语义都在控制器一侧，动作语义在
 /// <see cref="OverviewActions"/> 一侧，便于受控测试。
 /// </summary>
@@ -22,17 +22,19 @@ public partial class MainView : UserControl
     private LogsPage? logsPage;
     private Func<string, Task>? copyHandler;
     private Action? folderHandler;
-    private Action? modifySettingsHandler;
+    private SettingsPage? settingsPage;
+    private Control? settingsControl;
     private Action? portalOpenHandler;
     private DiagnosticsExporter? diagnosticsExporter;
     private AuthChannelLauncher? authChannelLauncher;
+    private AuthPageCoordinator? authPage;
+    private readonly AuthPageRenderGate<AuthPageView> authGate = new();
     private DiagnosticsExportState? exportStateShown;
     private Func<ThemePreference>? themeProvider;
     private Action<ThemePreference>? themeSelectedHandler;
     private OverviewContent? overviewShown;
     private DiagnosticsContent? diagnosticsShown;
     private LogsContent? logsShown;
-    private SettingsContent? settingsShown;
     private bool technicalExpanded;
     private bool syncingSelection;
 
@@ -47,30 +49,32 @@ public partial class MainView : UserControl
         };
     }
 
-    /// <summary>接入壳控制器、概览动作、日志页（#7）、设置修改入口（#8）、兜底开页（#11）、诊断包导出（#12）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
+    /// <summary>接入壳控制器、概览动作、日志页（#7）、设置页（#8 / #41）、兜底开页（#11）、诊断包导出（#12）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
     internal void Attach(
         ShellController shell,
         OverviewActions? overviewActions = null,
         LogsPage? logs = null,
         Func<string, Task>? copy = null,
         Action? openFolder = null,
-        Action? modifySettings = null,
+        SettingsPage? settings = null,
         Action? portalOpen = null,
         Func<ThemePreference>? themeProvider = null,
         Action<ThemePreference>? themeSelected = null,
         DiagnosticsExporter? export = null,
-        AuthChannelLauncher? authChannel = null)
+        AuthChannelLauncher? authChannel = null,
+        AuthPageCoordinator? authPage = null)
     {
         controller = shell;
         actions = overviewActions;
         logsPage = logs;
         copyHandler = copy;
         folderHandler = openFolder;
-        modifySettingsHandler = modifySettings;
+        settingsPage = settings;
         portalOpenHandler = portalOpen;
         this.themeProvider = themeProvider;
         themeSelectedHandler = themeSelected;
         authChannelLauncher = authChannel;
+        this.authPage = authPage;
         diagnosticsExporter = export;
         if (export is { } exporter)
         {
@@ -86,7 +90,13 @@ public partial class MainView : UserControl
             });
         }
         BuildNavigation();
-        shell.SelectionChanged += page => Dispatcher.UIThread.Post(() => SyncSelection(page));
+        shell.SelectionChanged += page => Dispatcher.UIThread.Post(() =>
+        {
+            SyncSelection(page);
+            // 进入设置页时重新枚举 Wi-Fi 配置：启动时 WLAN 未就绪或之后新建的配置
+            // 不应要求重启托盘才能选择。
+            if (page == ShellPage.Settings) settingsPage?.RefreshProfiles();
+        });
         shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
         shell.StatusChanged += reading => Dispatcher.UIThread.Post(() => RenderStatus(reading));
         SyncSelection(shell.SelectedPage);
@@ -179,7 +189,8 @@ public partial class MainView : UserControl
                     expanded => technicalExpanded = expanded,
                     intent => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestRecoveryChangeAsync(intent)),
                     () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestUnblockAsync()),
-                    () => portalOpenHandler?.Invoke());
+                    () => portalOpenHandler?.Invoke(),
+                    () => RunActionSafelyAsync(() => actions is null ? Task.FromResult(false) : actions.RequestRestartAuthenticationAsync()));
                 break;
             case DiagnosticsContent diagnostics:
                 // 指纹未变化且导出状态未推进时不重建：诊断页避免轮询期的无谓控件树重建；
@@ -223,16 +234,36 @@ public partial class MainView : UserControl
                     index => logsPage?.SelectRow(index));
                 break;
             case SettingsContent settings:
-                // 指纹未变化时不重建：设置页只读投影跟随状态轮询刷新，避免无谓的控件树重建。
-                // 主题选择（#9）不走状态投影：重建时从偏好提供者读取当前值，已保存的选择不会被打断。
-                if (settingsShown is { } shownSettings && shownSettings.ContentKey == settings.ContentKey) return;
-                settingsShown = settings;
-                ClearShown(except: settings);
-                pageHost.Content = SettingsView.Build(
-                    settings,
-                    () => modifySettingsHandler?.Invoke(),
+                // 设置页（#8 / #41）是可编辑表单：控件树只构建一次并长期复用，状态轮询只更新
+                // 只读事实与结果文本，绝不重建正在输入的表单。主题选择（#9）同样不走状态投影。
+                // 进入设置页时清空其他页面的指纹缓存：否则从设置页返回未变化的概览/诊断/日志时，
+                // 指纹命中会提前 return，页面仍停留在设置控件上。
+                ClearShown(except: null);
+                settingsPage ??= new SettingsPage(
+                    () => [],
+                    (_, _) => Task.FromResult(new HandoffResult(HandoffOutcome.Rejected)));
+                settingsPage.Update(settings);
+                settingsControl ??= SettingsView.Build(
+                    settingsPage,
                     themeProvider?.Invoke() ?? ThemePreference.System,
                     preference => themeSelectedHandler?.Invoke(preference));
+                pageHost.Content = settingsControl;
+                break;
+            case AuthPageContent auth:
+                // 认证页（#37）：视图与浏览器表面只创建一次，状态刷新只更新文字与宿主表面。
+                // 切走再回来复用同一实例，因此不会重新导航，也不会丢失页面内已填内容。
+                // 指纹未变化时跳过重复渲染；切页会清空指纹缓存，返回时仍会重新渲染同一实例。
+                if (!authGate.ShouldRender(auth)) return;
+                ClearShown(except: auth);
+                var authView = authGate.View(() => new AuthPageView(
+                    () => RunActionSafelyAsync(async () =>
+                    {
+                        if (authPage is { } coordinator) await coordinator.RetryAsync();
+                        return true;
+                    }),
+                    () => authPage?.Surface));
+                authView.Render(auth);
+                pageHost.Content = authView.Root;
                 break;
             case PageScaffold scaffold:
                 ClearShown(except: null);
@@ -247,7 +278,9 @@ public partial class MainView : UserControl
         if (!ReferenceEquals(except, overviewShown)) overviewShown = null;
         if (!ReferenceEquals(except, diagnosticsShown)) diagnosticsShown = null;
         if (!ReferenceEquals(except, logsShown)) logsShown = null;
-        if (!ReferenceEquals(except, settingsShown)) settingsShown = null;
+        // 设置页（#41）改用长期复用的表单控件，不再有设置内容的指纹缓存需要清理。
+        // 认证页切走时只清指纹缓存，视图实例保留在渲染门里，返回时继续复用。
+        if (except is not AuthPageContent) authGate.Detach();
     }
 
     private async Task<bool> SelectDateAsync(string? date)
