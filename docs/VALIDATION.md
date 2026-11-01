@@ -9,6 +9,7 @@
 - **隐私**：`--filter 隐私` **2/2**、`--filter 脱敏` **7/7**、`--filter 诊断包` **16/16**、`--filter 日志` **38/38**；脏输入下诊断包与日志摘要不含凭据、Cookie、Token、原始响应与真实 MAC，凭据零出现。
 - **回滚兼容**：`scripts/check-released-reader.ps1` 为 **READER-OK**（真实 `v0.3.1` 读取规则与冻结副本在 24 条语料上逐条一致）。
 - **文档同步**：计划文档由“尚未实施”改为“离线实现已落线、未发布、未现场验收”；`CONTEXT.md` 认证页状态更新为 #37/#38/#39 已实现；ADR-0016 补上 WebRTC/STUN 走向未查清；ADR-0017–0021 与 #37–#41 实施记录核对无矛盾。详见 [#42 交付检查记录](progress/42-delivery-check.md)。
+- **现场验收向导**：`bash scripts/live-acceptance.sh`（Git Bash）把本节与 #38/#39/#40 的 `NOT_RUN` 清单串成 12 个阶段，逐项记录 PASS/FAIL/NA 到 `artifacts/validation/live-acceptance/answers.env`。安装、断网、真实凭据提交与覆盖/回滚必须输入 `AUTHORIZE` 才执行，可随时跳过或重跑；只读诊断不会提交凭据。
 - **仍需现场验证（全部 `NOT_RUN`）**：真实学校门户（含 `,0,` 前缀、MAC 令牌、`PHPSESSID`）、真实断网恢复与 15 秒目标、跨管理员账户 UAC、WebRTC/STUN 实际走向、真实 WebView2 展示宿主与门户子资源/802 端口经代理的兼容性、真实通道会话互斥与手动接管、真实 UAC 下的解除与诊断包导出、真实安装/覆盖/回滚、真实存储故障与 ACL。
 - 已知遗留：`qa-authchannel.ps1` 夹具模式与当前通道实现不兼容（`ExecuteAsync` 要求 `--from-settings` 且拒绝 `--fixture-dir`），本工单不恢复夹具后门。
 
