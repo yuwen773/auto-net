@@ -17,6 +17,7 @@ pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1            # Release build +
 pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1 -Publish   # also builds artifacts/AutoNet-win-x64/
 pwsh.exe -NoLogo -NoProfile -File scripts/qa-tray.ps1          # renders tray/log UI to artifacts/ui-qa/*.png
 pwsh.exe -NoLogo -NoProfile -File scripts/qa-avalonia-prototype.ps1  # Avalonia prototype QA: publish/single-file, lifecycle, single instance + elevation, themes, installer layout
+pwsh.exe -NoLogo -NoProfile -File scripts/check-released-reader.ps1   # 回滚兼容判定校验：冻结的 v0.3.1 读取副本与真实旧版逐条比对（工单 #36）
 ```
 
 `build.ps1` resolves the SDK from `.tools/dotnet/dotnet.exe` first, then PATH. It runs the tests by invoking `tests/AutoNet.Tests/bin/Release/net10.0-windows/AutoNet.Tests.dll` and fails the build on a nonzero exit. Build evidence (`build.json`, `tests.txt`) lands in the gitignored `artifacts/validation/`.

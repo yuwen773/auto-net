@@ -270,6 +270,78 @@ internal static class LegacyStateRegression
     private static readonly string[] KnownExtraFields = ["ChannelFallbackCause", "BlocksSubmissions"];
 
     /// <summary>
+    /// 回滚判定语料：每条覆盖已发布 v0.3.1 读取规则的一个分支。冻结副本必须与真实
+    /// v0.3.1 代码对这些输入给出同一判定；<c>scripts/check-released-reader.ps1</c>
+    /// 会用 tag 构建真实旧版并逐条比对。
+    /// </summary>
+    internal static readonly (string Name, string Content)[] ReleasedReaderCorpus =
+    [
+        ("fingerprint", new string('A', 64)),
+        ("legacy-failure-only", "{\"Failure\":19}"),
+        ("legacy-failure-undefined", "{\"Failure\":99}"),
+        ("legacy-failure-string", "{\"Failure\":\"CredentialsRejected\"}"),
+        ("legacy-empty-object", "{}"),
+        ("missing-fields", "{\"Version\":1}"),
+        ("duplicate-version", "{\"Version\":1,\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":1" + Tail + "}"),
+        ("version-unknown", "{\"Version\":99,\"State\":0,\"Failure\":0,\"Attempts\":0" + Tail + "}"),
+        ("state-unknown", "{\"Version\":1,\"State\":42,\"Failure\":0,\"Attempts\":1" + Tail + "}"),
+        ("failure-unknown", "{\"Version\":1,\"State\":1,\"Failure\":21,\"Attempts\":1" + Tail + "}"),
+        ("attempts-out-of-range", "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":4" + Tail + "}"),
+        ("pending-without-attempts", "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":0" + Tail + "}"),
+        ("cooling-bad-delay", "{\"Version\":1,\"State\":2,\"Failure\":12,\"Attempts\":1,\"RetryDelaySeconds\":1" + TailTime + "}"),
+        ("non-cooling-with-retry-fields", "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":5" + TailTime + "}"),
+        ("inconsistent-state-failure", "{\"Version\":1,\"State\":3,\"Failure\":0,\"Attempts\":1" + Tail + "}"),
+        ("ready-consistent", "{\"Version\":1,\"State\":0,\"Failure\":0,\"Attempts\":0" + Tail + "}"),
+        ("pending-consistent", "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":1" + Tail + "}"),
+        ("cooling-consistent", "{\"Version\":1,\"State\":2,\"Failure\":12,\"Attempts\":1,\"RetryDelaySeconds\":60" + TailTime + "}"),
+        ("terminal-consistent", "{\"Version\":1,\"State\":4,\"Failure\":15,\"Attempts\":1" + Tail + "}"),
+        ("invalid-json", "{broken"),
+        ("empty-file", ""),
+        ("non-object", "[]"),
+        ("current-record", CurrentRecord(new AuthenticationBlock(PortalFailure.InteractionRequired)
+        { Attempts = 3, Revision = Guid.NewGuid(), ChannelFallbackCause = PortalFailure.MissingGatewayParameters })),
+        ("current-record-ready", CurrentRecord(new AuthenticationBlock { State = AuthenticationState.Ready, Attempts = 2, Revision = Guid.NewGuid() }))
+    ];
+
+    /// <summary>v0.3.1 形状记录的默认尾部：零秒冷却、默认时刻与空修订。</summary>
+    private const string Tail =
+        ",\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"00000000-0000-0000-0000-000000000000\"}";
+
+    /// <summary>带非默认冷却时刻的尾部，用于冷却相关分支。</summary>
+    private const string TailTime =
+        ",\"RetryNotBefore\":\"2026-01-01T00:00:00+00:00\",\"Revision\":\"00000000-0000-0000-0000-000000000000\"}";
+
+    /// <summary>语料写入：每个用例一个目录，目录内固定文件名为 auth-block.txt。</summary>
+    internal static int WriteCorpus(string directory)
+    {
+        foreach (var (name, content) in ReleasedReaderCorpus)
+        {
+            var caseDirectory = Path.Combine(directory, name);
+            Directory.CreateDirectory(caseDirectory);
+            File.WriteAllText(Path.Combine(caseDirectory, "auth-block.txt"), content);
+        }
+        return 0;
+    }
+
+    /// <summary>冻结副本在语料上的判定，逐条输出“名称|状态|失败|次数|是否阻断”。</summary>
+    internal static int RunProbe(string directory)
+    {
+        foreach (var caseDirectory in Directory.GetDirectories(directory).OrderBy(path => path, StringComparer.Ordinal))
+        {
+            var name = Path.GetFileName(caseDirectory);
+            var path = Path.Combine(caseDirectory, "auth-block.txt");
+            var content = File.Exists(path) ? File.ReadAllText(path) : "";
+            var block = ReadAsReleasedV031(content);
+            Console.WriteLine($"{name}|{block.State}|{block.Failure}|{block.Attempts}|{block.BlocksSubmissions}");
+        }
+        return 0;
+    }
+
+    /// <summary>当前版本真实序列化出的记录，供语料验证旧版对新增字段的忽略。</summary>
+    private static string CurrentRecord(AuthenticationBlock block) =>
+        JsonSerializer.Serialize(block, Storage.Json);
+
+    /// <summary>
     /// 已发布 v0.3.1（tag <c>v0.3.1</c>，2026-10-17）的认证记录读取规则冻结副本，
     /// 逐行对应 <c>git show v0.3.1:src/AutoNet.Core/SafetyStateStore.cs</c> 的
     /// <c>ReadAuthenticationBlock</c>，仅用于回滚验收：它决定“旧版本读到新记录”时是否阻断。
@@ -277,8 +349,8 @@ internal static class LegacyStateRegression
     /// <c>ChannelFallbackCause</c>）会被旧版本忽略，未知版本或未知状态按旧版本语义阻断。
     /// 反序列化复用当前 <see cref="AuthenticationBlock"/> 类型：JSON 字段名一旦变动，
     /// 上面的旧字段名清单会先按缺字段阻断；C# 属性改名而 JSON 名不变时副本会取默认值，
-    /// 这类漂移只能靠对照 tag 复核，新增枚举值则由 <see cref="V031States"/> /
-    /// <see cref="V031Failures"/> 快照拒绝。
+    /// 这类漂移由 <c>scripts/check-released-reader.ps1</c> 用 tag 构建的真实旧版逐条比对，
+    /// 新增枚举值则由 <see cref="V031States"/> / <see cref="V031Failures"/> 快照拒绝。
     /// 无法解析的输入与 v0.3.1 一样捕获 <see cref="JsonException"/> 并返回阻断。
     /// </summary>
     private static AuthenticationBlock ReadAsReleasedV031(string content)

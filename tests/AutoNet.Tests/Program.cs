@@ -12,6 +12,8 @@ if (args.FirstOrDefault() == "--handoff-test-peer") return await SettingsHandoff
 if (args.FirstOrDefault() == "--settings-save-peer") return SettingsSaveRegression.RunSavePeer(args);
 if (args.FirstOrDefault() == "--settings-lock-peer") return SettingsSaveRegression.RunLockPeer(args);
 if (args.FirstOrDefault() == "--submission-budget-test-peer") return SubmissionBudgetRegression.RunPeer(args);
+if (args.FirstOrDefault() == "--legacy-reader-corpus") return args.Length > 1 ? LegacyStateRegression.WriteCorpus(args[1]) : 2;
+if (args.FirstOrDefault() == "--legacy-reader-probe") return args.Length > 1 ? LegacyStateRegression.RunProbe(args[1]) : 2;
 if (args.FirstOrDefault() == "--submission-retry-test-peer") return SubmissionRetryRegression.RunPeer(args);
 if (args.FirstOrDefault() == "--channel-session-test-peer") { Console.WriteLine("READY"); Console.Out.Flush(); Console.ReadLine(); return 0; }
 if (args.FirstOrDefault() == "--channel-job-test-peer") return ChannelJobRegression.RunPeer();
