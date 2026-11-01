@@ -100,18 +100,22 @@ internal static class LegacyStateRegression
             using (var worker = new MonitorWorker(new AcceptanceRegression.StoredEnvironment(online, store), online.Clock))
                 Require(worker.RunOnceAsync(default).GetAwaiter().GetResult().CredentialsBlocked, "外网在线时旧记录被放宽");
             Require(File.ReadAllText(path) == LegacyFingerprint, "在线轮次改写了旧记录");
-            // 升级写入失败时旧记录原样保留，阻断不变。
-            using (var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            // 升级写入失败时旧记录原样保留，阻断不变。持有句柄时只拒绝 Delete 共享，
+            // 读取照常成功，原子替换在写入处失败——失败点确实在写，不是在读。
+            using (var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read | FileShare.Write))
             {
+                // 读取必须仍然成功，失败点才确实落在写入而不是读取。
+                Require(store.LoadAuthenticationBlock() == legacy, "持有句柄期间读取失败，写入失败点无法判定");
                 try
                 {
                     store.TryTransitionAuthentication(legacy, new AuthenticationBlock(PortalFailure.BindingRejected) { Attempts = 1, Revision = Guid.NewGuid() });
-                    throw new Exception("锁定期间仍完成升级写入");
+                    throw new Exception("替换被拒期间仍完成升级写入");
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             }
             Require(store.LoadAuthenticationBlock() == legacy && File.ReadAllText(path) == LegacyFingerprint, "升级写入失败改变了旧记录");
             var upgraded = new AuthenticationBlock(PortalFailure.BindingRejected) { Attempts = 3, Revision = Guid.NewGuid() };
+            // 生产写入认证状态走的就是这条修订比较写入（MonitorWorker.PersistAuthenticationBlock）。
             Require(store.TryTransitionAuthentication(legacy, upgraded), "旧记录无法升级为当前记录");
             Require(store.LoadAuthenticationBlock() == upgraded && upgraded.BlocksSubmissions, "升级后阻断被放宽");
             Require(File.ReadAllText(path) != LegacyFingerprint, "升级未写入当前记录");
@@ -163,6 +167,7 @@ internal static class LegacyStateRegression
                 var released = ReadAsReleasedV031(File.ReadAllText(path));
                 Require(released is { BlocksSubmissions: true } && released.Attempts == block.Attempts,
                     "旧版本放行或改写了新阻断记录：" + block.State + "/" + block.Failure);
+                RequireReleasedFieldContract(path, block.State.ToString());
             }
             // 冷却记录表示预检失败、尚未发出凭据；旧版本可继续，但不得凭空增加次数。
             store.BlockAuthentication(new(PortalFailure.Timeout)
@@ -177,9 +182,17 @@ internal static class LegacyStateRegression
             var ready = ReadAsReleasedV031(File.ReadAllText(path));
             Require(ready is { BlocksSubmissions: false, Attempts: 2 }, "旧版本误读就绪记录");
             // 冻结读取器必须与 v0.3.1 一样把无法解析的输入当作阻断，而不是抛异常。
-            Require(ReadAsReleasedV031("{broken")?.BlocksSubmissions == true, "旧版本读取损坏记录时未阻断");
-            Require(ReadAsReleasedV031("{\"Failure\":\"CredentialsRejected\"}")?.BlocksSubmissions == true,
+            Require(ReadAsReleasedV031("{broken").BlocksSubmissions, "旧版本读取损坏记录时未阻断");
+            Require(ReadAsReleasedV031("{\"Failure\":\"CredentialsRejected\"}").BlocksSubmissions,
                 "旧版本读取字符串枚举时未阻断");
+            // 未来新增的状态、失败分类或版本号在旧版眼中必须仍是未知值并被阻断。
+            Require(ReadAsReleasedV031(FullRecord(state: 7)).BlocksSubmissions, "旧版本未把未知状态当作阻断");
+            Require(ReadAsReleasedV031(FullRecord(version: 2)).BlocksSubmissions, "旧版本未把未知版本当作阻断");
+            Require(ReadAsReleasedV031(JsonSerializer.Serialize(new
+            {
+                Version = 1, State = 1, Failure = 21, Attempts = 1,
+                RetryDelaySeconds = 0, RetryNotBefore = default(DateTimeOffset), Revision = Guid.NewGuid()
+            }, Storage.Json)).BlocksSubmissions, "旧版本未把未知失败分类当作阻断");
         })),
         ("旧数据兼容：回滚后遗留耗尽额度不因人工解除获得新额度", () => WithStore((store, directory) =>
         {
@@ -205,10 +218,10 @@ internal static class LegacyStateRegression
         }))
     ];
 
-    private static string FullRecord(int version = 1, int state = 0, int failure = 0, int attempts = 1) =>
+    private static string FullRecord(int version = 1, int state = 0, int attempts = 1) =>
         JsonSerializer.Serialize(new
         {
-            Version = version, State = state, Failure = failure, Attempts = attempts,
+            Version = version, State = state, Failure = 0, Attempts = attempts,
             RetryDelaySeconds = 0, RetryNotBefore = default(DateTimeOffset), Revision = Guid.NewGuid()
         }, Storage.Json);
 
@@ -233,8 +246,28 @@ internal static class LegacyStateRegression
     private static void RequireNoSubmissionQuota(SafetyStateStore store, string directory)
     {
         Require(store.LoadSubmissionBudget() is null, "历史记录凭空获得了提交额度");
-        Require(!File.Exists(Path.Combine(directory, "submission-budget.json")), "历史记录写入了提交额度文件");
+        // 额度文件是 SafetyStateStore 的私有路径，这里按前缀匹配，改名后仍能发现残留。
+        Require(Directory.GetFiles(directory, "submission-budget*.json").Length == 0, "历史记录写入了提交额度文件");
     }
+
+    /// <summary>
+    /// 当前记录的 JSON 形状必须保留 v0.3.1 认知的七个字段名，旧版因此仍能解释这条记录；
+    /// 额外字段只能是被旧版忽略的已知扩展，改名或新增语义字段都会让回滚判定失去依据。
+    /// </summary>
+    private static void RequireReleasedFieldContract(string path, string label)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var names = document.RootElement.EnumerateObject().Select(property => property.Name).ToArray();
+        Require(ReleasedFieldNames.All(name => names.Count(candidate => candidate == name) == 1),
+            "当前记录缺少旧版字段：" + label);
+        Require(names.Except(ReleasedFieldNames).All(name => KnownExtraFields.Contains(name)),
+            "当前记录出现旧版未知的字段：" + label);
+    }
+
+    // v0.3.1 认知的字段名，以及当前版本新增且旧版会忽略的字段（通道失败原因与派生阻断标志）。
+    private static readonly string[] ReleasedFieldNames =
+        ["Version", "State", "Failure", "Attempts", "RetryDelaySeconds", "RetryNotBefore", "Revision"];
+    private static readonly string[] KnownExtraFields = ["ChannelFallbackCause", "BlocksSubmissions"];
 
     /// <summary>
     /// 已发布 v0.3.1（tag <c>v0.3.1</c>，2026-10-17）的认证记录读取规则冻结副本，
@@ -242,11 +275,13 @@ internal static class LegacyStateRegression
     /// <c>ReadAuthenticationBlock</c>，仅用于回滚验收：它决定“旧版本读到新记录”时是否阻断。
     /// 字段集合与枚举值固定为旧版本认知；当前版本新增的字段（如
     /// <c>ChannelFallbackCause</c>）会被旧版本忽略，未知版本或未知状态按旧版本语义阻断。
-    /// 反序列化复用当前 <see cref="AuthenticationBlock"/> 类型：字段改名会让这里读不到旧字段
-    /// 而按缺字段阻断，新增枚举值由 <see cref="V031States"/> / <see cref="V031Failures"/> 快照拒绝。
+    /// 反序列化复用当前 <see cref="AuthenticationBlock"/> 类型：JSON 字段名一旦变动，
+    /// 上面的旧字段名清单会先按缺字段阻断；C# 属性改名而 JSON 名不变时副本会取默认值，
+    /// 这类漂移只能靠对照 tag 复核，新增枚举值则由 <see cref="V031States"/> /
+    /// <see cref="V031Failures"/> 快照拒绝。
     /// 无法解析的输入与 v0.3.1 一样捕获 <see cref="JsonException"/> 并返回阻断。
     /// </summary>
-    private static AuthenticationBlock? ReadAsReleasedV031(string content)
+    private static AuthenticationBlock ReadAsReleasedV031(string content)
     {
         if (content.Length == 64 && content.All(Uri.IsHexDigit)) return new();
         try

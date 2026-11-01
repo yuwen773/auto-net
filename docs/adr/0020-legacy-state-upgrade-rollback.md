@@ -8,9 +8,9 @@
 - **升级只经显式、修订比较的写入。** 旧记录被读成阻断块后，只有显式的 `TryTransitionAuthentication`（或人工解除后的新写入）才能落成当前记录。升级写入保留阻断；失败-only 记录升级时保留原始 `Failure`，不降级为无原因的通用阻断。
 - **回滚安全不依赖提交额度文件。** `submission-budget.json` 是 #31 新增的独立记录，v0.3.1 不认识也不会读取。因此只要“可能已发出凭据”，`auth-block.txt` 必须自身是 `SubmissionPending`（或明确的终态拒绝），旧版本读到它同样拒绝提交。额度文件只收紧、不放宽认证阻断。回滚后旧版本忽略额度文件：对提交未知或终态记录它仍按永久暂停阻断，不会重复提交；对表示“尚未发出凭据”的冷却记录或已确认成功的就绪记录，它按自身策略继续，但不会获得超出旧版上限的次数。
 - **回滚不授予新额度。** 旧版本人工解除只删除 `auth-block.txt`，不改独立额度。重新升级后若额度已耗尽，仍按 `Exhausted` 停止提交；只有 #34 的人工“重新开始认证”审计重置能清零。
-- **新增状态或字段的兼容规则。** 当前记录保持 `Version = 1` 和旧版认知的七个字段；新增字段（如 `ChannelFallbackCause`）被旧版反序列化忽略。任何会被旧版误读为“不阻断”的变化都必须提升 `Version`，让旧版走 `UnsupportedVersion` 保守阻断；新增枚举值在旧版中因 `Enum.IsDefined` 失败同样阻断。不得为兼容而删除旧字段。
+- **新增状态或字段的兼容规则。** 当前记录保持 `Version = 1` 和旧版认知的七个字段（`Version`、`State`、`Failure`、`Attempts`、`RetryDelaySeconds`、`RetryNotBefore`、`Revision`），字段名与语义不得变动；新增字段只能落在旧版反序列化会忽略的位置（当前为 `ChannelFallbackCause` 与派生的 `BlocksSubmissions`）。任何会改变旧版可见字段语义的变化必须提升 `Version`，让旧版走 `UnsupportedVersion` 保守阻断；新增枚举值在旧版中因 `Enum.IsDefined` 失败同样阻断。不得为兼容而删除旧字段。
 - **回滚不是热切换。** 回滚前应停止服务并保留受限目录状态；旧版本不理解提交额度，恢复的是永久暂停语义。安装器覆盖/回退与真实门户仍需单独验收。
 
 ## 证据
 
-`tests/AutoNet.Tests/LegacyStateRegression.cs` 覆盖全部历史形态、旧记录转新记录、以及 v0.3.1 读取规则的冻结副本对当前记录的判定。冻结副本固定旧版字段集合与枚举值，未来新增状态在旧版视角必须仍是未知值。详见 [#36 实施记录](../progress/36-legacy-upgrade-rollback.md)。真实安装/回退、真实存储故障与真实门户未执行。
+`tests/AutoNet.Tests/LegacyStateRegression.cs` 覆盖全部历史形态、旧记录转新记录、以及 v0.3.1 读取规则的冻结副本对当前记录的判定。冻结副本固定旧版字段集合与枚举值快照，未来新增状态在旧版视角必须仍是未知值；并断言当前记录保留旧版七个字段名、额外字段只限旧版忽略的已知扩展。详见 [#36 实施记录](../progress/36-legacy-upgrade-rollback.md)。真实安装/回退、真实存储故障与真实门户未执行。
