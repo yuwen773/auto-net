@@ -210,7 +210,9 @@ if [[ -z "$REPO_ROOT" ]]; then
 fi
 cd "$REPO_ROOT"
 
-ENV_FILE="${ENV_FILE:-artifacts/validation/live-acceptance/answers.env}"
+# 库在顶部已把 ENV_FILE 默认成 .env；这里必须无条件覆盖，否则结果会落到
+# 仓库根目录的 .env。需要自定义路径时用 AUTONET_ACCEPTANCE_ENV。
+ENV_FILE="${AUTONET_ACCEPTANCE_ENV:-artifacts/validation/live-acceptance/answers.env}"
 OUT_DIR="$(dirname "$ENV_FILE")"
 mkdir -p "$OUT_DIR"
 
@@ -264,7 +266,7 @@ authorize() {
 online_now() {
   local out
   out=$(_ps "\$s = Get-Content -LiteralPath '$STATUS_JSON' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if (\$s) { [int[]][char[]]\$s.Direct -join ',' }" 2>/dev/null | tr -d '\r')
-  [[ "$out" == "22806,32593,21487,20542" ]]
+  [[ "$out" == "22806,32593,21487,36798" ]]
 }
 
 # data_fingerprint — SHA256 of the six durable private records, one per line.
