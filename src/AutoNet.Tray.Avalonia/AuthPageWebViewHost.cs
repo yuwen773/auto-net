@@ -40,11 +40,9 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     private AuthPageHostSnapshot snapshot = AuthPageHostSnapshot.NotAttached;
     private AuthChannelProxy? proxy;
     private ChannelProcessJob? job;
-    private CoreWebView2Environment? environment;
-    private WebView? webView;
-    private string? sessionDir;
-    private bool browserStarted;
-    private bool browserStarting;
+    private AuthPageBrowserSession? session;
+    private int generation;
+    private int attachAttempt;
     private int disposed;
 
     public AuthPageWebViewHost(
@@ -67,30 +65,38 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     public async Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default)
     {
         if (Volatile.Read(ref disposed) != 0) return Snapshot;
-        // 浏览器正在创建时不要重入：重试会拆掉正在初始化的会话。
-        if (browserStarting) return Snapshot;
         if (channelSessionActive())
         {
             // 后台通道会话进行中：不创建第二个浏览器，也不保留自己的代理。
             EnterChannelSession();
             return Snapshot;
         }
-        if (Snapshot.Status == AuthPageHostStatus.Attached)
+        if (Snapshot.Status is AuthPageHostStatus.Attached or AuthPageHostStatus.Attaching)
         {
-            // 已附着但浏览器还没起来（例如首次附着时原生表面尚未创建）：补一次初始化。
-            if (proxy is not null && !browserStarted && surface.IsCreated)
-                _ = InitializeBrowserAsync(cancellationToken);
+            // 已附着或正在加载：不重新导航；只补一次错过的表面初始化。
+            if (session is { NavigationRequested: false, Starting: false } pending && proxy is not null && surface.IsCreated)
+                _ = InitializeBrowserAsync(pending, cancellationToken);
             return Snapshot;
         }
 
         // 上一次尝试残留的代理/浏览器不再有意义；进程组保留并复用，避免重复嵌套作业。
         ResetBrowser();
         await StopProxyAsync().ConfigureAwait(true);
+        // 附着本身也会跨越 await：旧尝试晚于新尝试完成时，只能丢弃自己刚启动的代理，
+        // 不能覆盖新尝试的 proxy 字段或发布旧状态。
+        var attempt = Interlocked.Increment(ref attachAttempt);
         var (failure, boundary) = await AuthPageNetworkBoundary.PrepareAsync(
             portal, runtimeProbe(), readLink, EnsureJob, startProxy, cancellationToken).ConfigureAwait(true);
+        var current = attempt == Volatile.Read(ref attachAttempt) && Volatile.Read(ref disposed) == 0;
         if (failure is not null)
         {
-            Publish(failure);
+            if (current) Publish(failure);
+            return Snapshot;
+        }
+        if (!current)
+        {
+            try { await boundary!.Proxy.DisposeAsync().ConfigureAwait(true); }
+            catch (Exception) { }
             return Snapshot;
         }
 
@@ -101,12 +107,11 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
             EnterChannelSession();
             return Snapshot;
         }
-        // 先发布 Attached：视图只在 HostAvailable（即 Attached）时挂载原生表面，
-        // 表面创建后由 OnSurfaceCreated 再启动浏览器。浏览器启动失败会经 FailBrowser 降级为 Failed。
-        Publish(new AuthPageHostSnapshot(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
-            AuthPageModel.HostCopyFor(AuthPageHostStatus.Attached).Detail));
+        // 发布 Attaching：视图据此挂载原生表面（HostAvailable 包含该状态），
+        // 表面创建后启动浏览器；只有导航成功才会进入 Attached。
+        var created = BeginSession();
         // 原生表面可能还没创建（首次打开时视图尚未渲染），由 CreateNativeControlCore 回调补上。
-        if (surface.IsCreated) _ = InitializeBrowserAsync(cancellationToken);
+        if (surface.IsCreated) _ = InitializeBrowserAsync(created, cancellationToken);
         return Snapshot;
     }
 
@@ -141,44 +146,73 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     {
         surface.IsVisible = visible;
         // 每次切回本页时补一次初始化：OnSurfaceCreated 只触发一次，错过就再没有入口。
-        if (visible && !channelSessionActive() && proxy is not null && !browserStarted && !browserStarting
-            && surface.IsCreated)
-            _ = InitializeBrowserAsync(CancellationToken.None);
+        if (visible && !channelSessionActive() && proxy is not null && surface.IsCreated
+            && session is { NavigationRequested: false, Starting: false } pending)
+            _ = InitializeBrowserAsync(pending, CancellationToken.None);
     }
 
     /// <summary>原生表面创建后回调：此时才有 HWND 可承载 WebView2。</summary>
     internal void OnSurfaceCreated()
     {
-        if (proxy is not null && !channelSessionActive()) _ = InitializeBrowserAsync(CancellationToken.None);
+        if (proxy is not null && !channelSessionActive() && session is { } pending)
+            _ = InitializeBrowserAsync(pending, CancellationToken.None);
     }
 
     private ChannelProcessJob EnsureJob() => job ??= ChannelProcessJob.CreateForCurrentProcess();
 
-    private async Task InitializeBrowserAsync(CancellationToken cancellationToken)
+    /// <summary>开始一次新的附着尝试：递增代次，使旧会话的异步回调和事件全部失效。</summary>
+    private AuthPageBrowserSession BeginSession()
     {
-        if (browserStarted || browserStarting || proxy is null || job is null) return;
-        browserStarting = true;
+        ResetBrowser();
+        generation++;
+        var created = new AuthPageBrowserSession(generation,
+            Path.Combine(Path.GetTempPath(), "autonet-authpage-" + Guid.NewGuid().ToString("N")));
+        session = created;
+        Publish(new AuthPageHostSnapshot(AuthPageHostStatus.Attaching, AuthPageModel.PortalAddress, false,
+            AuthPageModel.HostCopyFor(AuthPageHostStatus.Attaching).Detail));
+        return created;
+    }
+
+    /// <summary>代次校验：旧会话、已销毁宿主和被替换的会话都不再允许写状态或导航。</summary>
+    private bool IsCurrent(AuthPageBrowserSession candidate) =>
+        IsCurrentSession(Volatile.Read(ref disposed), Volatile.Read(ref generation), session, candidate);
+
+    internal static bool IsCurrentSession(int disposed, int generation, AuthPageBrowserSession? active, AuthPageBrowserSession candidate) =>
+        disposed == 0 && !candidate.IsDisposed && candidate.Generation == generation && ReferenceEquals(active, candidate);
+
+    private async Task InitializeBrowserAsync(AuthPageBrowserSession current, CancellationToken cancellationToken)
+    {
+        if (!IsCurrent(current) || current.Starting || current.NavigationRequested || proxy is null || job is null) return;
+        var processJob = job;
+        var proxyPort = proxy.Port;
+        current.Starting = true;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(current.Cancellation.Token, cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
         try
         {
-            sessionDir = Path.Combine(Path.GetTempPath(), "autonet-authpage-" + Guid.NewGuid().ToString("N"));
             // 必须用命名参数：位置参数会把用户数据目录绑定到 browserExecutableFolder，
             // 随后误报“运行时未安装”，把路径问题伪装成环境问题。
-            var options = new CoreWebView2EnvironmentOptions(AuthPageBrowserArguments.For(proxy.Port));
-            environment = await CoreWebView2Environment.CreateAsync(
-                browserExecutableFolder: null, userDataFolder: sessionDir, options: options)
-                .WaitAsync(cancellationToken).ConfigureAwait(true);
-            webView = new WebView { Dock = WinForms.DockStyle.Fill };
-            surface.Add(webView);
-            await webView.EnsureCoreWebView2Async(environment).WaitAsync(cancellationToken).ConfigureAwait(true);
+            var options = new CoreWebView2EnvironmentOptions(AuthPageBrowserArguments.For(proxyPort));
+            var environment = await CoreWebView2Environment.CreateAsync(
+                browserExecutableFolder: null, userDataFolder: current.Directory, options: options)
+                .WaitAsync(timeout.Token).ConfigureAwait(true);
+            if (!IsCurrent(current)) return;
+            current.Environment = environment;
+            environment.BrowserProcessExited += (_, _) => current.MarkExited();
+            var view = new WebView { Dock = WinForms.DockStyle.Fill };
+            current.WebView = view;
+            surface.Add(view);
+            await view.EnsureCoreWebView2Async(environment).WaitAsync(timeout.Token).ConfigureAwait(true);
             // 后台会话可能在初始化等待期间开始：不再导航，立即拆除并投影会话状态，避免第二条会话。
+            if (!IsCurrent(current)) return;
             if (channelSessionActive())
             {
                 EnterChannelSession();
                 return;
             }
-            var core = webView.CoreWebView2;
-            if (!job.Contains(checked((int)core.BrowserProcessId)) ||
-                environment.GetProcessInfos().Any(info => !job.Contains(checked((int)info.ProcessId))))
+            var core = view.CoreWebView2;
+            if (!processJob.Contains(checked((int)core.BrowserProcessId)) ||
+                environment.GetProcessInfos().Any(info => !processJob.Contains(checked((int)info.ProcessId))))
                 throw new InvalidOperationException("浏览器进程未全部进入会话进程组。");
 
             core.Settings.AreDevToolsEnabled = false;
@@ -190,12 +224,16 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
             core.Settings.IsPasswordAutosaveEnabled = false;
             core.Settings.IsGeneralAutofillEnabled = false;
             // 浏览器进程崩溃后 WebView2 不会自行恢复；降级为可手动重试的失败状态，而不是停在 Attached。
+            // 事件可能来自已被替换的会话：在界面线程再次校验代次后才允许改写状态。
             core.ProcessFailed += (_, e) =>
             {
-                if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.BrowserProcessExited
+                if (e.ProcessFailedKind is not (CoreWebView2ProcessFailedKind.BrowserProcessExited
                     or CoreWebView2ProcessFailedKind.RenderProcessExited
-                    or CoreWebView2ProcessFailedKind.FrameRenderProcessExited)
-                    Dispatcher.UIThread.Post(() => FailBrowser(new InvalidOperationException("浏览器进程异常退出。")));
+                    or CoreWebView2ProcessFailedKind.FrameRenderProcessExited)) return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (IsCurrent(current)) FailBrowser(new InvalidOperationException("浏览器进程异常退出。"));
+                });
             };
             // 弹窗仍会走同一个浏览器与代理，但认证页只承载一个固定门户页面，不需要新窗口。
             core.NewWindowRequested += (_, e) => e.Handled = true;
@@ -204,18 +242,35 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
             {
                 if (!IsPortalOrigin(e.Uri)) e.Cancel = true;
             };
+            // 只有导航成功才算附着：导航失败/被取消时页面是空白的，状态不能停在“已加载”。
+            // 首次结果决定状态；确认成功之后的主框架导航（门户自身跳转、被来源校验取消的跳转）
+            // 不再改写页面状态，避免迟到的失败事件把已加载页面打成可重试失败。
+            core.NavigationCompleted += (_, e) => Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsCurrent(current)) return;
+                switch (AuthPageNavigationGate.Decide(current.NavigationConfirmed, e.IsSuccess))
+                {
+                    case AuthPageNavigationGate.Decision.Loaded:
+                        current.NavigationConfirmed = true;
+                        Publish(new AuthPageHostSnapshot(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
+                            AuthPageModel.HostCopyFor(AuthPageHostStatus.Attached).Detail));
+                        break;
+                    case AuthPageNavigationGate.Decision.Failed:
+                        FailBrowser(new InvalidOperationException("门户页面导航未成功。"));
+                        break;
+                }
+            });
+            current.NavigationRequested = true;
             core.Navigate(AuthPageModel.PortalAddress);
-            browserStarted = true;
-            Publish(new AuthPageHostSnapshot(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
-                AuthPageModel.HostCopyFor(AuthPageHostStatus.Attached).Detail));
         }
         catch (Exception e)
         {
-            FailBrowser(e);
+            // 旧代次的取消/销毁异常只丢弃；只有当前会话的失败才改写页面状态。
+            if (IsCurrent(current)) FailBrowser(e);
         }
         finally
         {
-            browserStarting = false;
+            current.Starting = false;
         }
     }
 
@@ -240,19 +295,22 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
             AuthPageModel.HostCopyFor(status).Detail));
     }
 
-    /// <summary>丢弃浏览器会话，但保留进程组；下一次附着会重新创建浏览器。</summary>
+    /// <summary>
+    /// 丢弃当前浏览器会话，但保留进程组；下一次附着会重新创建浏览器。
+    /// 取消旧代次后，其未完成的 await 与事件一律被代次校验丢弃。
+    /// </summary>
     private void ResetBrowser()
     {
-        try { webView?.Dispose(); } catch (Exception) { }
-        webView = null;
-        environment = null;
-        browserStarted = false;
-        // 失败的会话不再保留：临时目录里有门户 cookie/缓存，重试前丢弃，避免越积越多。
-        if (sessionDir is { } dir)
-        {
-            sessionDir = null;
-            _ = Task.Run(() => DeleteSessionDirectory(dir));
-        }
+        // 任何拆除动作都会让在途的边界准备失效：它完成时不得再改写新会话的代理或状态。
+        Interlocked.Increment(ref attachAttempt);
+        var discarding = session;
+        session = null;
+        if (discarding is null) return;
+        discarding.Cancel();
+        var exited = discarding.BrowserExited;
+        discarding.Dispose();
+        // 临时目录里有门户 cookie/缓存：等浏览器进程退出后再删，失败留给启动清扫。
+        _ = Task.Run(() => DeleteSessionDirectoryAsync(discarding.Directory, exited));
     }
 
     private void Publish(AuthPageHostSnapshot value) => Volatile.Write(ref snapshot, value);
@@ -269,25 +327,100 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
-        try { webView?.Dispose(); } catch (Exception) { }
-        webView = null;
-        environment = null;
+        generation++;
+        ResetBrowser();
         // 不阻塞界面线程等待代理收尾；监听端口随进程/宿主销毁一并消失。
         _ = StopProxyAsync();
-        if (sessionDir is { } dir) _ = Task.Run(() => DeleteSessionDirectory(dir));
     }
 
-    private static void DeleteSessionDirectory(string path)
+    /// <summary>
+    /// 删除一次会话的临时用户目录：先有界等待浏览器进程退出，再按退避重试。
+    /// 总等待约 30 秒；失败不抛给调用方，目录留给下次启动清扫。
+    /// </summary>
+    private static async Task DeleteSessionDirectoryAsync(string path, Task browserExited)
     {
-        for (var attempt = 0; attempt < 3; attempt++)
+        try { await browserExited.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
+        catch (System.TimeoutException) { }
+        for (var attempt = 0; attempt < 6; attempt++)
         {
             try
             {
                 if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
                 return;
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Thread.Sleep(500); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * (attempt + 1))).ConfigureAwait(false);
+            }
         }
+    }
+
+    /// <summary>启动时清扫超过 24 小时的会话目录；不阻塞界面线程。</summary>
+    internal static void SweepStaleSessions() =>
+        _ = Task.Run(() => SweepStaleSessions(Path.GetTempPath(), DateTimeOffset.UtcNow));
+
+    /// <summary>
+    /// 只删除本应用创建、已过期且当前没有会话占用的临时目录。
+    /// 名称必须是 <c>autonet-authpage-</c> + 32 位十六进制；必须是临时目录的直接子项；
+    /// 目录本身是重解析点时跳过；删除时也不进入任何重解析点。删除异常只跳过该项。
+    /// </summary>
+    internal static int SweepStaleSessions(string tempRoot, DateTimeOffset now, TimeSpan? maxAge = null)
+    {
+        var removed = 0;
+        var cutoff = now - (maxAge ?? TimeSpan.FromHours(24));
+        try
+        {
+            foreach (var directory in Directory.EnumerateDirectories(tempRoot, "autonet-authpage-*"))
+            {
+                try
+                {
+                    if (!IsOwnedSessionDirectory(directory, tempRoot)) continue;
+                    if (AuthPageBrowserSession.IsActiveDirectory(directory)) continue;
+                    if (Directory.GetLastWriteTimeUtc(directory) >= cutoff.UtcDateTime) continue;
+                    DeleteOwnedDirectory(directory);
+                    removed++;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or DirectoryNotFoundException) { }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or DirectoryNotFoundException) { }
+        return removed;
+    }
+
+    /// <summary>名称形状校验：固定前缀 + Guid "N" 的 32 位十六进制，防止误删相近名称。</summary>
+    internal static bool IsOwnedSessionName(string name)
+    {
+        const string prefix = "autonet-authpage-";
+        if (name.Length != prefix.Length + 32 || !name.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        foreach (var character in name.AsSpan(prefix.Length))
+            if (!char.IsAsciiHexDigit(character)) return false;
+        return true;
+    }
+
+    internal static bool IsOwnedSessionDirectory(string path, string tempRoot)
+    {
+        try
+        {
+            if (!IsOwnedSessionName(Path.GetFileName(path))) return false;
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
+            return string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)),
+                Path.GetFullPath(tempRoot).TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary>逐项删除但决不进入重解析点；残留链接会让本次删除失败并留给下次清扫。</summary>
+    private static void DeleteOwnedDirectory(string root)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root))
+        {
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+            if ((attributes & FileAttributes.Directory) != 0) DeleteOwnedDirectory(entry);
+            else File.Delete(entry);
+        }
+        Directory.Delete(root, recursive: false);
     }
 
     /// <summary>

@@ -44,6 +44,7 @@ public sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
 {
     private readonly PowerGuard power = new();
     private readonly SafetyStateStore safety = new(Storage.Private);
+    private readonly UuServiceProbe uuProbe = new(HealthChecks.UuService, TimeSpan.FromSeconds(2));
     public Settings? LoadSettings() => Storage.LoadSettings();
     public Credentials? LoadCredentials() => Storage.LoadCredentials();
     public AuthenticationBlock? LoadAuthenticationBlock() => safety.LoadAuthenticationBlock();
@@ -73,8 +74,12 @@ public sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
 
     public async Task<(string SystemPath, string Uu)> CheckAuxiliaryAsync(Settings settings, WifiLink link, CancellationToken ct)
     {
-        var uu = HealthChecks.UuService();
+        // The UU read touches SCM, process enumeration and the TCP table synchronously. It runs
+        // on a single-flight background probe with a bounded wait, so a slow read can neither
+        // stall the monitoring thread nor accumulate one abandoned task per cycle.
+        var uuTask = uuProbe.ReadAsync(ct);
         var path = await HealthChecks.SystemPathAsync(settings, link, ct);
+        var uu = await uuTask;
         if (settings.UuEndpoint != "")
         {
             using var system = HealthChecks.SystemClient(settings.ProxyUrl);

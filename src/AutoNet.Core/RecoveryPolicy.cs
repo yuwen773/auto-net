@@ -258,6 +258,16 @@ public sealed record StatusSnapshot
     public string NextAttemptAction { get; init; } = nameof(ActionKind.None);
     public double? LastRecoverySeconds { get; init; }
     public DateTimeOffset? LastRecoveryAt { get; init; }
+    /// <summary>
+    /// Last cycle duration measured on the monotonic clock from the start of the round up to and
+    /// including the status write itself. Older producers omit it; the tray must treat null as
+    /// "not reported".
+    /// </summary>
+    public double? CycleMilliseconds { get; init; }
+    /// <summary>Aggregated slowest stage of the last cycle; a fixed diagnostic name, never page text.</summary>
+    public string SlowestStage { get; init; } = "";
+    /// <summary>Aggregated milliseconds for <see cref="SlowestStage"/>; null when no stage was measured.</summary>
+    public double? SlowestStageMilliseconds { get; init; }
     public DateTimeOffset? ActionStartedAt { get; init; }
     public DateTimeOffset? ActionFinishedAt { get; init; }
     public DateTimeOffset? AuthenticationAcceptedAt { get; init; }

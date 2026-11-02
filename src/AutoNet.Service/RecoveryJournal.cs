@@ -153,7 +153,8 @@ internal sealed class RecoveryJournal(IMonitorEnvironment environment, TimeProvi
         "SubmissionBudgetExhausted" => "提交额度已耗尽", "SubmissionBudgetNearLimit" => "提交额度即将用尽",
         "SubmissionBudgetReset" => "提交额度已重置",
         "PortalLayoutChanged" => "门户疑似改版", "BrowserFallbackRequested" => "浏览器兜底请求",
-        "DisconnectRecheck" => "断线前重新核验", _ => "诊断事件"
+        "DisconnectRecheck" => "断线前重新核验", "SlowCycle" => "检测轮次偏慢", "SlowStep" => "检测阶段偏慢",
+        _ => "诊断事件"
     };
 
     private void WriteFailed(Exception error)

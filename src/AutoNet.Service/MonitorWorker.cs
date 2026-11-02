@@ -10,6 +10,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
 {
     private readonly RecoveryPolicy policy = new();
     private readonly RecoveryJournal journal = new(environment, clock);
+    private CycleTrace trace = new(clock);
     private readonly DateTimeOffset clockOrigin = clock.GetUtcNow();
     private readonly long clockStart = clock.GetTimestamp();
     private string budgetKey = "";
@@ -118,6 +119,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         projectedUsername = null;
         authChannelMode = AuthChannelModes.ManualOnly;
         notifiedThisCycle = false;
+        trace = new CycleTrace(clock);
         journal.BeginCycle();
         try { return await TickAsync(ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -144,6 +146,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 Detail = "检测将自动重试；" + lastError
             });
         }
+        finally { trace.Flush(journal); }
     }
 
     private async Task<StatusSnapshot> TickAsync(CancellationToken ct)
@@ -244,18 +247,19 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         {
             journal.Stage = "InternetProbe";
             var http = DirectClient(link);
-            internet = await HealthChecks.InternetDetailedAsync(http, ct);
+            internet = await trace.MeasureAsync("InternetProbe", () => HealthChecks.InternetDetailedAsync(http, ct));
             direct = internet.Online;
             journal.Recovered("MainCycle/InternetProbe");
             if (!direct)
             {
                 journal.Stage = "PortalInspection";
-                inspection = await new DrcomPortal(http, new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct);
+                inspection = await trace.MeasureAsync("PortalInspection",
+                    () => new DrcomPortal(http, new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct));
                 portalState = inspection.ObservedState;
             }
         }
         else { directHttp?.Dispose(); directHttp = null; directKey = ""; }
-        await RecheckSubmissionAsync(settings, link, ct);
+        await trace.MeasureAsync("RecheckSubmission", () => RecheckSubmissionAsync(settings, link, ct));
         submissionDecision = submissionRetry.Evaluate(submissionBudget, clock.GetUtcNow(), clock.GetElapsedTime(clockStart), direct);
         var observation = new Observation(link.State, direct, portalState);
         var diagnostic = new DiagnosticData
@@ -369,7 +373,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 try
                 {
                     var current = environment.LoadSettings();
-                    var result = current != settings || current?.Enabled != true ? new WifiRequestResult(WifiRequestStatus.Skipped) : environment.ConnectWifi(settings);
+                    var result = current != settings || current?.Enabled != true
+                        ? new WifiRequestResult(WifiRequestStatus.Skipped)
+                        : trace.Measure("WifiRequest", () => environment.ConnectWifi(settings));
                     wifiRequest = result;
                     if (result.Status == WifiRequestStatus.Issued) journal.Recovered("WifiRequest");
                     if (result.Status == WifiRequestStatus.Failed) journal.Fault("WifiRequest", "Windows 拒绝 Wi-Fi 连接请求", new System.ComponentModel.Win32Exception(result.NativeError ?? 0));
@@ -400,7 +406,9 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                         policy.Decide(observation, PolicyNow, settings.Enabled, credentials is not null, settings.AllowActiveDisconnect);
                     }
                     ct.ThrowIfCancellationRequested();
-                    var result = check.Allowed ? environment.DisconnectWifi(settings) : new WifiRequestResult(WifiRequestStatus.Skipped);
+                    var result = check.Allowed
+                        ? trace.Measure("WifiRequest", () => environment.DisconnectWifi(settings))
+                        : new WifiRequestResult(WifiRequestStatus.Skipped);
                     wifiRequest = result;
                     if (result.Status == WifiRequestStatus.Issued) journal.Recovered("WifiRequest");
                     if (result.Status == WifiRequestStatus.Failed) journal.Fault("WifiRequest", "Windows 拒绝 Wi-Fi 断开请求", new System.ComponentModel.Win32Exception(result.NativeError ?? 0));
@@ -431,8 +439,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 try
                 {
                     authenticationAcceptedAt = null;
-                    lastAuthentication = PrepareAuthentication()
-                        ? await new DrcomPortal(DirectClient(link), new Uri(settings.PortalOrigin), step =>
+                    if (!PrepareAuthentication())
+                        lastAuthentication = new(LoginResult.Unsupported, PortalStage.Submission, PortalFailure.SafetyPersistence);
+                    else
+                    {
+                        var portal = new DrcomPortal(DirectClient(link), new Uri(settings.PortalOrigin), step =>
                         {
                             journal.Stage = "Authentication/" + step.Stage;
                             journal.Write("PortalStep", "认证 HTTP 步骤；只记录固定阶段、状态和耗时。", new()
@@ -441,9 +452,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                                 ElapsedMilliseconds = step.ElapsedMilliseconds, Error = step.Error,
                                 HttpStatus = step.HttpStatus, Parameters = step.Evidence
                             });
-                        }, budgets, qaSubmissionLost).LoginDetailedAsync(credentials!, ct, allowUnknownStatus: retryingSubmission,
-                            authorizeSubmissionAsync: review => AuthorizeSubmissionAsync(settings, link, ct, review))
-                        : new(LoginResult.Unsupported, PortalStage.Submission, PortalFailure.SafetyPersistence);
+                        }, budgets, qaSubmissionLost);
+                        lastAuthentication = await trace.MeasureAsync("AuthenticationTotal",
+                            () => portal.LoginDetailedAsync(credentials!, ct, allowUnknownStatus: retryingSubmission,
+                                authorizeSubmissionAsync: review => AuthorizeSubmissionAsync(settings, link, ct, review)));
+                    }
                     detail = lastAuthentication.SafeSummary;
                     if (lastAuthentication.Failure != PortalFailure.None) journal.Fault("Authentication", detail);
                     else journal.Recovered("Authentication");
@@ -768,7 +781,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         journal.Stage = stage;
         try
         {
-            var result = read();
+            var result = trace.Measure(stage, read);
             journal.Recovered("MainCycle/" + stage);
             return result;
         }
@@ -816,11 +829,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         // New client: do not reuse sockets or the earlier cycle's failure evidence.
         using var fresh = environment.CreateDirectClient(link);
         journal.Stage = "DisconnectRecheckInternet";
-        internet = await HealthChecks.InternetDetailedAsync(fresh, ct);
+        internet = await trace.MeasureAsync("DisconnectRecheckInternet", () => HealthChecks.InternetDetailedAsync(fresh, ct));
         journal.Recovered("MainCycle/DisconnectRecheckInternet");
         if (internet.Online) return Result(false, link, true, "新鲜 HTTPS 检查已恢复，取消断线。", "FreshInternetRecovered");
         journal.Stage = "DisconnectRecheckPortal";
-        inspection = await new DrcomPortal(fresh, new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct);
+        inspection = await trace.MeasureAsync("DisconnectRecheckPortal",
+            () => new DrcomPortal(fresh, new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct));
         if (inspection.ObservedState == PortalState.NeedsLogin) return Result(false, link, false, "最新状态明确需认证，取消断线并优先等待安全认证恢复。", "AuthenticateRequired");
         ct.ThrowIfCancellationRequested();
         current = ReadStep("SettingsRead", environment.LoadSettings);
@@ -876,7 +890,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             lastAuxiliary = auxiliaryStarted = clock.GetTimestamp();
             discardAuxiliary = false;
             auxiliaryCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            auxiliaryTask = StartAuxiliaryAsync(settings, link, auxiliaryCancellation.Token);
+            auxiliaryTask = trace.Measure("AuxiliaryStart", () => StartAuxiliaryAsync(settings, link, auxiliaryCancellation.Token));
         }
     }
 
@@ -1219,9 +1233,16 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         if (key != lastEvent && Log(status.State, status.Detail, snapshot: status)) lastEvent = key;
         status = status with { LastError = journal.ErrorExcept("StatusWrite") };
         journal.Stage = "StatusWrite";
-        try { environment.WriteStatus(status); journal.Recovered("StatusWrite"); }
+        try { trace.Measure("StatusWrite", () => environment.WriteStatus(status)); journal.Recovered("StatusWrite"); }
         catch (Exception e) when (IsStorageFailure(e)) { journal.Fault("StatusWrite", "状态写入失败", e); }
-        return status with { LastError = lastError };
+        var slowest = trace.Slowest;
+        return status with
+        {
+            LastError = lastError,
+            CycleMilliseconds = Math.Round(trace.TotalMilliseconds, 1),
+            SlowestStage = slowest?.Name ?? "",
+            SlowestStageMilliseconds = slowest is { } stage ? Math.Round(stage.Milliseconds, 1) : null
+        };
     }
 
     private bool Log(string action, string detail, double? seconds = null, StatusSnapshot? snapshot = null)

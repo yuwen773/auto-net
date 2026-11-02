@@ -367,6 +367,15 @@ internal static class MonitorRegression
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var resumed = await worker.RunOnceAsync(default);
             Require(fixture.Connects == 3 && resumed.State != "检测异常");
         }),
+        ("监测：辅助检测卡死时停止服务不被阻塞", async () =>
+        {
+            var pending = new TaskCompletionSource<(string, string)>();
+            var fixture = new MonitorFixture { Auxiliary = (_, _) => pending.Task };
+            var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            try { await Task.Run(worker.Dispose).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (System.TimeoutException) { throw new Exception("辅助检测卡死时 Dispose 被阻塞"); }
+        }),
         ("监测：辅助取消后重新检测", async () =>
         {
             var fixture = new MonitorFixture { Auxiliary = (n, _) => n == 1
@@ -391,6 +400,27 @@ internal static class MonitorRegression
             pending.SetResult(("过时结果", "过时结果"));
             var discarded = await worker.RunOnceAsync(default);
             Require(discarded.Tunnel != "过时结果");
+            Require((await worker.RunOnceAsync(default)).Tunnel == "重新检测成功");
+        }),
+        ("监测：辅助检测阻塞多个周期仍单飞且主循环持续推进", async () =>
+        {
+            var pending = new TaskCompletionSource<(string, string)>();
+            var fixture = new MonitorFixture { Link = new(false, null, null, 7, []),
+                Auxiliary = (n, _) => n == 1 ? pending.Task : Task.FromResult(("重新检测成功", "会话待实测")) };
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            await worker.RunOnceAsync(default);
+            for (var round = 0; round < 8; round++)
+            {
+                fixture.Clock.Advance(TimeSpan.FromSeconds(20));
+                var status = await worker.RunOnceAsync(default);
+                Require(status.Tunnel.Contains("超时"));
+            }
+            // 阻塞期间不启动重叠检测，恢复动作照常按退避推进。
+            Require(fixture.AuxiliaryCalls == 1 && fixture.Connects >= 2);
+            pending.SetResult(("过时结果", "过时结果"));
+            Require((await worker.RunOnceAsync(default)).Tunnel != "过时结果");
+            fixture.Clock.Advance(TimeSpan.FromSeconds(20));
+            await worker.RunOnceAsync(default);
             Require((await worker.RunOnceAsync(default)).Tunnel == "重新检测成功");
         }),
         ("监测：系统时间跳变不改变重试和恢复耗时", async () =>

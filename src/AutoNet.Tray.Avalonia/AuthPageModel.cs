@@ -53,6 +53,12 @@ internal sealed record AuthPageContent : PageContent
     public bool HostAvailable { get; init; }
     public bool HostRetryVisible { get; init; }
 
+    /// <summary>
+    /// 手动认证修复的只读投影（工单 #24 / ADR-0009）：从只读诊断页移到本页后，
+    /// 入口与警示同页呈现。null 表示当前装配不提供入口。
+    /// </summary>
+    public AuthChannelLaunchState? Channel { get; init; }
+
     /// <summary>渲染指纹：全部可见字段的稳定拼接；不变时视图跳过重建。</summary>
     public string ContentKey { get; init; } = "";
 }
@@ -67,7 +73,8 @@ internal static class AuthPageModel
     public const string PortalAddress = RecoveryPolicy.FallbackPortalPageUrl;
 
     /// <summary>把一次状态读取与宿主状态投影为页面内容；<paramref name="reading"/> 为 null 表示尚未取得状态。</summary>
-    public static AuthPageContent From(StatusReading? reading, AuthPageHostSnapshot host)
+    public static AuthPageContent From(StatusReading? reading, AuthPageHostSnapshot host,
+        AuthChannelLaunchState? channel = null)
     {
         var trusted = reading?.Trusted == true;
         var snapshot = trusted ? reading!.Snapshot : null;
@@ -87,10 +94,12 @@ internal static class AuthPageModel
             HostStatus = host.Status,
             HostTitle = hostCopy.Title,
             HostDetail = host.Detail.Length > 0 ? host.Detail : hostCopy.Detail,
-            HostAvailable = host.Status == AuthPageHostStatus.Attached,
+            // 加载中也需要挂载原生表面：只有表面存在，WebView2 才能创建 HWND。
+            HostAvailable = host.Status is AuthPageHostStatus.Attached or AuthPageHostStatus.Attaching,
             HostRetryVisible = host.Status is AuthPageHostStatus.RuntimeMissing
                 or AuthPageHostStatus.NetworkBoundaryUnavailable
-                or AuthPageHostStatus.Failed
+                or AuthPageHostStatus.Failed,
+            Channel = channel
         };
         return content with { ContentKey = Fingerprint(content) };
     }
@@ -401,6 +410,9 @@ internal static class AuthPageModel
     /// </summary>
     internal static AuthPageHostCopy HostCopyFor(AuthPageHostStatus status) => status switch
     {
+        AuthPageHostStatus.Attaching => new("正在加载门户页面",
+            "浏览器正在初始化并加载固定门户地址；流量只经本地允许列表代理，加载完成前不显示页面内容。",
+            "正在加载固定门户页面；本页不填表、不提交凭据。"),
         AuthPageHostStatus.Attached => new("门户页面",
             "已加载固定门户根地址；本页不填表、不提交，后台认证继续独立运行。",
             "浏览器宿主已附着，但没有可显示的表面。"),
@@ -424,5 +436,7 @@ internal static class AuthPageModel
     private static string Fingerprint(AuthPageContent content) => string.Join("\u001f",
         content.Trusted, content.Phase, content.StatusTitle, content.StatusExplanation, content.NextStep,
         content.PortalAddress, content.BackgroundNote, content.HostStatus, content.HostTitle, content.HostDetail,
-        content.HostAvailable, content.HostRetryVisible);
+        content.HostAvailable, content.HostRetryVisible,
+        content.Channel?.Mode, content.Channel?.SignalPresent, content.Channel?.Requested,
+        content.Channel?.LastConclusion, content.Channel?.Busy);
 }

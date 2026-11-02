@@ -3,7 +3,7 @@ using System.Diagnostics;
 
 namespace AutoNet.Tray.Avalonia;
 
-/// <summary>诊断页只读投影：通道模式（服务广播）、结构信号、最近结论与忙态。</summary>
+/// <summary>认证页手动修复入口的只读投影：通道模式（服务广播）、结构信号、最近结论与忙态。</summary>
 internal sealed record AuthChannelLaunchState(
     string Mode, bool SignalPresent, bool Requested, string? LastConclusion, bool Busy);
 
@@ -11,7 +11,7 @@ internal sealed record AuthChannelLaunchState(
 /// 内嵌认证通道发起器（工单 #24 / ADR-0009）：消费服务置位的 AuthChannelRequested 授予
 /// （授予键 = NotBefore，进程内去重），经 UAC 提权启动辅助进程——辅助进程自身读取机器级
 /// 凭据（LocalMachine DPAPI），凭据不经托盘进程、不经命令行。发起前重读可信快照；
-/// ManualOnly 仅诊断页手动入口可达；Off 一律拒绝。结果文件在下一轮观察时回读
+/// ManualOnly 仅“上网认证”页的手动入口可达（诊断页保持只读）；Off 一律拒绝。结果文件在下一轮观察时回读
 /// （路径 + 时刻双核对 → 结论映射），结论经诊断页呈现；气泡通知与可见化属工单 #25。
 /// </summary>
 internal sealed class AuthChannelLauncher
@@ -41,6 +41,7 @@ internal sealed class AuthChannelLauncher
     private DateTimeOffset? launchedAt;
     private DateTimeOffset? lastConsumedAt;
     private string? lastConclusion;
+    private int manualLaunching;
     private Process? activeProcess;
     private StatusSnapshot? lastReading;
 
@@ -64,17 +65,37 @@ internal sealed class AuthChannelLauncher
 
     public string ResultPath => resultPath;
 
-    /// <summary>诊断页手动入口（无参）：使用最近一次管道快照；无快照视为状态不可信。</summary>
+    /// <summary>认证页手动入口（无参）：使用最近一次管道快照；无快照视为状态不可信。</summary>
     public ObserveOutcome LaunchManually()
     {
         if (lastReading is not { } reading) return ObserveOutcome.UntrustedState;
         return LaunchManually(reading);
     }
 
-    /// <summary>诊断页投影：模式/信号/最近结论。</summary>
+    /// <summary>
+    /// 认证页手动入口：先重新读取一次可信快照，避免用过期缓存决定“有结构信号”。
+    /// 读取失败、状态不可信、模式关闭或信号消失都返回受控结果，不启动进程。
+    /// 连续点击只有第一次进入流程，其余返回忙态；界面侧另有确认框守卫，这里是第二道防线。
+    /// </summary>
+    public async Task<ObserveOutcome> LaunchManuallyAsync()
+    {
+        if (Interlocked.Exchange(ref manualLaunching, 1) != 0) return ObserveOutcome.Busy;
+        try
+        {
+            StatusSnapshot? fresh;
+            try { fresh = await refresh(); }
+            catch (Exception) { return ObserveOutcome.UntrustedState; }
+            if (fresh is null) return ObserveOutcome.UntrustedState;
+            lastReading = fresh;
+            return LaunchManually(fresh);
+        }
+        finally { Volatile.Write(ref manualLaunching, 0); }
+    }
+
+    /// <summary>认证页投影：模式/信号/最近结论。</summary>
     public AuthChannelLaunchState Describe() => Describe(lastReading);
 
-    /// <summary>诊断页手动入口（ManualOnly/Automatic 可达）：信号存在即允许，Off 拒绝。</summary>
+    /// <summary>认证页手动入口（ManualOnly/Automatic 可达）：信号存在即允许，Off 拒绝。</summary>
     public ObserveOutcome LaunchManually(StatusSnapshot reading)
     {
         if (reading.AuthChannelMode == AuthChannelModes.Off) return ObserveOutcome.ModeOff;
@@ -109,7 +130,7 @@ internal sealed class AuthChannelLauncher
     /// </summary>
     public bool SessionActive => IsProcessActive() || launchActive?.Invoke() == true;
 
-    /// <summary>诊断页投影：模式/信号/最近结论。</summary>
+    /// <summary>认证页投影：模式/信号/最近结论。</summary>
     public AuthChannelLaunchState Describe(StatusSnapshot? reading) => new(
         Mode: reading?.AuthChannelMode ?? AuthChannelModes.ManualOnly,
         SignalPresent: reading?.PortalLayoutSuspected ?? false,

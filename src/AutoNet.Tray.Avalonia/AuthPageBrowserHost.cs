@@ -9,7 +9,9 @@ internal enum AuthPageHostStatus
 {
     /// <summary>尚未尝试加载门户页面。</summary>
     NotAttached,
-    /// <summary>已加载固定门户根地址。</summary>
+    /// <summary>网络边界已就绪，浏览器正在初始化并加载固定门户页面；导航尚未确认成功。</summary>
+    Attaching,
+    /// <summary>已成功加载固定门户根地址（导航完成且成功）。</summary>
     Attached,
     /// <summary>后台内嵌认证通道会话进行中：本页只投影该会话的状态，不创建第二个浏览器（工单 #39）。</summary>
     ChannelSessionActive,

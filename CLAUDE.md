@@ -103,6 +103,8 @@ If every IPv4 source is temporarily unavailable, return `Rejected/MissingClientI
 
 `MonitorWorker.Publish` de-duplicates log lines by a key built from the user-visible status fields, so a steady state does not spam the log. Storage and log failures are swallowed into `lastError` and surfaced in the next successful status write — logging never breaks the monitor loop.
 
+`CycleTrace` measures fixed stage names (no URLs, hosts, SSIDs, addresses or exception text) with the injected `TimeProvider`. At the end of every cycle `RunOnceAsync` flushes at most one `SlowCycle` event when the whole round is ≥5000 ms, or up to five `SlowStep` events for stages ≥500 ms. Stage timings may overlap, so the summary ranks work and is not a decomposition of the total. `StatusSnapshot` carries the additive read-only fields `CycleMilliseconds`, `SlowestStage`, `SlowestStageMilliseconds`; `CycleMilliseconds` is measured through the status write itself, and old readers ignore all three. `Flush` runs in the cycle's `finally` and never throws, so a failing log cannot mask the original exception. `scripts/analyze-cycle-timing.ps1` reads the daily jsonl files without touching the service.
+
 ### Recovery loop shape
 
 `ExecuteAsync` runs `RunOnceAsync` in a loop, budgeting ~2 seconds per cycle via `clock.GetElapsedTime`, and calls `Environment.Exit(1)` on an unhandled fault (the service restart policy handles recovery). One `TickAsync`:
@@ -111,7 +113,7 @@ If every IPv4 source is temporarily unavailable, return `Rejected/MissingClientI
 2. Load the persistent disconnect budget for the selected network and reconcile versioned authentication state, retry and pending writes.
 3. Read Wi-Fi. If another profile is connected, `policy.Reset()` and leave the user's choice alone.
 4. If `Ready`, probe direct-internet, then inspect the portal (inspection is skipped entirely when online).
-5. Poll the auxiliary system-path/UU task (cancelled at 3s, restarted every 20s, never overlapping, never blocking the main loop).
+5. Poll the auxiliary system-path/UU task (cancelled at 3s, restarted every 20s, never overlapping, never blocking the main loop). The UU probe (`UuServiceProbe`) is single-flight on a background thread with a 2 s bound: a timed-out read keeps running to completion, its exception is observed, and later rounds reuse that same task instead of starting more; an abandoned late result is discarded by the cycle, never applied.
 6. Record recovery timing when online.
 7. `policy.Decide(...)` → execute at most one action.
 8. Build and publish the snapshot.
@@ -124,9 +126,11 @@ Only one action runs per tick, and every action goes through `policy.Attempted()
 
 - `ProxyHostPolicy` allows the single fixed portal host, normalizing **both** sides (trim, trailing dot, IDN, lowercase) and rejecting suffix/subdomain/parent lookalikes and literal IPs. Plaintext is allowed only on 80 and CONNECT only on 443; request bodies and protocol upgrades (WebSocket) are rejected.
 - Outbound connections go through `DirectNetwork.ConnectAsync`, which pins `IP_UNICAST_IF` and the source address to the selected campus adapter, so traffic cannot leak onto the default route's TUN. `AuthChannelProxy.StartAsync` exposes that connector internally for regression only; there is no host-to-address mapping hook.
-- `AuthPageNetworkBoundary` fails closed: missing runtime, unready campus link, or a proxy that will not start yields `RuntimeMissing`/`NetworkBoundaryUnavailable`, never a direct connection. The browser is launched with `--proxy-server` + `--proxy-bypass-list=<-loopback>`; QUIC and WebRTC non-proxied UDP are disabled. System proxy settings are never read or written.
+- `AuthPageNetworkBoundary` fails closed: missing runtime, unready campus link, or a proxy that will not start yields `RuntimeMissing`/`NetworkBoundaryUnavailable`, never a direct connection. Both browsers take their arguments from the single `AutoNet.Core.AuthPageBrowserArguments` builder: `--proxy-server` + `--proxy-bypass-list=<-loopback>`, QUIC and background networking disabled, and `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`. System proxy settings are never read or written.
 - The campus link comes from the trusted status projection (`App.ReadProjectedLink`), not `Storage.LoadSettings` — the non-elevated tray cannot read `private/`. Browser and tray share a `ChannelProcessJob`; the proxy rejects loopback clients outside that job.
 - The page never runs a second browser (ADR-0017): while an embedded auth-channel session is active (`AuthChannelLauncher.SessionActive`), `IAuthPageBrowserHost.Refresh()` tears down the page's own proxy and browser and projects `ChannelSessionActive`; when the session ends the coordinator re-attaches once, and only if the page was opened before. The page's carrier is projection only — it never submits credentials.
+- `AuthPageBrowserSession` gives each attach attempt a generation and its own cancellation source. Every `await` re-checks `IsCurrent`: a stale navigation-completed, `ProcessFailed`, or initialization failure may only be dropped. `Attaching` is published once the boundary is ready; only a successful `NavigationCompleted` publishes `Attached`. The temporary user-data directory is deleted after a bounded wait for `BrowserProcessExited`, and stale `autonet-authpage-*` directories older than 24 h are swept at startup.
+- The privileged manual repair entry moved from the read-only diagnostics page to the Authentication page (`AuthPageView`): it is shown with an explicit "will request elevation and may submit saved credentials" warning, asks for confirmation before launching, and still goes through `AuthChannelLauncher.LaunchManually`. `DiagnosticsView` carries no launch action.
 
 ### The virtual pointer lives inside the channel page
 

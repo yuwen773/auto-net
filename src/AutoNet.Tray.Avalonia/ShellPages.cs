@@ -22,7 +22,7 @@ internal static class ShellPages
     public static readonly IReadOnlyList<ShellPageInfo> All =
     [
         new(ShellPage.Overview, "概览", "当前网络状态、AutoNet 正在做什么以及下一步操作。"),
-        new(ShellPage.Authentication, "上网认证", "查看学校门户页面与网络/认证状态；只读投影，不填表、不提交凭据。"),
+        new(ShellPage.Authentication, "上网认证", "查看学校门户页面与网络/认证状态；门户页面不填表、不提交凭据，手动认证修复需要单独确认。"),
         new(ShellPage.Diagnostics, "网络诊断", "校园 Wi-Fi、认证、直连与代理/系统路径等五类诊断（只读，不提交凭据）。"),
         new(ShellPage.Logs, "日志", "按日期查看受限范围的日志列表、详情与复制（保持脱敏）。"),
         new(ShellPage.Settings, "设置", "网卡、Wi-Fi 与认证信息；受限设置需要单独的提权操作。")

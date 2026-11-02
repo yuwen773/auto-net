@@ -394,6 +394,95 @@ internal static class AuthChannelRegression
             }
             finally { dir.Delete(recursive: true); }
         })),
+        ("内嵌通道回归：手动入口每次重读快照，忙态与 UAC 取消都不自动重试", async () =>
+        {
+            using var receipt = new TemporaryResultFile();
+            var starts = 0;
+            var busy = false;
+            var reading = Grant() with
+            {
+                AuthChannelMode = AuthChannelModes.ManualOnly,
+                AuthChannelRequested = false,
+                AuthChannelNotBefore = null,
+            };
+            var launcher = new AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(reading),
+                _ => { starts++; return null; },
+                resultPath: receipt.Path,
+                launchActive: () => busy);
+            const AuthChannelLauncher.ObserveOutcome Untrusted = AuthChannelLauncher.ObserveOutcome.UntrustedState;
+
+            // 无任何快照：不可信，不发进程。
+            var untrusted = new AuthChannelLauncher(
+                () => Task.FromResult<StatusSnapshot?>(null),
+                _ => { starts++; return null; },
+                resultPath: receipt.Path);
+            Require(await untrusted.LaunchManuallyAsync() == Untrusted, "无快照仍发起");
+            requireStarts(0);
+
+            // 先经只读观察缓存一份“有信号”的旧快照，再让新读取失去结构信号：
+            // 手动入口必须用新读取，而不是沿用缓存决定发起。
+            await launcher.ObserveAsync(reading);
+            reading = reading with { PortalLayoutSuspected = false };
+            Require(await launcher.LaunchManuallyAsync() == Untrusted, "过期的结构信号仍被用来发起");
+            requireStarts(0);
+
+            // 新读取恢复信号但通道忙：拒绝发起，重置忙态后才允许。
+            reading = reading with { PortalLayoutSuspected = true };
+            busy = true;
+            Require(await launcher.LaunchManuallyAsync() == AuthChannelLauncher.ObserveOutcome.Busy, "忙态仍发起");
+            requireStarts(0);
+            busy = false;
+            Require(await launcher.LaunchManuallyAsync() == AuthChannelLauncher.ObserveOutcome.UacDeclined, "UAC 取消结果不正确");
+            requireStarts(1);
+
+            // UAC 取消后手动入口再次点击仍是一次新的人工动作，但绝不自行重试。
+            Require(await launcher.LaunchManuallyAsync() == AuthChannelLauncher.ObserveOutcome.UacDeclined,
+                "再次点击不是独立的人工尝试");
+            requireStarts(2);
+
+            // 关闭态与读取失败都不发起。
+            reading = reading with { AuthChannelMode = AuthChannelModes.Off };
+            Require(await launcher.LaunchManuallyAsync() == AuthChannelLauncher.ObserveOutcome.ModeOff,
+                "关闭态手动入口仍发起");
+            requireStarts(2);
+            var failing = new AuthChannelLauncher(
+                () => Task.FromException<StatusSnapshot?>(new IOException("fixture-secret")),
+                _ => { starts++; return null; },
+                resultPath: receipt.Path);
+            Require(await failing.LaunchManuallyAsync() == Untrusted, "读取失败被当成可信状态");
+            requireStarts(2);
+
+            void requireStarts(int expected) =>
+                Require(starts == expected, "进程启动次数不符：期望 " + expected + "，实际 " + starts);
+        }),
+        ("内嵌通道回归：连续点击手动入口只允许一次流程", async () =>
+        {
+            using var receipt = new TemporaryResultFile();
+            var starts = 0;
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reading = Grant() with
+            {
+                AuthChannelMode = AuthChannelModes.ManualOnly,
+                AuthChannelRequested = false,
+                AuthChannelNotBefore = null,
+            };
+            var launcher = new AuthChannelLauncher(
+                async () => { await gate.Task; return reading; },
+                _ => { starts++; return null; },
+                resultPath: receipt.Path);
+            var first = launcher.LaunchManuallyAsync();
+            Require(await launcher.LaunchManuallyAsync() == AuthChannelLauncher.ObserveOutcome.Busy,
+                "确认流程进行中第二次点击仍进入流程");
+            gate.SetResult(true);
+            Require(await first == AuthChannelLauncher.ObserveOutcome.UacDeclined, "首次点击结果不正确");
+            Require(starts == 1, "并发点击启动了多个进程：" + starts);
+
+            // 流程结束后门闩释放，下一次点击是新的独立尝试。
+            Require(await launcher.LaunchManuallyAsync() == AuthChannelLauncher.ObserveOutcome.UacDeclined,
+                "流程结束后的点击结果不正确");
+            Require(starts == 2, "流程结束后无法再次点击：" + starts);
+        }),
     ];
 
     private static StatusSnapshot Grant() => new()

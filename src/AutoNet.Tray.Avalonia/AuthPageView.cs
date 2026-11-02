@@ -1,3 +1,4 @@
+using AutoNet.Core;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -9,7 +10,8 @@ namespace AutoNet.Tray.Avalonia;
 /// <summary>
 /// 认证页视觉构建（工单 #37）：状态卡、固定门户地址、浏览器宿主区域与受控说明。
 ///
-/// 视图只渲染传入的 <see cref="AuthPageContent"/>；不读取配置、不访问网络、不提供填表或提交控件。
+/// 视图只渲染传入的 <see cref="AuthPageContent"/>；不读取配置、不访问网络、不提供填表控件。
+/// 手动认证修复只发起“经确认后启动辅助进程”的意图，表单与提交都由辅助进程完成。
 /// 宿主表面由协调器注入，状态刷新只更新文字与宿主表面，**不重建页面**，因此已填内容不会被清空。
 /// </summary>
 internal sealed class AuthPageView
@@ -37,9 +39,12 @@ internal sealed class AuthPageView
     };
     private readonly Border hostSlot;
     private readonly Button retry;
+    private readonly Control channelCard;
+    private readonly TextBlock channelState = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 19, FontSize = 12, Opacity = 0.85 };
+    private readonly Button channelButton;
     private object? surfaceShown;
 
-    public AuthPageView(Action retryRequested, Func<object?> surfaceProvider)
+    public AuthPageView(Action retryRequested, Func<object?> surfaceProvider, Action? channelLaunch = null)
     {
         this.retryRequested = retryRequested;
         this.surfaceProvider = surfaceProvider;
@@ -116,6 +121,36 @@ internal sealed class AuthPageView
         retry.Click += (_, _) => retryRequested();
         host.Children.Add(retry);
         root.Children.Add(ShellTheming.Card(host));
+
+        // 工单 #24 / ADR-0009：会提权并可能提交凭据的手动入口从只读诊断页移到这里，
+        // 与“本页不填表、不提交”的说明分开呈现，并在按钮上方明确警示。
+        var channelBody = new StackPanel { Spacing = 8 };
+        channelBody.Children.Add(new TextBlock
+        {
+            Text = "手动认证修复（会提交凭据）", FontSize = 15, FontWeight = FontWeight.SemiBold
+        });
+        channelBody.Children.Add(new TextBlock
+        {
+            Text = "仅在协议认证反复失败、门户结构变化时使用。点击后会请求管理员授权（UAC），"
+                + "以辅助进程打开固定门户页，并可能自动填写、提交已保存的校园网凭据。",
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 20,
+            FontSize = 12.5
+        });
+        channelBody.Children.Add(channelState);
+        channelButton = ShellAccessibility.Named(new Button
+        {
+            Content = "发起手动认证修复…",
+            MinWidth = 180,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            IsEnabled = false,
+            IsVisible = false
+        }, "手动认证修复：会请求管理员授权并可能提交已保存的凭据");
+        if (channelLaunch is not null) channelButton.Click += (_, _) => channelLaunch();
+        channelBody.Children.Add(channelButton);
+        channelCard = ShellTheming.Card(channelBody);
+        channelCard.IsVisible = false;
+        root.Children.Add(channelCard);
     }
 
     public Control Root => root;
@@ -136,6 +171,17 @@ internal sealed class AuthPageView
         hostSlot.MinHeight = content.HostAvailable ? 360 : 140;
         // 宿主状态文案与模型共用同一映射（#37 审查：避免三处 switch 各自漂移）。
         hostPlaceholder.Text = AuthPageModel.HostCopyFor(content.HostStatus).Placeholder;
+
+        // 手动认证修复入口只在装配了发起器时出现；忙态与模式约束与诊断页原实现一致。
+        channelCard.IsVisible = content.Channel is not null;
+        channelButton.IsVisible = content.Channel is not null;
+        if (content.Channel is { } channel)
+        {
+            channelState.Text = $"模式：{channel.Mode}｜门户结构信号：{(channel.SignalPresent ? "存在" : "无")}"
+                + (channel.LastConclusion is { } conclusion ? $"｜最近结论：{conclusion}" : "")
+                + (channel.Busy ? "｜通道会话进行中" : "");
+            channelButton.IsEnabled = channel.SignalPresent && channel.Mode != AuthChannelModes.Off && !channel.Busy;
+        }
 
         var surface = content.HostAvailable ? surfaceProvider() : null;
         if (ReferenceEquals(surface, surfaceShown)) return;

@@ -108,6 +108,11 @@ public static class HealthChecks
         return new("Unknown", Reason: "无可用 IPv4 选路样本");
     }
 
+    /// <summary>Observes a fault of an abandoned background read so it is not reported by the finalizer.</summary>
+    internal static void Observe(Task task) =>
+        _ = task.ContinueWith(t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
     public static string UuService()
     {
         try
