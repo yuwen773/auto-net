@@ -266,7 +266,7 @@ authorize() {
 online_now() {
   local out
   out=$(_ps "\$s = Get-Content -LiteralPath '$STATUS_JSON' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if (\$s) { [int[]][char[]]\$s.Direct -join ',' }" 2>/dev/null | tr -d '\r')
-  [[ "$out" == "22806,32593,21487,20542" ]]
+  [[ "$out" == "22806,32593,21487,36798" ]]
 }
 
 # data_fingerprint — SHA256 of the six durable private records, one per line.
