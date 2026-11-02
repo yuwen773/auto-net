@@ -21,6 +21,19 @@
 - 第二次断线后约 3.67 秒观察到其他配置连接，20.50 秒时仍未回到校园网。在当前多网络条件下，本次未在 15 秒内自动恢复校园网；切换其他配置触发既定暂停，不能据此裁定没有其他配置竞争的可自动恢复场景是否满足 15 秒门槛，后者仍为 `NOT_RUN`。真实门户凭据提交仍未验证。
 - 事件和脱敏的本机摘要位于 `artifacts/validation/live-assist/`，包括 `outage-summary.md`、`outage-repeat-20261101-212218-d119eaf7a3d24142bb4c040b32e4a29d.jsonl`、`repeat-wlan-events.jsonl` 和 `repeat-service-summary.jsonl`；该目录不入库。
 
+## 现场验收：安装与真实断网恢复（2026-11-02，`b12537c`）
+
+- **安装**：从 `c705b2e` 覆盖安装到 `b12537c`，`install.ps1` 退出码 0；服务于 13:21:00 记录 `SessionStopped`、13:21:01 `SessionStarted`，安装后 `AutoNet.Service.exe` 的 ProductVersion 为 `0.3.1+b12537c5a2045b0f9bd8f5312103568ff9ce2a02`，服务 `Running`。安装前受限数据已备份，13 个文件（含 `upgrade-backup-20261011-…` 子目录）逐一 SHA256 与源一致。此结果仍不覆盖全新安装、失败回滚和卸载。
+- **只读诊断**：`--diagnose` 退出 0，Wi-Fi `Ready`、`DirectOnline=true`、`Portal=LoggedIn`、`Mutations=false`；路由样本推断为 TUN，按设计不构成物理出口证据。`--diagnose-portal` 退出 1、`Submission/MissingGatewayParameters`，`credentialRequestStarted=false`——已登录时没有网关重定向、状态响应也不带 AC/MAC，这是预期形态，不是故障。
+- **存储 ACL**：`private` 目录仅 `SYSTEM` 与 `Administrators` 完全控制。
+- **多 Wi-Fi 竞争下的第一次断开（13:31:13）**：手动断开 `csust-bg` 后第 4 秒，Windows 以自动连接方式连到 `csust-vi`；服务按既定设计执行 `policy.Reset()` 并显示「保留你当前选择的网络，等待校园 Wi-Fi」，其后约 4 分钟无任何动作。这与 2026-11-01 的记录一致：在本机默认配置下，断开的校园网会被另一个保存的校园配置接管，不能用来裁定无竞争环境的恢复时间。期间还观察到一次监测轮次被阻塞约 33 秒（13:31:12–13:31:45，恰好跨越 Windows 切换网络），第二次测试未复现，原因未查明，记为观察而非结论。
+- **第二次断开：真实恢复路径（13:39:41）**：为排除竞争，把 5 个校园配置（`csust-bg`、`csust-vi`、`csust-hr`、`csust-lt`、`csust-hero`）临时改为手动连接，断开后无其他 SSID 可自动接入；测试结束后全部恢复为自动连接并逐条核验。结果：服务 13:39:46 首次观测到断网；13:39:46 决定 `ReconnectWifi`，13:39:47 原生连接请求 `Issued`，`RecoveryActionCompleted`「已请求连接保存的校园 Wi-Fi」；13:40:01 外网内容检查通过。**从断开命令起 19.9 秒，从服务自己的检测点起 15.03 秒**（`status.json` 的 `LastRecoverySeconds=15.03`）。本轮自动动作 1 次，`Attempts` 随后归零，`LastError` 为空。
+- **未发生凭据提交**：整个窗口内没有 `PortalStep`、`SubmissionAuthorized`、`SubmissionResolved` 等事件；门户会话在重连后仍然有效。因此真实凭据提交、认证失效后的重新认证仍为 `NOT_RUN`。
+- **条件披露**：第二次测试通过临时修改 Wi-Fi 配置的连接模式构造「无竞争」条件，与机器默认的多 SSID 自动切换行为不同；恢复后的模式已核验（5 条均为自动连接，`csust-yd` 原本即手动）。这是对产品重连路径的现场验证，不是对本机默认配置下恢复体验的验证。
+- **本次仍未验证**：真实门户凭据提交、认证失效后的重新认证、覆盖安装与失败回滚、跨管理员账户 UAC、真实 WebView2 页面与门户子资源/802 端口、真实通道会话互斥与手动接管、虚拟指针与人工接管、WebRTC/STUN 实际走向。
+- **向导修正**：`scripts/live-acceptance.sh` 的阶段 4 原先在按下回车后立即读取 `status.json`，读到断网前的旧值就会记成「1 秒恢复」。现在必须先观测到服务写出断网状态才开始计时，60 秒内观测不到直接记 `FAIL`，另记录服务自记的 `OUTAGE_SERVICE_SECONDS`。
+- 证据文件：`artifacts/validation/live-acceptance/` 下的 `install.txt`、`diagnose.txt`、`diagnose-portal.txt`、`icacls.txt`、`outage-live.txt` 与 `service-version.txt`；该目录不入库。
+
 ## 人工解除的前置复核：门户已登录且网关无重定向（2026-10-31 现场热修，2026-11-01 补入源码，未发布）
 
 - 现场事实：本机已安装候选包上的人工「解除认证暂停」两次只读复核都失败。第一次是编码问题（Avalonia 宿主未注册代码页提供程序，门户以 `gbk` 返回状态时解码抛 `ArgumentException`），已在 `da4594a` 修复并有隔离进程回归；编码修好后仍失败，失败分类变为 `MissingGatewayParameters`——门户 `/drcom/chkstatus` 报告**已登录**，而网关探针没有 302 重定向，拿不到 MAC/AC 上下文。热修当日以 `archive/auto-net-installed-unblock-fix` 标记直接落在装机目录上，解除结果为 `Released`，但源码侧从未跟进，装机程序与仓库从此分叉。
