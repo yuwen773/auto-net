@@ -269,6 +269,32 @@ online_now() {
   [[ "$out" == "22806,32593,21487,36798" ]]
 }
 
+# offline_now — true only when status.json was read AND does not report 外网可达.
+# A stale file still says 外网可达, so this deliberately stays false until the
+# service itself has written an offline observation.
+offline_now() {
+  local out
+  out=$(_ps "\$s = Get-Content -LiteralPath '$STATUS_JSON' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if (\$s) { [int[]][char[]]\$s.Direct -join ',' }" 2>/dev/null | tr -d '\r')
+  [[ -n "$out" && "$out" != "22806,32593,21487,36798" ]]
+}
+
+# wait_offline <seconds> — poll until offline_now succeeds. The recovery timer
+# must never start before this, otherwise the still-fresh pre-disconnect status
+# makes every outage look recovered in about one second.
+wait_offline() {
+  local deadline=$((SECONDS + ${1:-60}))
+  while (( SECONDS < deadline )); do
+    if offline_now; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+# service_recovery_seconds — the service's own LastRecoverySeconds, if any.
+service_recovery_seconds() {
+  _ps "\$s = Get-Content -LiteralPath '$STATUS_JSON' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if (\$s -and \$s.LastRecoverySeconds -ne \$null) { [string]\$s.LastRecoverySeconds }" 2>/dev/null | tr -d '\r' || true
+}
+
 # data_fingerprint — SHA256 of the six durable private records, one per line.
 # Hashes only; never file contents.
 data_fingerprint() {
@@ -356,28 +382,41 @@ verdict PORTAL_DIAGNOSE_RESULT "门户前置条件（--diagnose-portal）符合�
 # ── 阶段 4：真实断网恢复 ─────────────────────────────────────────────────
 stage "真实断网恢复" 15
 warn "本阶段会主动断开校园 Wi-Fi，可能中断远程会话。"
+warn "若 Windows 随后自动连到另一个已保存的网络，AutoNet 按设计保留你的选择、不会抢回，本阶段只能记 NA。"
 if authorize "断网测试会中断当前网络。"; then
   if online_now; then note "当前状态：外网可达。"; else warn "当前不是外网可达；建议先恢复在线再开始计时。"; fi
   step "断开校园 Wi-Fi（Windows 网络面板或 netsh wlan disconnect）。"
-  pause "断开后按 Enter 开始计时"
-  start=$SECONDS
-  say "等待服务自动重连与重新认证（每 2 秒检查一次，最多 10 分钟）…"
-  recovered=no
-  for _ in $(seq 1 300); do
-    if online_now; then recovered=yes; break; fi
-    sleep 2
-  done
-  elapsed=$((SECONDS - start))
-  write_env OUTAGE_RECOVERY_SECONDS "$elapsed"
-  if [[ "$recovered" == yes ]]; then
-    write_env OUTAGE_RECOVERY_RESULT PASS
-    note "已恢复在线，用时约 ${elapsed} 秒。"
-  else
+  step "确认没有别的已保存网络自动接上；否则这次只测到了 Windows 的自动连接。"
+  pause "断开后按 Enter 开始观测"
+  if ! wait_offline 60; then
+    warn "60 秒内服务仍未写出断网状态，计时没有意义；本次记为 FAIL，不计秒数。"
     write_env OUTAGE_RECOVERY_RESULT FAIL
-    warn "10 分钟内未观察到外网可达；请记录当时状态与日志。"
+    write_env OUTAGE_RECOVERY_SECONDS ""
+    write_env OUTAGE_SERVICE_SECONDS ""
+    ask OUTAGE_NOTES "备注（实际是否断开、是否连到其他网络、看到的界面状态）："
+    write_env OUTAGE_NOTES "$OUTAGE_NOTES"
+  else
+    note "已观测到断网，从这里开始计时（服务自己的检测点）。"
+    start=$SECONDS
+    say "等待服务自动重连与重新认证（每 2 秒检查一次，最多 10 分钟）…"
+    recovered=no
+    for _ in $(seq 1 300); do
+      if online_now; then recovered=yes; break; fi
+      sleep 2
+    done
+    elapsed=$((SECONDS - start))
+    write_env OUTAGE_RECOVERY_SECONDS "$elapsed"
+    write_env OUTAGE_SERVICE_SECONDS "$(service_recovery_seconds)"
+    if [[ "$recovered" == yes ]]; then
+      write_env OUTAGE_RECOVERY_RESULT PASS
+      note "已恢复在线，从观测到断网起约 ${elapsed} 秒；服务自记 $(service_recovery_seconds) 秒。"
+    else
+      write_env OUTAGE_RECOVERY_RESULT FAIL
+      warn "10 分钟内未观察到外网可达；请记录当时状态与日志。"
+    fi
+    ask OUTAGE_NOTES "备注（是否触发主动断线、认证次数、异常）："
+    write_env OUTAGE_NOTES "$OUTAGE_NOTES"
   fi
-  ask OUTAGE_NOTES "备注（是否触发主动断线、认证次数、异常）："
-  write_env OUTAGE_NOTES "$OUTAGE_NOTES"
 else
   SKIPPED+=("真实断网恢复（未授权）")
   write_env OUTAGE_RECOVERY_RESULT SKIPPED
