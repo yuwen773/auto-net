@@ -1,25 +1,6 @@
-using System.Globalization;
 using AutoNet.Core;
 
 namespace AutoNet.Tray.Avalonia;
-
-/// <summary>
-/// 认证页浏览器参数（工单 #38）：只给本 WebView 传代理，**不**改动系统代理。
-/// 代理指向应用自带的环回允许列表代理；<c>&lt;-loopback&gt;</c> 保证回环目标也不会绕过代理。
-/// QUIC、后台联网与 WebRTC 的非代理 UDP 都会绕开 HTTP 代理，必须一并关闭。
-/// </summary>
-internal static class AuthPageBrowserArguments
-{
-    public static string For(int proxyPort)
-    {
-        if (proxyPort is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(proxyPort));
-        return "--proxy-server=http://127.0.0.1:" + proxyPort.ToString(CultureInfo.InvariantCulture)
-            + " --proxy-bypass-list=<-loopback>"
-            + " --disable-quic"
-            + " --disable-background-networking"
-            + " --force-webrtc-ip-handling-policy=disable_non_proxied_udp";
-    }
-}
 
 /// <summary>准备完成的网络边界：已启动的环回允许列表代理。</summary>
 internal sealed record AuthPageBoundary(AuthChannelProxy Proxy);

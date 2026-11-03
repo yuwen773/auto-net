@@ -338,7 +338,7 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_humanCancellationTokenSource.Token);
         timeout.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds + 120));
         var browserOptions = new Microsoft.Web.WebView2.Core.CoreWebView2EnvironmentOptions(
-            $"--proxy-server=http://127.0.0.1:{_proxy.Port} --proxy-bypass-list=<-loopback> --disable-quic --disable-background-networking");
+            AuthPageBrowserArguments.For(_proxy.Port));
         _environment = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(
             browserExecutableFolder: null, userDataFolder: _sessionDir, options: browserOptions);
         _webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };

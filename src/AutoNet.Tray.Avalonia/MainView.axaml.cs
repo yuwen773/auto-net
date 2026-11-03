@@ -37,6 +37,7 @@ public partial class MainView : UserControl
     private LogsContent? logsShown;
     private bool technicalExpanded;
     private bool syncingSelection;
+    private bool channelConfirming;
 
     public MainView()
     {
@@ -209,15 +210,7 @@ public partial class MainView : UserControl
                     {
                         if (diagnosticsExporter is { } exporter) _ = exporter.RunAsync();
                         return Task.FromResult(true);
-                    }),
-                    authChannelLauncher?.Describe(),
-                    authChannelLauncher is { } channel
-                        ? () => RunActionSafelyAsync(() =>
-                        {
-                            _ = channel.LaunchManually();
-                            return Task.FromResult(true);
-                        })
-                        : null);
+                    }));
                 break;
             case LogsContent logs:
                 // 指纹未变化时不重建：日志页交互（日期、筛选、选中行）都会改变指纹，重建即换内容。
@@ -255,13 +248,38 @@ public partial class MainView : UserControl
                 // 指纹未变化时跳过重复渲染；切页会清空指纹缓存，返回时仍会重新渲染同一实例。
                 if (!authGate.ShouldRender(auth)) return;
                 ClearShown(except: auth);
-                var authView = authGate.View(() => new AuthPageView(
+                AuthPageView? pendingView = null;
+                pendingView = authGate.View(() => new AuthPageView(
                     () => RunActionSafelyAsync(async () =>
                     {
                         if (authPage is { } coordinator) await coordinator.RetryAsync();
                         return true;
                     }),
-                    () => authPage?.Surface));
+                    () => authPage?.Surface,
+                    // 会提权并可能提交凭据，先明确确认；取消时不启动辅助进程。
+                    // 连续点击只允许一个确认流程；发起器会再次读取可信快照并拒绝忙态。
+                    () => RunActionSafelyAsync(async () =>
+                    {
+                        if (authChannelLauncher is not { } channel || channelConfirming) return true;
+                        channelConfirming = true;
+                        try
+                        {
+                            if (!await ConfirmWindow.AskAsync("手动认证修复（会提交凭据）",
+                                    "这会请求管理员授权并启动辅助进程，打开固定门户页，可能自动填写并提交已保存的校园网凭据。"
+                                    + "仅在协议认证失败且你确认要提交时继续。",
+                                    "确认发起"))
+                            {
+                                pendingView?.SetChannelNotice("已取消：未请求管理员授权，也未启动辅助进程。");
+                                return true;
+                            }
+                            var outcome = await channel.LaunchManuallyAsync();
+                            // 受控结果必须呈现：不可信/关闭/忙/UAC 取消不能表现为“点了没反应”。
+                            pendingView?.SetChannelNotice(AuthChannelLauncher.ManualOutcomeText(outcome));
+                            return true;
+                        }
+                        finally { channelConfirming = false; }
+                    })));
+                var authView = pendingView!;
                 authView.Render(auth);
                 pageHost.Content = authView.Root;
                 break;

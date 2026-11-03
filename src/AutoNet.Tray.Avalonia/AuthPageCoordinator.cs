@@ -22,6 +22,7 @@ internal sealed class AuthPageCoordinator : IDisposable
 {
     private readonly IAuthPageBrowserHost host;
     private readonly Action<Action> dispatch;
+    private readonly Func<AuthChannelLaunchState?>? channelState;
     private StatusReading? lastReading;
     private AuthPageHostSnapshot? failureOverride;
     private AuthPageHostSnapshot? failureObserved;
@@ -37,11 +38,16 @@ internal sealed class AuthPageCoordinator : IDisposable
     /// 界面线程调度器。默认同步执行，便于无 UI 的回归；生产装配传入 Avalonia 的
     /// <c>Dispatcher.UIThread</c>。协调器自身不引用任何 UI 类型。
     /// </param>
-    public AuthPageCoordinator(IAuthPageBrowserHost host, Action<Action>? dispatch = null)
+    /// <param name="channelState">
+    /// 手动认证修复卡片的只读投影。延迟绑定：发起器在协调器之后装配，这里只读取当前状态。
+    /// </param>
+    public AuthPageCoordinator(IAuthPageBrowserHost host, Action<Action>? dispatch = null,
+        Func<AuthChannelLaunchState?>? channelState = null)
     {
         this.host = host;
         this.dispatch = dispatch ?? (action => action());
-        current = AuthPageModel.From(null, host.Snapshot);
+        this.channelState = channelState;
+        current = AuthPageModel.From(null, host.Snapshot, channelState?.Invoke());
     }
 
     public IAuthPageBrowserHost Host => host;
@@ -72,7 +78,7 @@ internal sealed class AuthPageCoordinator : IDisposable
                 try { host.Refresh(); }
                 catch (Exception) { }
             }
-            content = current = AuthPageModel.From(reading, Snapshot());
+            content = current = AuthPageModel.From(reading, Snapshot(), channelState?.Invoke());
             NoteHostState();
             if (!disposed) Updated?.Invoke(current);
             ResumeAfterChannelSession();
@@ -81,12 +87,13 @@ internal sealed class AuthPageCoordinator : IDisposable
     }
 
     /// <summary>
-    /// 记录“本页曾经成功附着过”：只有它才允许会话结束后自动恢复。受控失败会清掉这个事实，
-    /// 未附着与会话进行中都不改变它——前者是恢复的起点，后者不是失败。
+    /// 记录“本页打开过且边界已就绪”：只有它才允许会话结束后自动恢复。Attaching 也算——
+    /// 页面已打开、代理已启动，只是导航尚未完成；这不等于宣称已加载（状态仍是 Attaching）。
+    /// 受控失败会清掉这个事实，未附着与会话进行中都不改变它。
     /// </summary>
     private void NoteHostState()
     {
-        if (host.Snapshot.Attached) hadAttached = true;
+        if (host.Snapshot.Attached || host.Snapshot.Status == AuthPageHostStatus.Attaching) hadAttached = true;
         else if (host.Snapshot.Status is AuthPageHostStatus.RuntimeMissing
             or AuthPageHostStatus.NetworkBoundaryUnavailable or AuthPageHostStatus.Failed)
             hadAttached = false;
@@ -161,7 +168,7 @@ internal sealed class AuthPageCoordinator : IDisposable
             return Publish(() =>
             {
                 NoteHostState();
-                return AuthPageModel.From(lastReading, Snapshot());
+                return AuthPageModel.From(lastReading, Snapshot(), channelState?.Invoke());
             });
         }
         catch (OperationCanceledException)
@@ -178,7 +185,7 @@ internal sealed class AuthPageCoordinator : IDisposable
                 failureOverride = new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false,
                     AuthPageModel.HostCopyFor(AuthPageHostStatus.Failed).Detail);
                 hadAttached = false;
-                return AuthPageModel.From(lastReading, failureOverride);
+                return AuthPageModel.From(lastReading, failureOverride, channelState?.Invoke());
             });
         }
         return current;

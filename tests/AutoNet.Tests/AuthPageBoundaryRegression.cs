@@ -168,6 +168,9 @@ internal static class AuthPageBoundaryRegression
             Require(args.Contains("--proxy-server=http://127.0.0.1:43210", StringComparison.Ordinal), "缺少本 WebView 的代理参数");
             Require(args.Contains("--proxy-bypass-list=<-loopback>", StringComparison.Ordinal), "回环目标可能绕过代理");
             Require(args.Contains("--disable-quic", StringComparison.Ordinal), "QUIC 可能绕过 HTTP 代理");
+            Require(args.Contains("--disable-background-networking", StringComparison.Ordinal),
+                "后台联网可能绕过代理");
+            // 展示页与提权提交通道共用这一构造器：提交路径同样不得有非代理 UDP 出站。
             Require(args.Contains("--force-webrtc-ip-handling-policy=disable_non_proxied_udp", StringComparison.Ordinal),
                 "WebRTC 可能绕过代理");
             // 系统代理/PAC 的开关不在参数里：本实现只配置这一个 WebView。
@@ -177,6 +180,14 @@ internal static class AuthPageBoundaryRegression
             Require(!args.Contains("--no-proxy-server", StringComparison.Ordinal), "参数包含直连开关");
             Throws<ArgumentOutOfRangeException>(() => AuthPageBrowserArguments.For(0));
             Throws<ArgumentOutOfRangeException>(() => AuthPageBrowserArguments.For(70000));
+
+            // 参数模板只能存在于 Core：生产程序集若重新内嵌自己的参数串，就会再次漂移。
+            var root = AppContext.BaseDirectory;
+            Require(CountUtf16(Path.Combine(root, "AutoNet.Core.dll"), "--proxy-server") == 1,
+                "Core 中代理参数模板数量不符");
+            foreach (var assembly in new[] { "AutoNet.AuthChannel.dll", "AutoNet.Tray.Avalonia.dll" })
+                Require(CountUtf16(Path.Combine(root, assembly), "--proxy-server") == 0,
+                    assembly + " 仍内嵌自己的代理参数");
         })),
         ("认证页边界：网卡只从可信状态投影读取", () => Sync(() =>
         {
@@ -235,6 +246,22 @@ internal static class AuthPageBoundaryRegression
     private static byte[] Concat(byte[] first, byte[] second) => [.. first, .. second];
 
     private static void Require(bool condition, string message) { if (!condition) throw new Exception(message); }
+
+    /// <summary>程序集内的字面量是 UTF-16LE；按出现次数核对参数只由 Core 提供。</summary>
+    private static int CountUtf16(string path, string value)
+    {
+        var haystack = File.ReadAllBytes(path);
+        var needle = Encoding.Unicode.GetBytes(value);
+        var count = 0;
+        for (var start = 0; start <= haystack.Length - needle.Length; start++)
+        {
+            var match = true;
+            for (var offset = 0; offset < needle.Length; offset++)
+                if (haystack[start + offset] != needle[offset]) { match = false; break; }
+            if (match) count++;
+        }
+        return count;
+    }
 
     private static Task Sync(Action action) { action(); return Task.CompletedTask; }
 

@@ -93,6 +93,8 @@ internal sealed class QaAuthPageHost : IAuthPageBrowserHost
     /// <summary>只改写宿主状态用于截图；不创建浏览器、不联网。</summary>
     public void SimulateForQa(AuthPageHostStatus status) => snapshot = status switch
     {
+        AuthPageHostStatus.Attaching => new(status, AuthPageModel.PortalAddress, false,
+            "QA 夹具：正在加载固定门户页面；不填表、不提交。"),
         AuthPageHostStatus.Attached => new(status, AuthPageModel.PortalAddress, true,
             "QA 假宿主已附着固定门户地址；不填表、不提交。"),
         AuthPageHostStatus.RuntimeMissing => new(status, AuthPageModel.PortalAddress, false,
@@ -334,6 +336,7 @@ internal static class QaAuthPage
                 // 受控失败状态：运行时缺失、边界未就绪、加载失败。
                 foreach (var (scenario, status) in new (string, AuthPageHostStatus)[]
                 {
+                    ("attaching", AuthPageHostStatus.Attaching),
                     ("runtime-missing", AuthPageHostStatus.RuntimeMissing),
                     ("boundary-unavailable", AuthPageHostStatus.NetworkBoundaryUnavailable),
                     ("attach-failed", AuthPageHostStatus.Failed)

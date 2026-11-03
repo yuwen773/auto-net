@@ -62,6 +62,46 @@ internal static class NetworkRegression
             var opcode = (byte[])valid.Clone(); opcode[2] = 0x89; Reject(() => DnsPacket.Parse(opcode, 123));
             var truncated = (byte[])valid.Clone(); truncated[2] |= 2; Reject(() => DnsPacket.Parse(truncated, 123));
             return Task.CompletedTask;
+        }),
+        ("辅助检测：UU 读取单飞、超时受控且完成后可重新读取", async () =>
+        {
+            using var release = new ManualResetEventSlim(false);
+            var starts = 0;
+            var probe = new UuServiceProbe(() =>
+            {
+                Interlocked.Increment(ref starts);
+                release.Wait(TimeSpan.FromSeconds(5));
+                return "迟到的 UU 结果";
+            }, TimeSpan.FromMilliseconds(60));
+            // 三轮都超时：只允许一个后台读取，不能每轮叠加一个不可取消的任务。
+            for (var round = 0; round < 3; round++)
+                Require(await probe.ReadAsync(default) == "UU 状态未知，检测超时");
+            Require(starts == 1);
+
+            // 底层读取完成后，下一次调用返回真实结果（迟到结果不会被丢弃）。
+            release.Set();
+            var value = "";
+            for (var attempt = 0; attempt < 30 && value != "迟到的 UU 结果"; attempt++)
+            {
+                value = await probe.ReadAsync(default);
+                if (value != "迟到的 UU 结果") await Task.Delay(10);
+            }
+            Require(value == "迟到的 UU 结果");
+
+            // 读取异常降级为受控文案，不泄露异常文本。
+            var failing = new UuServiceProbe(() => throw new InvalidOperationException("fixture-secret"),
+                TimeSpan.FromSeconds(1));
+            var failed = await failing.ReadAsync(default);
+            Require(failed == "UU 状态未知，读取失败");
+            Require(!failed.Contains("fixture-secret"));
+
+            // 取消只放弃等待；底层读取不可取消，但不会再启动第二个。
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            var threw = false;
+            try { await probe.ReadAsync(cancelled.Token); }
+            catch (OperationCanceledException) { threw = true; }
+            Require(threw);
         })
     ];
 

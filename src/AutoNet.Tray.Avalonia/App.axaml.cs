@@ -274,6 +274,8 @@ public sealed class App : Application
         // 内嵌认证通道发起器在后面装配，这里用延迟绑定读取它的会话状态（#39）：
         // 通道会话进行中时认证页不创建第二个浏览器。
         AuthChannelLauncher? authChannel = null;
+        // 启动清扫只删过期前缀目录；活跃会话目录会被持续写入，不会被误删。
+        if (!tray.Qa.Active) AuthPageWebViewHost.SweepStaleSessions();
         IAuthPageBrowserHost authHost = tray.Qa.Mode switch
         {
             QaMode.AuthPage => new QaAuthPageHost(),
@@ -288,7 +290,7 @@ public sealed class App : Application
         {
             if (Dispatcher.UIThread.CheckAccess()) action();
             else Dispatcher.UIThread.Post(action);
-        });
+        }, () => authChannel?.Describe());
         var shell = new ShellController(pipe, (page, token) =>
             page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener, authPage);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
@@ -355,7 +357,13 @@ public sealed class App : Application
             ? null
             : () => portalOpener.OpenManuallyAsync();
         authChannel = new AuthChannelLauncher(
-            async () => (await pipe.RefreshAsync())?.Snapshot, authChannelStart, authChannelPresent, authChannelFallback,
+            async () =>
+            {
+                // 发起前复核必须使用可信且新鲜的状态：过期/损坏的 status.json 不能成为
+                // “有门户结构信号、可以提交凭据”的依据。
+                var reading = await pipe.RefreshAsync();
+                return reading.Trusted ? reading.Snapshot : null;
+            }, authChannelStart, authChannelPresent, authChannelFallback,
             launchActive: () => new AutoNet.Core.SafetyStateStore(AutoNet.Core.Storage.Root).IsChannelLaunchActive());
         // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
         Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility

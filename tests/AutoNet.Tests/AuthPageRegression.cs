@@ -871,7 +871,8 @@ internal static class AuthPageRegression
             using var coordinator = new AuthPageCoordinator(host);
             coordinator.Update(Reading(Online()));
             await coordinator.EnsureAttachedAsync();
-            Require(host.Snapshot.Status == AuthPageHostStatus.Attached, "首次附着未进入已附着：" + host.Snapshot.Status);
+            // 夹具没有原生表面：边界就绪后进入 Attaching，只有导航成功才会变成 Attached。
+            Require(host.Snapshot.Status == AuthPageHostStatus.Attaching, "首次附着未进入加载中：" + host.Snapshot.Status);
             Require(proxies == 1, "首次附着未启动代理");
 
             // 后台内嵌通道会话开始：本页拆掉自己的代理与浏览器，只投影会话状态。
@@ -895,13 +896,42 @@ internal static class AuthPageRegression
             // 会话结束：宿主回到未附着，协调器只恢复一次只读附着，不重复重建。
             sessionActive = false;
             coordinator.Update(Reading(Online()));
-            await WaitUntilAsync(() => host.Snapshot.Status == AuthPageHostStatus.Attached);
-            Require(host.Snapshot.Status == AuthPageHostStatus.Attached, "会话结束后未恢复只读附着：" + host.Snapshot.Status);
+            await WaitUntilAsync(() => host.Snapshot.Status == AuthPageHostStatus.Attaching);
+            Require(host.Snapshot.Status == AuthPageHostStatus.Attaching, "会话结束后未恢复只读附着：" + host.Snapshot.Status);
             Require(proxies == proxiesBefore + 1, "会话结束后未重建唯一代理：" + proxies);
             coordinator.Update(Reading(Online()));
             // 否定断言：留出足够时间让错误的重建暴露出来。
             await Task.Delay(50);
             Require(proxies == proxiesBefore + 1, "重复刷新重建了代理：" + proxies);
+        }),
+        ("认证页会话回归：迟到的边界准备不覆盖新会话的代理与状态", async () =>
+        {
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = 0;
+            AuthChannelProxy? late = null;
+            AuthChannelProxy? current = null;
+            using var host = new AuthPageWebViewHost(Link, () => true, async (link, job) =>
+            {
+                if (Interlocked.Increment(ref calls) == 1)
+                {
+                    await gate.Task;
+                    return late = await AuthChannelProxy.StartAsync(link, job);
+                }
+                return current = await AuthChannelProxy.StartAsync(link, job);
+            }, () => false);
+
+            var first = host.AttachAsync(new Uri(AuthPageModel.PortalAddress));
+            await WaitUntilAsync(() => Volatile.Read(ref calls) == 1);
+            var second = host.AttachAsync(new Uri(AuthPageModel.PortalAddress));
+            await WaitUntilAsync(() => host.Snapshot.Status == AuthPageHostStatus.Attaching
+                && Volatile.Read(ref calls) == 2);
+            gate.SetResult(true);
+            await Task.WhenAll(first, second);
+
+            Require(late is not null && current is not null, "两次附着未各自启动代理");
+            Require(!late!.IsRunning, "迟到的边界准备的代理未被拆除");
+            Require(current!.IsRunning, "新会话的代理被旧尝试停止或覆盖");
+            Require(host.Snapshot.Status == AuthPageHostStatus.Attaching, "迟到的尝试改写了新会话状态");
         }),
         ("认证页会话回归：受控附着失败后不因会话结束自动重试", async () =>
         {
