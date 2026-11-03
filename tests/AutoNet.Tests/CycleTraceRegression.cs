@@ -126,6 +126,27 @@ internal static class CycleTraceRegression
             Require(limiter.ShouldEmit("PortalInspection", 700), "不同慢阶段被错误抑制");
             return Task.CompletedTask;
         }),
+        ("轮次计时：慢阶段交替出现时各自独立限流", () =>
+        {
+            var clock = new ManualClock();
+            var limiter = new SlowStepLimiter(clock, TimeSpan.FromMinutes(5));
+            Require(limiter.ShouldEmit("WifiRead", 600), "首次 WifiRead 未记录");
+            clock.Advance(TimeSpan.FromSeconds(2));
+            Require(limiter.ShouldEmit("InternetProbe", 700), "首次 InternetProbe 未记录");
+            clock.Advance(TimeSpan.FromSeconds(2));
+            Require(!limiter.ShouldEmit("WifiRead", 610), "交替场景下 WifiRead 未被限流");
+            Require(!limiter.ShouldEmit("InternetProbe", 710), "交替场景下 InternetProbe 未被限流");
+
+            clock.Advance(TimeSpan.FromSeconds(2));
+            Require(limiter.ShouldEmit("WifiRead", 1300), "交替场景下显著恶化未立即补记");
+            Require(!limiter.ShouldEmit("InternetProbe", 710), "补记一个阶段后另一个阶段的窗口被重置");
+
+            // InternetProbe 的重复间隔先到，WifiRead 的间隔从恶化时刻重新起算，二者互不影响。
+            clock.Advance(TimeSpan.FromSeconds(297));
+            Require(limiter.ShouldEmit("InternetProbe", 720), "到达重复间隔后未再记录");
+            Require(!limiter.ShouldEmit("WifiRead", 605), "阶段窗口被其它阶段的记录重置");
+            return Task.CompletedTask;
+        }),
         ("轮次计时：持续慢阶段不每轮重复写日志", async () =>
         {
             var fixture = new MonitorFixture();
