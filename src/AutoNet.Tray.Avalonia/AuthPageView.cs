@@ -42,6 +42,10 @@ internal sealed class AuthPageView
     private readonly Control channelCard;
     private readonly TextBlock channelState = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 19, FontSize = 12, Opacity = 0.85 };
     private readonly Button channelButton;
+    private readonly TextBlock channelNotice = new()
+    {
+        TextWrapping = TextWrapping.Wrap, LineHeight = 19, FontSize = 12, IsVisible = false
+    };
     private object? surfaceShown;
 
     public AuthPageView(Action retryRequested, Func<object?> surfaceProvider, Action? channelLaunch = null)
@@ -138,6 +142,7 @@ internal sealed class AuthPageView
             FontSize = 12.5
         });
         channelBody.Children.Add(channelState);
+        channelBody.Children.Add(channelNotice);
         channelButton = ShellAccessibility.Named(new Button
         {
             Content = "发起手动认证修复…",
@@ -154,6 +159,16 @@ internal sealed class AuthPageView
     }
 
     public Control Root => root;
+
+    /// <summary>
+    /// 手动入口的受控结果提示。发起动作返回“不可信/关闭/忙/UAC 取消”时，用户必须看到
+    /// 明确反馈，而不是按钮点击后毫无动静；传 null 清除提示。
+    /// </summary>
+    internal void SetChannelNotice(string? text)
+    {
+        channelNotice.Text = text ?? "";
+        channelNotice.IsVisible = !string.IsNullOrEmpty(text);
+    }
 
     /// <summary>用新的状态投影更新可见文字与宿主表面；不导航、不重建控件树。</summary>
     public void Render(AuthPageContent content)

@@ -41,6 +41,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private AuthenticationBlock? authenticationExpected;
     private AuthenticationBlock? authenticationToWrite;
     private readonly SubmissionRetryPolicy submissionRetry = new();
+    private readonly SlowStepLimiter slowStepLimiter = new(clock, TimeSpan.FromMinutes(5));
     private SubmissionBudget? submissionBudget;
     private SubmissionBudget? activeSubmission;
     private SubmissionRetryDecision submissionDecision;
@@ -146,7 +147,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                 Detail = "检测将自动重试；" + lastError
             });
         }
-        finally { trace.Flush(journal); }
+        finally { trace.Flush(journal, slowStepLimiter); }
     }
 
     private async Task<StatusSnapshot> TickAsync(CancellationToken ct)
@@ -1232,17 +1233,19 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         var key = status.State + "/" + status.Detail + "/" + status.Wifi + "/" + status.Direct + "/" + status.Portal + "/" + status.Tunnel + "/" + status.Uu + "/" + status.LastError;
         if (key != lastEvent && Log(status.State, status.Detail, snapshot: status)) lastEvent = key;
         status = status with { LastError = journal.ErrorExcept("StatusWrite") };
-        journal.Stage = "StatusWrite";
-        try { trace.Measure("StatusWrite", () => environment.WriteStatus(status)); journal.Recovered("StatusWrite"); }
-        catch (Exception e) when (IsStorageFailure(e)) { journal.Fault("StatusWrite", "状态写入失败", e); }
+        // 计时字段必须在写盘前定型：落盘的 status.json 本身也要携带本轮耗时。
+        // CycleMilliseconds 的截止点是状态写入之前；写入自身耗时计入 finally 中的 SlowCycle。
         var slowest = trace.Slowest;
-        return status with
+        status = status with
         {
-            LastError = lastError,
             CycleMilliseconds = Math.Round(trace.TotalMilliseconds, 1),
             SlowestStage = slowest?.Name ?? "",
             SlowestStageMilliseconds = slowest is { } stage ? Math.Round(stage.Milliseconds, 1) : null
         };
+        journal.Stage = "StatusWrite";
+        try { trace.Measure("StatusWrite", () => environment.WriteStatus(status)); journal.Recovered("StatusWrite"); }
+        catch (Exception e) when (IsStorageFailure(e)) { journal.Fault("StatusWrite", "状态写入失败", e); }
+        return status with { LastError = lastError };
     }
 
     private bool Log(string action, string detail, double? seconds = null, StatusSnapshot? snapshot = null)

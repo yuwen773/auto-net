@@ -248,7 +248,8 @@ public partial class MainView : UserControl
                 // 指纹未变化时跳过重复渲染；切页会清空指纹缓存，返回时仍会重新渲染同一实例。
                 if (!authGate.ShouldRender(auth)) return;
                 ClearShown(except: auth);
-                var authView = authGate.View(() => new AuthPageView(
+                AuthPageView? pendingView = null;
+                pendingView = authGate.View(() => new AuthPageView(
                     () => RunActionSafelyAsync(async () =>
                     {
                         if (authPage is { } coordinator) await coordinator.RetryAsync();
@@ -267,12 +268,18 @@ public partial class MainView : UserControl
                                     "这会请求管理员授权并启动辅助进程，打开固定门户页，可能自动填写并提交已保存的校园网凭据。"
                                     + "仅在协议认证失败且你确认要提交时继续。",
                                     "确认发起"))
+                            {
+                                pendingView?.SetChannelNotice("已取消：未请求管理员授权，也未启动辅助进程。");
                                 return true;
-                            await channel.LaunchManuallyAsync();
+                            }
+                            var outcome = await channel.LaunchManuallyAsync();
+                            // 受控结果必须呈现：不可信/关闭/忙/UAC 取消不能表现为“点了没反应”。
+                            pendingView?.SetChannelNotice(AuthChannelLauncher.ManualOutcomeText(outcome));
                             return true;
                         }
                         finally { channelConfirming = false; }
                     })));
+                var authView = pendingView!;
                 authView.Render(auth);
                 pageHost.Content = authView.Root;
                 break;

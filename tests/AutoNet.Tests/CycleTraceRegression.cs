@@ -92,6 +92,54 @@ internal static class CycleTraceRegression
             finally { trace.Flush(new RecoveryJournal(fixture, fixture.Clock)); }
             Require(threw);
         }),
+        ("轮次计时：计时字段随状态实际写盘", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.Online = true;
+            fixture.BeforeWifiRead = () => fixture.Clock.Advance(TimeSpan.FromMilliseconds(600));
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            var returned = await worker.RunOnceAsync(default);
+            var written = fixture.LastStatus;
+            Require(written is not null, "轮次未写入状态");
+            Require(written!.CycleMilliseconds is not null && written.CycleMilliseconds >= 600,
+                "写盘状态缺少本轮耗时");
+            Require(written.SlowestStage == "WifiRead" && written.SlowestStageMilliseconds >= 600,
+                "写盘状态缺少最慢阶段");
+            Require(written.CycleMilliseconds == returned.CycleMilliseconds
+                && written.SlowestStage == returned.SlowestStage
+                && written.SlowestStageMilliseconds == returned.SlowestStageMilliseconds,
+                "写盘与返回的计时字段不一致");
+        }),
+        ("轮次计时：持续慢阶段跨轮次限流且恶化时立即补记", () =>
+        {
+            var clock = new ManualClock();
+            var limiter = new SlowStepLimiter(clock, TimeSpan.FromMinutes(5));
+            Require(limiter.ShouldEmit("WifiRead", 600), "首次慢阶段未记录");
+            clock.Advance(TimeSpan.FromSeconds(2));
+            Require(!limiter.ShouldEmit("WifiRead", 610), "间隔内重复慢阶段未被限流");
+            clock.Advance(TimeSpan.FromSeconds(2));
+            Require(!limiter.ShouldEmit("WifiRead", 620), "间隔内重复慢阶段未被限流");
+            Require(limiter.ShouldEmit("WifiRead", 1300), "显著恶化未立即补记");
+            Require(!limiter.ShouldEmit("WifiRead", 1350), "恶化后间隔内仍重复记录");
+            clock.Advance(TimeSpan.FromMinutes(5));
+            Require(limiter.ShouldEmit("WifiRead", 1350), "到达重复间隔后未再记录");
+            Require(limiter.ShouldEmit("PortalInspection", 700), "不同慢阶段被错误抑制");
+            return Task.CompletedTask;
+        }),
+        ("轮次计时：持续慢阶段不每轮重复写日志", async () =>
+        {
+            var fixture = new MonitorFixture();
+            fixture.Http.Online = true;
+            fixture.BeforeWifiRead = () => fixture.Clock.Advance(TimeSpan.FromMilliseconds(600));
+            using var worker = new MonitorWorker(fixture, fixture.Clock);
+            for (var round = 0; round < 5; round++)
+            {
+                await worker.RunOnceAsync(default);
+                fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+            }
+            Require(fixture.Logs.Count(e => e.EventCode == "SlowStep") == 1,
+                "持续慢阶段每轮都写日志：" + fixture.Logs.Count(e => e.EventCode == "SlowStep"));
+        }),
         ("轮次计时：监测轮次把最慢阶段投影到状态且不产生虚假慢事件", async () =>
         {
             var fixture = new MonitorFixture();
@@ -137,4 +185,9 @@ internal static class CycleTraceRegression
     ];
 
     private static void Require(bool condition) { if (!condition) throw new Exception("轮次计时行为不符合预期"); }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition) throw new Exception("轮次计时行为不符合预期：" + message);
+    }
 }

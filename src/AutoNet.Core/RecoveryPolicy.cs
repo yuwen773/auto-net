@@ -259,9 +259,10 @@ public sealed record StatusSnapshot
     public double? LastRecoverySeconds { get; init; }
     public DateTimeOffset? LastRecoveryAt { get; init; }
     /// <summary>
-    /// Last cycle duration measured on the monotonic clock from the start of the round up to and
-    /// including the status write itself. Older producers omit it; the tray must treat null as
-    /// "not reported".
+    /// Last cycle duration measured on the monotonic clock from the start of the round up to
+    /// (but excluding) the status write that carries it — a value cannot include the write that
+    /// is writing it. The full duration including that write is recorded in the cycle's
+    /// <c>SlowCycle</c> log entry. Older producers omit it; the tray treats null as "not reported".
     /// </summary>
     public double? CycleMilliseconds { get; init; }
     /// <summary>Aggregated slowest stage of the last cycle; a fixed diagnostic name, never page text.</summary>

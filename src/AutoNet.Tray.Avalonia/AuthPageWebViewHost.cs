@@ -81,10 +81,11 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
 
         // 上一次尝试残留的代理/浏览器不再有意义；进程组保留并复用，避免重复嵌套作业。
         ResetBrowser();
-        await StopProxyAsync().ConfigureAwait(true);
-        // 附着本身也会跨越 await：旧尝试晚于新尝试完成时，只能丢弃自己刚启动的代理，
-        // 不能覆盖新尝试的 proxy 字段或发布旧状态。
+        // 尝试身份必须在第一个 await 之前登记：否则两次附着跨过停止旧代理的等待后，
+        // 先返回的请求可能拿到更大的代次，把后发起的用户意图判成过期。
         var attempt = Interlocked.Increment(ref attachAttempt);
+        await StopProxyAsync().ConfigureAwait(true);
+        if (attempt != Volatile.Read(ref attachAttempt) || Volatile.Read(ref disposed) != 0) return Snapshot;
         var (failure, boundary) = await AuthPageNetworkBoundary.PrepareAsync(
             portal, runtimeProbe(), readLink, EnsureJob, startProxy, cancellationToken).ConfigureAwait(true);
         var current = attempt == Volatile.Read(ref attachAttempt) && Volatile.Read(ref disposed) == 0;
@@ -262,6 +263,9 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
             });
             current.NavigationRequested = true;
             core.Navigate(AuthPageModel.PortalAddress);
+            // 初始化超时只覆盖 CreateAsync/EnsureCoreWebView2Async；导航本身也必须收口，
+            // 否则门户永不完成导航时页面会一直停在 Attaching 且没有重试入口。
+            StartNavigationWatchdog(current);
         }
         catch (Exception e)
         {
@@ -276,6 +280,29 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
 
     private static bool IsPortalOrigin(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) && Settings.IsPortalOrigin(uri);
+
+    /// <summary>导航完成的等待上限（与浏览器初始化超时一致）。</summary>
+    internal static readonly TimeSpan NavigationTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// 首轮导航必须先有结果才完成收口：超时只对当前代次生效，并把会话拆除到可重试失败；
+    /// 导航成功或会话被替换/销毁都只让看门狗静默退出。
+    /// </summary>
+    internal static bool ShouldFailNavigation(bool current, bool confirmed) => current && !confirmed;
+
+    private void StartNavigationWatchdog(AuthPageBrowserSession current)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(NavigationTimeout, current.Cancellation.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (ShouldFailNavigation(IsCurrent(current), current.NavigationConfirmed))
+                    FailBrowser(new System.TimeoutException("门户页面导航超时。"));
+            });
+        });
+    }
 
     private void FailBrowser(Exception e)
     {
@@ -308,9 +335,11 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         if (discarding is null) return;
         discarding.Cancel();
         var exited = discarding.BrowserExited;
+        // 浏览器创建一旦开始，就必须等到进程退出信号才能删除目录；仅“等待超时”不等于可以清理。
+        var browserAttempted = discarding.Starting || discarding.Environment is not null || discarding.WebView is not null;
         discarding.Dispose();
         // 临时目录里有门户 cookie/缓存：等浏览器进程退出后再删，失败留给启动清扫。
-        _ = Task.Run(() => DeleteSessionDirectoryAsync(discarding.Directory, exited));
+        _ = Task.Run(() => DeleteSessionDirectoryAsync(discarding.Directory, exited, browserAttempted));
     }
 
     private void Publish(AuthPageHostSnapshot value) => Volatile.Write(ref snapshot, value);
@@ -334,23 +363,33 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     }
 
     /// <summary>
-    /// 删除一次会话的临时用户目录：先有界等待浏览器进程退出，再按退避重试。
-    /// 总等待约 30 秒；失败不抛给调用方，目录留给下次启动清扫。
+    /// 删除一次会话的临时用户目录。
+    ///
+    /// 浏览器创建一旦开始，就必须先有界等待 <paramref name="browserExited"/>；等待超时意味着
+    /// “尚未确认退出”，此时**不删除**，目录留给启动清扫，避免动到仍被浏览器占用的文件。
+    /// 从未开始创建浏览器的会话没有这个约束。删除复用与清扫相同的安全规则：不进入重解析点。
+    /// 失败不抛给调用方，同样留给下次启动清扫。
     /// </summary>
-    private static async Task DeleteSessionDirectoryAsync(string path, Task browserExited)
+    internal static async Task DeleteSessionDirectoryAsync(string path, Task browserExited, bool browserAttempted,
+        TimeSpan? exitTimeout = null, TimeSpan? retryDelay = null)
     {
-        try { await browserExited.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
-        catch (System.TimeoutException) { }
+        if (browserAttempted)
+        {
+            try { await browserExited.WaitAsync(exitTimeout ?? TimeSpan.FromSeconds(10)).ConfigureAwait(false); }
+            catch (System.TimeoutException) { return; }
+        }
         for (var attempt = 0; attempt < 6; attempt++)
         {
             try
             {
-                if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+                if (!Directory.Exists(path)) return;
+                DeleteOwnedDirectory(path);
                 return;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500 * (attempt + 1))).ConfigureAwait(false);
+                var delay = retryDelay ?? TimeSpan.FromMilliseconds(500 * (attempt + 1));
+                await Task.Delay(delay).ConfigureAwait(false);
             }
         }
     }
@@ -413,6 +452,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     /// <summary>逐项删除但决不进入重解析点；残留链接会让本次删除失败并留给下次清扫。</summary>
     private static void DeleteOwnedDirectory(string root)
     {
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0) return;
         foreach (var entry in Directory.EnumerateFileSystemEntries(root))
         {
             var attributes = File.GetAttributes(entry);

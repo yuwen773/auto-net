@@ -74,19 +74,22 @@ internal sealed class CycleTrace(TimeProvider clock)
     /// <summary>
     /// Writes at most one aggregate event per cycle. A cycle at or above the slow threshold
     /// produces one <c>SlowCycle</c> carrying the top stages; otherwise each aggregated stage
-    /// at or above the step threshold produces a <c>SlowStep</c> (max five).
+    /// at or above the step threshold produces a <c>SlowStep</c> (max five). When
+    /// <paramref name="limiter"/> is supplied, repeated evidence for the same stage is
+    /// suppressed across cycles instead of writing one entry every round.
     ///
     /// Never throws: this runs from <c>finally</c>, so a logging fault must not mask the
     /// cycle's original outcome. <see cref="RecoveryJournal"/> already reports write failures
     /// through its own fallback channel.
     /// </summary>
-    public void Flush(RecoveryJournal journal, double slowStep = SlowStepMilliseconds, double slowCycle = SlowCycleMilliseconds)
+    public void Flush(RecoveryJournal journal, SlowStepLimiter? limiter = null,
+        double slowStep = SlowStepMilliseconds, double slowCycle = SlowCycleMilliseconds)
     {
-        try { FlushCore(journal, slowStep, slowCycle); }
+        try { FlushCore(journal, limiter, slowStep, slowCycle); }
         catch (Exception) { }
     }
 
-    private void FlushCore(RecoveryJournal journal, double slowStep, double slowCycle)
+    private void FlushCore(RecoveryJournal journal, SlowStepLimiter? limiter, double slowStep, double slowCycle)
     {
         lock (gate)
         {
@@ -107,12 +110,15 @@ internal sealed class CycleTrace(TimeProvider clock)
         }
         var slow = Snapshot().Where(stage => stage.Milliseconds >= slowStep).Take(5).ToArray();
         foreach (var stage in slow)
+        {
+            if (limiter is not null && !limiter.ShouldEmit(stage.Name, stage.Milliseconds)) continue;
             journal.Write("SlowStep",
                 $"检测阶段 {stage.Name} 累计耗时 {Format(stage.Milliseconds)} ms，超过 {Format(slowStep)} ms。",
                 new DiagnosticData
                 {
                     Stage = stage.Name, Outcome = "Slow", ElapsedMilliseconds = Math.Round(stage.Milliseconds, 1)
                 });
+        }
     }
 
     private IReadOnlyList<(string Name, double Milliseconds, int Count)> Snapshot()

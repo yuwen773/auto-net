@@ -105,6 +105,66 @@ internal static class AuthPageSessionRegression
                 "只读诊断内容仍携带认证通道入口");
             return Task.CompletedTask;
         }),
+        ("认证页会话：导航永不完成时按当前代次超时，成功先到则忽略超时", () =>
+        {
+            Require(AuthPageWebViewHost.ShouldFailNavigation(true, false), "当前会话导航未完成时未判超时");
+            Require(!AuthPageWebViewHost.ShouldFailNavigation(true, true), "导航已成功仍判为超时");
+            Require(!AuthPageWebViewHost.ShouldFailNavigation(false, false), "旧会话或销毁后的宿主仍判超时");
+            Require(AuthPageWebViewHost.NavigationTimeout > TimeSpan.Zero);
+            return Task.CompletedTask;
+        }),
+        ("认证页会话：浏览器未确认退出时保留目录，不按等待超时清理", async () =>
+        {
+            var path = Path.Combine(Path.GetTempPath(), "autonet-delete-wait-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "marker.txt"), "x");
+            try
+            {
+                var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                await AuthPageWebViewHost.DeleteSessionDirectoryAsync(path, pending.Task, browserAttempted: true,
+                    exitTimeout: TimeSpan.FromMilliseconds(50), retryDelay: TimeSpan.FromMilliseconds(1));
+                Require(Directory.Exists(path), "浏览器未确认退出就删除了会话目录");
+
+                pending.SetResult(true);
+                await AuthPageWebViewHost.DeleteSessionDirectoryAsync(path, pending.Task, browserAttempted: true,
+                    exitTimeout: TimeSpan.FromMilliseconds(50), retryDelay: TimeSpan.FromMilliseconds(1));
+                Require(!Directory.Exists(path), "确认浏览器退出后目录未清理");
+            }
+            finally { try { Directory.Delete(path, recursive: true); } catch (Exception) { } }
+        }),
+        ("认证页会话：从未创建浏览器的目录可直接清理", async () =>
+        {
+            var path = Path.Combine(Path.GetTempPath(), "autonet-delete-never-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            try
+            {
+                var never = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                await AuthPageWebViewHost.DeleteSessionDirectoryAsync(path, never.Task, browserAttempted: false,
+                    exitTimeout: TimeSpan.FromMilliseconds(50), retryDelay: TimeSpan.FromMilliseconds(1));
+                Require(!Directory.Exists(path), "未启动浏览器的目录未清理");
+            }
+            finally { try { Directory.Delete(path, recursive: true); } catch (Exception) { } }
+        }),
+        ("认证页会话：被其他进程占用的会话目录保留给启动清扫", async () =>
+        {
+            var path = Path.Combine(Path.GetTempPath(), "autonet-delete-locked-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            try
+            {
+                var held = Path.Combine(path, "held.txt");
+                File.WriteAllText(held, "x");
+                using (var hold = new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    await AuthPageWebViewHost.DeleteSessionDirectoryAsync(path, Task.CompletedTask, browserAttempted: true,
+                        exitTimeout: TimeSpan.FromMilliseconds(50), retryDelay: TimeSpan.FromMilliseconds(1));
+                    Require(Directory.Exists(path), "占用中的会话目录被删除");
+                }
+                await AuthPageWebViewHost.DeleteSessionDirectoryAsync(path, Task.CompletedTask, browserAttempted: true,
+                    exitTimeout: TimeSpan.FromMilliseconds(50), retryDelay: TimeSpan.FromMilliseconds(1));
+                Require(!Directory.Exists(path), "释放后的会话目录未清理");
+            }
+            finally { try { Directory.Delete(path, recursive: true); } catch (Exception) { } }
+        }),
         ("认证页会话：启动清扫只删本应用创建且过期的目录", () =>
         {
             var root = Path.Combine(Path.GetTempPath(), "autonet-sweep-test-" + Guid.NewGuid().ToString("N"));

@@ -95,6 +95,18 @@ internal sealed class AuthChannelLauncher
     /// <summary>认证页投影：模式/信号/最近结论。</summary>
     public AuthChannelLaunchState Describe() => Describe(lastReading);
 
+    /// <summary>手动入口结果的受控中文提示；仅覆盖手动路径可能返回的结果。</summary>
+    public static string? ManualOutcomeText(ObserveOutcome outcome) => outcome switch
+    {
+        ObserveOutcome.Launched => "已请求管理员授权并启动辅助进程；请在打开的页面完成必要步骤。",
+        ObserveOutcome.UacDeclined => "已取消管理员授权，未启动辅助进程。",
+        ObserveOutcome.ModeOff => "通道模式已关闭，未启动辅助进程。",
+        ObserveOutcome.Busy => "认证通道会话正在进行，未重复启动。",
+        ObserveOutcome.UntrustedState => "当前状态不可信或门户结构信号已消失，请稍后重试。",
+        ObserveOutcome.StartFailed => "辅助进程启动失败，已尝试回退浏览器兜底。",
+        _ => null,
+    };
+
     /// <summary>认证页手动入口（ManualOnly/Automatic 可达）：信号存在即允许，Off 拒绝。</summary>
     public ObserveOutcome LaunchManually(StatusSnapshot reading)
     {

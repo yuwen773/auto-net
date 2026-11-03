@@ -483,6 +483,25 @@ internal static class AuthChannelRegression
                 "流程结束后的点击结果不正确");
             Require(starts == 2, "流程结束后无法再次点击：" + starts);
         }),
+        ("内嵌通道回归：手动入口的受控结果都有中文提示", () => Sync(() =>
+        {
+            foreach (var outcome in new[]
+            {
+                AuthChannelLauncher.ObserveOutcome.Launched,
+                AuthChannelLauncher.ObserveOutcome.UacDeclined,
+                AuthChannelLauncher.ObserveOutcome.ModeOff,
+                AuthChannelLauncher.ObserveOutcome.Busy,
+                AuthChannelLauncher.ObserveOutcome.UntrustedState,
+                AuthChannelLauncher.ObserveOutcome.StartFailed,
+            })
+            {
+                var text = AuthChannelLauncher.ManualOutcomeText(outcome);
+                Require(text is { Length: > 0 } && text.Any(character => character is >= '一' and <= '鿿'),
+                    "手动结果缺少中文提示：" + outcome);
+            }
+            Require(AuthChannelLauncher.ManualOutcomeText(AuthChannelLauncher.ObserveOutcome.NoGrant) is null,
+                "非手动结果产生了提示");
+        })),
     ];
 
     private static StatusSnapshot Grant() => new()
