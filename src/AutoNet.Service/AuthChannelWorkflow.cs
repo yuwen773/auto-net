@@ -84,11 +84,15 @@ public sealed class AuthChannelWorkflow(IMonitorEnvironment environment, IAuthCh
                     review.Token.ThrowIfCancellationRequested();
                     var currentSettings = environment.LoadSettings();
                     var currentLink = environment.ReadWifi(settings);
-                    return currentSettings == settings && environment.LoadCredentials() == credentials && currentLink.State == WifiState.Ready &&
-                        currentLink.Index == link.Index && Equals(currentLink.Address, link.Address) && browser.IsBoundTo(settings, currentLink) &&
-                        environment.LoadAuthenticationBlock() == lease.Authentication && environment.LoadSubmissionBudget() == lease.Budget &&
-                        clock.GetElapsedTime(reviewStarted) < TimeSpan.FromSeconds(5) &&
-                        ((clock.GetUtcNow() - utc) - clock.GetElapsedTime(tick)).Duration() <= TimeSpan.FromSeconds(2);
+                    var currentCredentials = environment.LoadCredentials();
+                    var currentAuthentication = environment.LoadAuthenticationBlock();
+                    var currentBudget = environment.LoadSubmissionBudget();
+                    return SubmissionReview.ChannelStillValid(
+                        new(currentSettings, currentLink, currentAuthentication, currentBudget, currentCredentials),
+                        new(settings, link, lease.Authentication, lease.Budget, credentials),
+                        browser.IsBoundTo(settings, currentLink),
+                        clock.GetElapsedTime(reviewStarted) < TimeSpan.FromSeconds(5),
+                        SubmissionReview.ClockTrusted(clock, utc, tick, TimeSpan.FromSeconds(2))) is null;
                 }
                 if (!StillValid()) return ChannelWorkflowOutcome.Blocked;
                 if (!environment.TryRegisterChannelSession(lease, browser.BrowserProcessId, browser.HelperProcessId, browser.ProcessJobName))
