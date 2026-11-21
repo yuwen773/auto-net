@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reflection;
 using System.Text.Json;
 using AutoNet.Core;
 using AutoNet.Service;
@@ -755,6 +756,30 @@ internal static class MonitorRegression
             Require(!captcha.BrowserFallbackRequested && captcha.BrowserFallbackNotBefore is null);
             Require(captcha.Notification is { Code: NotificationCodes.AuthenticationPaused });
             Require(!fixture.Logs.Any(e => e.EventCode == "BrowserFallbackRequested"));
+        }),
+        ("监测环境回归：接口按领域拆分且生产实现覆盖每个领域", () =>
+        {
+            Type[] domains =
+            [
+                typeof(IMonitorSettingsSource), typeof(IMonitorAuthenticationStore), typeof(IMonitorSubmissionGate),
+                typeof(IMonitorDisconnectBudgetStore), typeof(IMonitorWifiGateway), typeof(IMonitorAuxiliaryProbe),
+                typeof(IMonitorSink)
+            ];
+            var composed = typeof(IMonitorEnvironment);
+            void Check(bool condition, string message)
+            {
+                if (!condition) throw new Exception(message);
+            }
+            Check(composed.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).Length == 0,
+                "组合接口不应重复声明成员");
+            foreach (var domain in domains)
+            {
+                Check(composed.GetInterfaces().Contains(domain), "组合接口未包含领域：" + domain.Name);
+                Check(domain.IsAssignableFrom(typeof(MonitorEnvironment)), "生产实现未覆盖领域：" + domain.Name);
+            }
+            var names = domains.SelectMany(domain => domain.GetMembers().Select(member => member.Name)).ToList();
+            Check(names.Count == names.Distinct().Count(), "领域接口存在重复成员");
+            return Task.CompletedTask;
         })
     ];
 
