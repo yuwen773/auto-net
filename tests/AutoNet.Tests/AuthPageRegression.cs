@@ -770,9 +770,13 @@ internal static class AuthPageRegression
                 State = "需要处理认证", Direct = "外网不可达或未知", Portal = "需认证",
                 CredentialsBlocked = true, AuthenticationPersistentState = "SubmissionPending", AuthenticationFailure = "None"
             };
-            foreach (var wifi in new[] { "未连接", "已关联，等待 IPv4", "正在连接", "网卡未就绪" })
+            foreach (var (wifi, code) in new[]
             {
-                var content = AuthPageModel.From(Reading(pending with { Wifi = wifi }), AuthPageHostSnapshot.NotAttached);
+                ("未连接", WifiLinkCodes.Disconnected), ("已关联，等待 IPv4", WifiLinkCodes.WaitingForAddress),
+                ("正在连接", WifiLinkCodes.Associating), ("网卡未就绪", WifiLinkCodes.Unavailable)
+            })
+            {
+                var content = AuthPageModel.From(Reading(pending with { Wifi = wifi, WifiLinkCode = code }), AuthPageHostSnapshot.NotAttached);
                 Require(content.Phase == AuthPagePhase.OutcomeUnknown, wifi + "：待消解提交未投影为结果未知");
                 Require(content.StatusExplanation.Contains("暂不发起只读复检", StringComparison.Ordinal),
                     wifi + "：未说明复检已暂停：" + content.StatusExplanation);
@@ -783,7 +787,7 @@ internal static class AuthPageRegression
 
             var exhausted = AuthPageModel.From(Reading(pending with
             {
-                Wifi = "未连接",
+                Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Disconnected,
                 Detail = "已停止自动提交：首次提交后的两次额外额度已用尽；继续低频只读复检。"
             }), AuthPageHostSnapshot.NotAttached);
             Require(exhausted.Phase == AuthPagePhase.NeedsManual && exhausted.StatusTitle == "提交额度已用尽",
@@ -794,7 +798,7 @@ internal static class AuthPageRegression
 
             var storage = AuthPageModel.From(Reading(pending with
             {
-                Wifi = "未连接", SubmissionResolutionStorageFault = true
+                Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Disconnected, SubmissionResolutionStorageFault = true
             }), AuthPageHostSnapshot.NotAttached);
             Require(!storage.StatusExplanation.Contains("后台继续只读复检", StringComparison.Ordinal) &&
                 !storage.BackgroundNote.Contains("后台继续只读复检", StringComparison.Ordinal),
@@ -802,7 +806,8 @@ internal static class AuthPageRegression
 
             var paused = AuthPageModel.From(Reading(Online() with
             {
-                Enabled = false, State = "已暂停恢复", Wifi = "未连接", Direct = "外网不可达或未知", Portal = "需认证",
+                Enabled = false, State = "已暂停恢复", Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Disconnected,
+                Direct = "外网不可达或未知", Portal = "需认证",
                 CredentialsBlocked = true, AuthenticationPersistentState = "SubmissionPending", AuthenticationFailure = "None",
                 Detail = "自动恢复已暂停；仅检测网络，不重连或认证。"
             }), AuthPageHostSnapshot.NotAttached);
@@ -1036,7 +1041,109 @@ internal static class AuthPageRegression
             Require(coordinator.Current.BackgroundNote.Contains("不代表发生过网页操作", StringComparison.Ordinal) &&
                 !coordinator.Current.BackgroundNote.Contains("内嵌认证通道会话进行中", StringComparison.Ordinal),
                 "协议载体被说成通道会话或网页操作：" + coordinator.Current.BackgroundNote);
-        })
+        }),
+        ("认证页回归：Wi-Fi 就绪只认受控码，显示文字不再决定复检文案", () => Sync(() =>
+        {
+            var pending = Online() with
+            {
+                State = "需要处理认证", Direct = "外网不可达或未知", Portal = "需认证",
+                CredentialsBlocked = true, AuthenticationPersistentState = "SubmissionPending", AuthenticationFailure = "None"
+            };
+
+            // 显示文字说“已连接”，受控码说未就绪：以受控码为准，不声称正在复检。
+            var conflicting = AuthPageModel.From(Reading(pending with
+            {
+                Wifi = "已连接", WifiLinkCode = WifiLinkCodes.Disconnected
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(conflicting.Phase == AuthPagePhase.OutcomeUnknown, "受控码未就绪时阶段不符");
+            Require(conflicting.StatusExplanation.Contains("暂不发起只读复检", StringComparison.Ordinal) &&
+                !conflicting.BackgroundNote.Contains("后台按共享提交额度继续只读复检", StringComparison.Ordinal),
+                "显示文字压过了未就绪的受控码");
+
+            // 显示文字说“未连接”，受控码说就绪：同样以受控码为准。
+            var ready = AuthPageModel.From(Reading(pending with
+            {
+                Wifi = "未连接", WifiLinkCode = WifiLinkCodes.Ready
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(ready.StatusExplanation.Contains("后台继续只读复检", StringComparison.Ordinal) &&
+                ready.BackgroundNote.Contains("后台按共享提交额度继续只读复检", StringComparison.Ordinal),
+                "受控码就绪时仍声称复检已暂停");
+
+            // 旧版快照没有受控码：按“不可确认”保守处理，不从显示文字猜。
+            var legacy = AuthPageModel.From(Reading(pending with
+            {
+                Wifi = "已连接", WifiLinkCode = ""
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(legacy.StatusExplanation.Contains("暂不发起只读复检", StringComparison.Ordinal),
+                "旧版快照缺少受控码时仍声称正在复检");
+        })),
+        ("认证页回归：提交额度耗尽读取受控字段而非 Detail", () => Sync(() =>
+        {
+            var pending = Online() with
+            {
+                State = "需要处理认证", Direct = "外网不可达或未知", Portal = "需认证",
+                CredentialsBlocked = true, AuthenticationPersistentState = "SubmissionPending",
+                AuthenticationFailure = "None", WifiLinkCode = WifiLinkCodes.Ready
+            };
+
+            var field = AuthPageModel.From(Reading(pending with
+            {
+                SubmissionBudgetExhausted = true, Detail = ""
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(field.Phase == AuthPagePhase.NeedsManual && field.StatusTitle == "提交额度已用尽",
+                "受控字段为耗尽时未投影为额度用尽：" + field.StatusTitle);
+
+            var fieldWins = AuthPageModel.From(Reading(pending with
+            {
+                SubmissionBudgetExhausted = false, Detail = "已停止自动提交：提交额度已用尽。"
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(fieldWins.Phase == AuthPagePhase.OutcomeUnknown && fieldWins.StatusTitle != "提交额度已用尽",
+                "受控字段为未耗尽时仍从 Detail 猜成额度用尽");
+
+            var legacy = AuthPageModel.From(Reading(pending with
+            {
+                Detail = "已停止自动提交：提交额度已用尽。"
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(legacy.Phase == AuthPagePhase.NeedsManual && legacy.StatusTitle == "提交额度已用尽",
+                "旧版快照缺少受控字段时未按受控文案降级");
+        })),
+        ("认证页回归：缺少设置与凭据读取受控字段", () => Sync(() =>
+        {
+            var baseSnapshot = Online() with
+            {
+                State = "正在恢复", Direct = "外网不可达或未知", Portal = "未知，不自动认证",
+                CredentialsBlocked = false, AuthenticationPersistentState = "Ready",
+                AuthenticationFailure = "None", Detail = "", WifiLinkCode = WifiLinkCodes.Ready
+            };
+
+            var noSettings = AuthPageModel.From(Reading(baseSnapshot with
+            {
+                SettingsAvailable = false, Detail = "无关文案"
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(noSettings.Phase == AuthPagePhase.NeedsManual && noSettings.StatusTitle == "尚未保存设置",
+                "受控字段为缺少设置时未投影为缺少设置：" + noSettings.StatusTitle);
+
+            var noCredentials = AuthPageModel.From(Reading(baseSnapshot with
+            {
+                CredentialsAvailable = false, Detail = "无关文案"
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(noCredentials.Phase == AuthPagePhase.NeedsManual && noCredentials.StatusTitle == "需要保存认证信息",
+                "受控字段为缺少凭据时未投影为缺少凭据：" + noCredentials.StatusTitle);
+
+            var fieldWins = AuthPageModel.From(Reading(baseSnapshot with
+            {
+                CredentialsAvailable = true, Detail = "外网检查未通过；未保存认证信息，请在设置中保存账号密码。"
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(fieldWins.StatusTitle != "需要保存认证信息",
+                "受控字段为凭据可用时仍从 Detail 猜成缺少凭据");
+
+            var legacy = AuthPageModel.From(Reading(baseSnapshot with
+            {
+                Detail = "外网检查未通过；未保存认证信息，请在设置中保存账号密码。"
+            }), AuthPageHostSnapshot.NotAttached);
+            Require(legacy.Phase == AuthPagePhase.NeedsManual && legacy.StatusTitle == "需要保存认证信息",
+                "旧版快照缺少受控字段时未按受控文案降级");
+        }))
     ];
 
     private static StatusReading Reading(StatusSnapshot? snapshot, TimeSpan? age = null)
@@ -1058,6 +1165,7 @@ internal static class AuthPageRegression
         Enabled = true,
         State = "校园网在线",
         Wifi = "已连接",
+        WifiLinkCode = WifiLinkCodes.Ready,
         Direct = "外网可达",
         Portal = "未查询（外网检查已通过）",
         Tunnel = "系统路径可达，出口未核验",
