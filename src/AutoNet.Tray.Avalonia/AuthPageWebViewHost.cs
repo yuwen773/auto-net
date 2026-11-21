@@ -62,6 +62,9 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
 
     public AuthPageHostSnapshot Snapshot => Volatile.Read(ref snapshot);
 
+    /// <summary>宿主快照变化通知；导航完成与受控失败都在界面线程上触发。</summary>
+    public event Action<AuthPageHostSnapshot>? StateChanged;
+
     public async Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default)
     {
         if (Volatile.Read(ref disposed) != 0) return Snapshot;
@@ -342,7 +345,15 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         _ = Task.Run(() => DeleteSessionDirectoryAsync(discarding.Directory, exited, browserAttempted));
     }
 
-    private void Publish(AuthPageHostSnapshot value) => Volatile.Write(ref snapshot, value);
+    /// <summary>
+    /// 写入快照并通知订阅方。通知与写入同步发生，因此附着完成、导航失败与会话切换
+    /// 都能立即投影；订阅方自己负责线程调度，本方法不等待任何界面工作。
+    /// </summary>
+    private void Publish(AuthPageHostSnapshot value)
+    {
+        Volatile.Write(ref snapshot, value);
+        StateChanged?.Invoke(value);
+    }
 
     private async Task StopProxyAsync()
     {

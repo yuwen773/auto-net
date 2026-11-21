@@ -1143,6 +1143,76 @@ internal static class AuthPageRegression
             }), AuthPageHostSnapshot.NotAttached);
             Require(legacy.Phase == AuthPagePhase.NeedsManual && legacy.StatusTitle == "需要保存认证信息",
                 "旧版快照缺少受控字段时未按受控文案降级");
+        })),
+        ("认证页回归：宿主完成信号立即投影而不等状态轮询", () => Sync(() =>
+        {
+            var host = new FakeAuthHost();
+            using var coordinator = new AuthPageCoordinator(host);
+            coordinator.Update(Reading(Online()));
+            var raised = 0;
+            coordinator.Updated += _ => raised++;
+
+            // 宿主推送完成信号后立即投影，无需再调用 Update。
+            host.Simulate(new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true, "夹具：导航完成。"));
+            Require(coordinator.Current.HostStatus == AuthPageHostStatus.Attached && coordinator.Current.HostAvailable,
+                "宿主完成信号未立即投影");
+            Require(raised == 1, "宿主完成信号未触发一次重投影：" + raised);
+
+            host.Simulate(new(AuthPageHostStatus.RuntimeMissing, AuthPageModel.PortalAddress, false, "夹具：运行时缺失。"));
+            Require(coordinator.Current.HostStatus == AuthPageHostStatus.RuntimeMissing && coordinator.Current.HostRetryVisible,
+                "宿主失败信号未立即投影");
+            Require(raised == 2, "宿主失败信号未触发重投影：" + raised);
+        })),
+        ("认证页回合状态：一次尝试只允许显式重试", () => Sync(() =>
+        {
+            var episode = new AuthPageAttachEpisode();
+            var notAttached = AuthPageHostSnapshot.NotAttached;
+            Require(episode.CanBegin(notAttached), "初始状态不允许附着");
+            episode.Begin();
+            Require(episode.Attempted && episode.InFlight, "附着开始未登记尝试");
+            Require(!episode.CanBegin(notAttached), "进行中仍允许重复附着");
+            episode.Complete();
+            Require(!episode.InFlight && !episode.CanBegin(notAttached), "完成后仍允许轮询自动重试");
+            episode.Reopen();
+            Require(episode.CanBegin(notAttached), "取消或会话恢复后不允许重新附着");
+            episode.Begin();
+            episode.Complete();
+            Require(!episode.CanBegin(notAttached), "第二次尝试后仍允许自动重试");
+            episode.ResetForRetry();
+            Require(episode.CanBegin(notAttached), "显式重试未清除尝试记录");
+            var attached = new AuthPageHostSnapshot(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true, "");
+            Require(!episode.CanBegin(attached), "已附着仍允许重新附着");
+        })),
+        ("认证页回合状态：只有进入过附着才允许会话结束恢复", () => Sync(() =>
+        {
+            var episode = new AuthPageAttachEpisode();
+            Require(!episode.Live, "初始状态被当成进入过附着");
+            episode.Observe(AuthPageHostSnapshot.NotAttached);
+            Require(!episode.Live, "未附着被当成进入过附着");
+            episode.Observe(AuthPageHostSnapshot.ChannelSession());
+            Require(!episode.Live, "会话进行中被当成进入过附着");
+            episode.Observe(new(AuthPageHostStatus.Attaching, AuthPageModel.PortalAddress, false, ""));
+            Require(episode.Live, "加载中未记录进入过附着");
+            episode.Observe(new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false, ""));
+            Require(!episode.Live, "受控失败未清除进入过附着");
+            episode.Observe(new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true, ""));
+            Require(episode.Live, "已附着未记录进入过附着");
+            episode.Observe(AuthPageHostSnapshot.NotAttached);
+            Require(episode.Live, "未附着错误清除了进入过附着");
+        })),
+        ("认证页回合状态：受控失败投影只保留到宿主快照变化", () => Sync(() =>
+        {
+            var episode = new AuthPageAttachEpisode();
+            var observed = new AuthPageHostSnapshot(AuthPageHostStatus.Attaching, AuthPageModel.PortalAddress, false,
+                "夹具：加载中。");
+            var failure = episode.RecordFailure(observed);
+            Require(failure.Status == AuthPageHostStatus.Failed, "附着异常未生成受控失败投影");
+            Require(episode.Project(observed).Status == AuthPageHostStatus.Failed, "宿主快照未变时失败投影丢失");
+            var changed = new AuthPageHostSnapshot(AuthPageHostStatus.NetworkBoundaryUnavailable,
+                AuthPageModel.PortalAddress, false, "夹具：边界不可用。");
+            Require(episode.Project(changed).Status == AuthPageHostStatus.NetworkBoundaryUnavailable,
+                "宿主状态变化后旧失败投影仍生效");
+            Require(episode.Project(observed).Status == AuthPageHostStatus.Attaching, "失败投影清除后未回到宿主快照");
         }))
     ];
 
@@ -1184,25 +1254,34 @@ internal static class AuthPageRegression
 
         public AuthPageHostSnapshot Snapshot => snapshot;
 
+        public event Action<AuthPageHostSnapshot>? StateChanged;
+
         public bool AttachThrows { get; set; }
 
         public int AttachCount { get; private set; }
 
         public List<Uri> Addresses { get; } = [];
 
-        public void Simulate(AuthPageHostSnapshot value) => snapshot = value;
+        public void Simulate(AuthPageHostSnapshot value) => Set(value);
 
         public Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default)
         {
             AttachCount++;
             if (AttachThrows)
             {
-                snapshot = new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false, "夹具：宿主加载失败。");
+                Set(new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false, "夹具：宿主加载失败。"));
                 throw new InvalidOperationException("夹具：宿主加载失败。");
             }
             Addresses.Add(portal);
-            snapshot = new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true, "夹具：已附着固定门户地址。");
-            return Task.FromResult(snapshot);
+            return Task.FromResult(Set(new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
+                "夹具：已附着固定门户地址。")));
+        }
+
+        private AuthPageHostSnapshot Set(AuthPageHostSnapshot value)
+        {
+            snapshot = value;
+            StateChanged?.Invoke(value);
+            return value;
         }
 
         public void SetVisible(bool visible) { }
@@ -1231,17 +1310,26 @@ internal static class AuthPageRegression
 
         public AuthPageHostSnapshot Snapshot => snapshot;
 
+        public event Action<AuthPageHostSnapshot>? StateChanged;
+
         public Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default)
         {
             AttachCount++;
-            snapshot = SessionActive ? SessionSnapshot() : AttachedSnapshot();
-            return Task.FromResult(snapshot);
+            return Task.FromResult(Set(SessionActive ? SessionSnapshot() : AttachedSnapshot()));
         }
 
         public void Refresh()
         {
-            if (SessionActive) snapshot = SessionSnapshot();
-            else if (snapshot.Status == AuthPageHostStatus.ChannelSessionActive) snapshot = AuthPageHostSnapshot.NotAttached;
+            if (SessionActive) Set(SessionSnapshot());
+            else if (snapshot.Status == AuthPageHostStatus.ChannelSessionActive) Set(AuthPageHostSnapshot.NotAttached);
+        }
+
+        private AuthPageHostSnapshot Set(AuthPageHostSnapshot value)
+        {
+            if (snapshot == value) return snapshot;
+            snapshot = value;
+            StateChanged?.Invoke(value);
+            return value;
         }
 
         public void SetVisible(bool visible) => VisibleCalls++;
@@ -1265,9 +1353,12 @@ internal static class AuthPageRegression
 
         public AuthPageHostSnapshot Snapshot => snapshot;
 
+        public event Action<AuthPageHostSnapshot>? StateChanged;
+
         public void Complete()
         {
             snapshot = new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true, "夹具：异步附着完成。");
+            StateChanged?.Invoke(snapshot);
             completion.SetResult(snapshot);
         }
 

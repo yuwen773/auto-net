@@ -10,6 +10,8 @@ namespace AutoNet.Tray.Avalonia;
 /// - 打开、关闭、切换页面与最小化只改变宿主可见性，**不**导航、不提交。
 /// - 只有页面首次打开、用户明确重试，或通道会话结束后恢复一个成功附着过的页面，才调用
 ///   <see cref="IAuthPageBrowserHost.AttachAsync"/>；同一地址重复附着由宿主自身去重。
+/// - 附着完成与受控失败由宿主经 <see cref="IAuthPageBrowserHost.StateChanged"/> 推送并立即投影，
+///   不依赖下一次状态轮询；一次回合的尝试状态集中在 <see cref="AuthPageAttachEpisode"/>。
 /// - 宿主失败被转换为受控状态，异常不逃逸到界面事件循环。
 ///
 /// 线程契约：<see cref="Update"/> 可从任意线程调用（状态管道在读取线程上回调），它会把
@@ -23,13 +25,9 @@ internal sealed class AuthPageCoordinator : IDisposable
     private readonly IAuthPageBrowserHost host;
     private readonly Action<Action> dispatch;
     private readonly Func<AuthChannelLaunchState?>? channelState;
+    private readonly AuthPageAttachEpisode episode = new();
     private StatusReading? lastReading;
-    private AuthPageHostSnapshot? failureOverride;
-    private AuthPageHostSnapshot? failureObserved;
     private AuthPageContent current;
-    private bool attachAttempted;
-    // 只有成功附着过才允许会话结束后自动恢复；受控失败仍要求用户显式重试。
-    private bool hadAttached;
     private bool pageVisible;
     private bool windowVisible = true;
     private bool disposed;
@@ -48,6 +46,8 @@ internal sealed class AuthPageCoordinator : IDisposable
         this.dispatch = dispatch ?? (action => action());
         this.channelState = channelState;
         current = AuthPageModel.From(null, host.Snapshot, channelState?.Invoke());
+        // 附着完成、导航失败与会话切换由宿主推送；投影不再等下一次状态轮询。
+        host.StateChanged += OnHostStateChanged;
     }
 
     public IAuthPageBrowserHost Host => host;
@@ -78,25 +78,36 @@ internal sealed class AuthPageCoordinator : IDisposable
                 try { host.Refresh(); }
                 catch (Exception) { }
             }
-            content = current = AuthPageModel.From(reading, Snapshot(), channelState?.Invoke());
-            NoteHostState();
-            if (!disposed) Updated?.Invoke(current);
-            ResumeAfterChannelSession();
+            content = ApplyProjection();
         });
         return content;
     }
 
     /// <summary>
-    /// 记录“本页打开过且边界已就绪”：只有它才允许会话结束后自动恢复。Attaching 也算——
-    /// 页面已打开、代理已启动，只是导航尚未完成；这不等于宣称已加载（状态仍是 Attaching）。
-    /// 受控失败会清掉这个事实，未附着与会话进行中都不改变它。
+    /// 宿主推送快照变化：调度到界面线程后立即重投影。附着成功或受控失败因此不必等
+    /// 下一次状态轮询；宿主自己保证只在快照实际变化时触发。
     /// </summary>
-    private void NoteHostState()
+    private void OnHostStateChanged(AuthPageHostSnapshot _)
     {
-        if (host.Snapshot.Attached || host.Snapshot.Status == AuthPageHostStatus.Attaching) hadAttached = true;
-        else if (host.Snapshot.Status is AuthPageHostStatus.RuntimeMissing
-            or AuthPageHostStatus.NetworkBoundaryUnavailable or AuthPageHostStatus.Failed)
-            hadAttached = false;
+        if (disposed) return;
+        dispatch(() =>
+        {
+            if (!disposed) ApplyProjection();
+        });
+    }
+
+    /// <summary>
+    /// 投影的唯一入口：状态轮询与宿主推送都经此，读取最近一次状态、当前宿主快照
+    /// （含受控失败覆盖）与通道投影。返回应用后的内容。
+    /// </summary>
+    private AuthPageContent ApplyProjection()
+    {
+        var next = AuthPageModel.From(lastReading, episode.Project(host.Snapshot), channelState?.Invoke());
+        episode.Observe(host.Snapshot);
+        current = next;
+        if (!disposed) Updated?.Invoke(current);
+        ResumeAfterChannelSession();
+        return current;
     }
 
     /// <summary>
@@ -105,22 +116,10 @@ internal sealed class AuthPageCoordinator : IDisposable
     /// </summary>
     private void ResumeAfterChannelSession()
     {
-        if (disposed || !hadAttached || host.Snapshot.Status != AuthPageHostStatus.NotAttached) return;
-        attachAttempted = false;
+        if (disposed || episode.InFlight || !episode.Live || host.Snapshot.Status != AuthPageHostStatus.NotAttached)
+            return;
+        episode.Reopen();
         _ = EnsureAttachedAsync();
-    }
-
-    /// <summary>
-    /// 宿主状态以宿主自己的快照为准；只有“附着抛异常”的失败投影会保留到宿主状态变化
-    /// 或用户显式重试，避免后续刷新把受控失败误报成未附着/成功。
-    /// </summary>
-    private AuthPageHostSnapshot Snapshot()
-    {
-        if (failureOverride is null) return host.Snapshot;
-        if (host.Snapshot == failureObserved) return failureOverride;
-        failureOverride = null;
-        failureObserved = null;
-        return host.Snapshot;
     }
 
     /// <summary>
@@ -129,10 +128,10 @@ internal sealed class AuthPageCoordinator : IDisposable
     /// </summary>
     public Task<AuthPageContent> EnsureAttachedAsync(CancellationToken cancellationToken = default)
     {
-        if (disposed || host.Snapshot.Attached || attachAttempted)
+        if (disposed || !episode.CanBegin(host.Snapshot))
             return Task.FromResult(current);
         // 在进入异步方法前同步置位，避免同步完成时重复进入（宿主可能立即返回受控失败）。
-        attachAttempted = true;
+        episode.Begin();
         return AttachCoreAsync(cancellationToken);
     }
 
@@ -140,9 +139,7 @@ internal sealed class AuthPageCoordinator : IDisposable
     public Task<AuthPageContent> RetryAsync(CancellationToken cancellationToken = default)
     {
         if (disposed) return Task.FromResult(current);
-        failureOverride = null;
-        failureObserved = null;
-        attachAttempted = false;
+        episode.ResetForRetry();
         return EnsureAttachedAsync(cancellationToken);
     }
 
@@ -167,26 +164,25 @@ internal sealed class AuthPageCoordinator : IDisposable
             await host.AttachAsync(new Uri(AuthPageModel.PortalAddress), cancellationToken).ConfigureAwait(false);
             return Publish(() =>
             {
-                NoteHostState();
-                return AuthPageModel.From(lastReading, Snapshot(), channelState?.Invoke());
+                episode.Observe(host.Snapshot);
+                return AuthPageModel.From(lastReading, episode.Project(host.Snapshot), channelState?.Invoke());
             });
         }
         catch (OperationCanceledException)
         {
             // 取消不是失败：保留当前投影，下一次打开页面仍可附着。状态只在界面线程上改写。
-            dispatch(() => attachAttempted = false);
+            dispatch(episode.Reopen);
         }
         catch (Exception)
         {
             // 受控失败：只披露宿主失败分类，不携带异常文本、URL 或页面内容。
-            return Publish(() =>
-            {
-                failureObserved = host.Snapshot;
-                failureOverride = new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false,
-                    AuthPageModel.HostCopyFor(AuthPageHostStatus.Failed).Detail);
-                hadAttached = false;
-                return AuthPageModel.From(lastReading, failureOverride, channelState?.Invoke());
-            });
+            return Publish(() => AuthPageModel.From(lastReading, episode.RecordFailure(host.Snapshot),
+                channelState?.Invoke()));
+        }
+        finally
+        {
+            // 附着可能在线程池上返回；进行中标记同样只在界面线程上清除。
+            dispatch(episode.Complete);
         }
         return current;
     }
@@ -212,6 +208,7 @@ internal sealed class AuthPageCoordinator : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        host.StateChanged -= OnHostStateChanged;
         host.Dispose();
     }
 }
