@@ -45,21 +45,12 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     private SubmissionBudget? submissionBudget;
     private SubmissionBudget? activeSubmission;
     private SubmissionRetryDecision submissionDecision;
-    private bool submissionExhaustedPublished;
-    private bool submissionNearLimitPublished;
-    private bool submissionResetPending;
-    // #35: the previous cycle's controlled budget level, so a reset is announced as a
-    // transition rather than replayed on every first observation (including restarts).
-    private string lastSubmissionBudgetCode = "";
+    // ADR-0001 / 0011 / 0014 / 0015: pending timing, read-only recheck cadence and the
+    // one-shot quota announcements all live in one pure state module.
+    private readonly SubmissionEpisode submissionEpisode = new();
     private bool retryingSubmission;
     private DateTimeOffset pendingRetryAfter;
-    private DateTimeOffset nextSubmissionRecheck;
     private DateTimeOffset authenticationRetryUntil;
-    // ADR-0001 recheck schedule: read-only probes about 2s and 6s after the pending state
-    // appeared; the schedule re-arms after a restart.
-    private DateTimeOffset? submissionPendingSince;
-    private int submissionRechecks;
-    private static readonly TimeSpan[] SubmissionRecheckDelays = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(6)];
     private string lastError => journal.LastError;
     private HttpClient? directHttp;
     private string directKey = "";
@@ -217,8 +208,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         if (block?.State == AuthenticationState.RetryCoolingDown) policy.DeferAuthenticationUntil(authenticationRetryUntil);
         // ADR-0001: the recheck schedule arms when the durable pending state is first observed
         // (including after a restart) and is cleared as soon as the state leaves pending.
-        if (block?.State == AuthenticationState.SubmissionPending) submissionPendingSince ??= PolicyNow;
-        else { submissionPendingSince = null; submissionRechecks = 0; }
+        submissionEpisode.ObservePending(block?.State == AuthenticationState.SubmissionPending, PolicyNow);
         var credentials = ReadStep("CredentialsRead", environment.LoadCredentials);
         projectedUsername = credentials?.Username;
         UpdatePower(settings.Enabled && settings.KeepAwakeOnAc);
@@ -520,43 +510,34 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
         // take it this cycle, leave the budget event unpublished instead of marking it as
         // delivered: the layout event is already published, so the next cycle claims the
         // slot for the budget event and it is not lost for the rest of the pending episode.
-        if (exhaustedStopsSubmission && !submissionExhaustedPublished && !layoutWillPublish)
+        if (submissionEpisode.ShouldAnnounceExhausted(exhaustedStopsSubmission, layoutWillPublish))
         {
-            submissionExhaustedPublished = true;
             Notify(NotificationCodes.SubmissionBudgetExhausted);
             journal.Write("SubmissionBudgetExhausted", "提交额度已耗尽，已停止自动提交；" + RecheckText(link,
                     "继续低频只读复检，", "校园 Wi-Fi 当前不可用，暂不发起只读复检，恢复连接后继续低频只读复检；") +
                 "门户明确成功或手动重新开始认证后重置额度。",
                 diagnostic with { Stage = "Submission", Outcome = "Exhausted", AuthenticationAttempts = authentication?.Attempts ?? 0 });
         }
-        if (!exhaustedStopsSubmission) submissionExhaustedPublished = false;
         // #35 parent spec: near-limit and reset are also user-visible quota events. Only
         // announce when the quota is the operative concern — an explicit portal refusal
         // keeps its own pause wording. A suppressed event stays unpublished so a later
         // cycle can still deliver it, and neither may steal a slot already used this cycle.
         var nearLimitStops = submissionBudgetCode == SubmissionBudgetCodes.NearLimit && blockFailure == PortalFailure.None;
-        if (nearLimitStops && !submissionNearLimitPublished && !layoutWillPublish && !notifiedThisCycle)
+        if (submissionEpisode.ShouldAnnounceNearLimit(nearLimitStops, layoutWillPublish, notifiedThisCycle))
         {
-            submissionNearLimitPublished = true;
             Notify(NotificationCodes.SubmissionBudgetNearLimit);
             journal.Write("SubmissionBudgetNearLimit", "提交额度即将用尽：本次故障只剩最后一次自动提交机会；再失败后停止自动提交。",
                 diagnostic with { Stage = "Submission", Outcome = "NearLimit", AuthenticationAttempts = authentication?.Attempts ?? 0 });
         }
-        if (!nearLimitStops) submissionNearLimitPublished = false;
         // A reset is an event only when the controlled level actually changes to Reset from
         // a previously observed level. The first observation after a restart is not replayed.
-        if (submissionBudgetCode == SubmissionBudgetCodes.Reset &&
-            lastSubmissionBudgetCode is { Length: > 0 } and not SubmissionBudgetCodes.Reset)
-            submissionResetPending = true;
-        if (submissionResetPending && !policy.CredentialsBlocked && !layoutWillPublish && !notifiedThisCycle)
+        if (submissionEpisode.ShouldAnnounceReset(submissionBudgetCode, policy.CredentialsBlocked,
+                layoutWillPublish, notifiedThisCycle))
         {
-            submissionResetPending = false;
             Notify(NotificationCodes.SubmissionBudgetReset);
             journal.Write("SubmissionBudgetReset", "提交额度已重置：门户明确确认成功或已人工重新开始认证；重启和保存设置不会重置。",
                 diagnostic with { Stage = "Submission", Outcome = "Reset", AuthenticationAttempts = authentication?.Attempts ?? 0 });
         }
-        if (submissionBudgetCode != SubmissionBudgetCodes.Reset) submissionResetPending = false;
-        lastSubmissionBudgetCode = submissionBudgetCode;
         if (layoutWillPublish)
         {
             portalLayoutPublished = true;
@@ -691,18 +672,15 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
     // without a submission budget remain paused rather than gaining a fresh allowance.
     private async Task RecheckSubmissionAsync(Settings settings, WifiLink link, CancellationToken ct)
     {
-        if (submissionPendingSince is not { } since) return;
-        if (submissionRechecks < SubmissionRecheckDelays.Length
-            ? PolicyNow < since.Add(SubmissionRecheckDelays[submissionRechecks]) : PolicyNow < nextSubmissionRecheck) return;
+        if (!submissionEpisode.Pending || !submissionEpisode.IsRecheckDue(PolicyNow)) return;
         // The recheck reads chkstatus through the Wi-Fi adapter; while the link is unusable a
         // probe would only fail, so the slot is not spent and the probe runs once it returns.
         if (link.State != WifiState.Ready) return;
         using var execution = environment.TryAcquireSubmissionExecution();
         if (execution is null) return;
-        var ordinal = ++submissionRechecks;
-        nextSubmissionRecheck = PolicyNow.AddSeconds(60);
+        var ordinal = submissionEpisode.BeginRecheck(PolicyNow);
         journal.Stage = "SubmissionRecheck";
-        if (ordinal == 1) Notify(NotificationCodes.SubmissionRechecking);
+        if (submissionEpisode.ShouldAnnounceRecheckStarted(ordinal)) Notify(NotificationCodes.SubmissionRechecking);
         journal.Write("SubmissionRechecking", $"提交结果未知，开始第 {ordinal} 次只读复检；不发送新凭据请求。", new()
             { Stage = "SubmissionRecheck", Outcome = "Started", AuthenticationAttempts = authentication?.Attempts ?? 0 });
         var inspection = await new DrcomPortal(DirectClient(link), new Uri(settings.PortalOrigin), null, budgets).InspectDetailedAsync(ct);
@@ -718,8 +696,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
                     new() { Stage = "SubmissionRecheck", Outcome = "NeedsLogin", Authentication = inspection });
                 return;
             default:
-                if (submissionRechecks < SubmissionRecheckDelays.Length) return;
-                if (submissionRechecks == SubmissionRecheckDelays.Length) Notify(NotificationCodes.SubmissionUnresolved);
+                if (!submissionEpisode.IsBeyondFastRechecks(ordinal)) return;
+                if (submissionEpisode.ShouldAnnounceUnresolved(ordinal)) Notify(NotificationCodes.SubmissionUnresolved);
                 journal.Write("SubmissionUnresolved", "只读复检仍无法定性；保持提交结果未知状态，继续低频复检并遵守提交额度。",
                     new() { Stage = "SubmissionRecheck", Authentication = inspection });
                 return;
@@ -980,8 +958,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             {
                 State = AuthenticationState.SubmissionPending, Attempts = current.Attempts
             })) return RejectSubmission("SubmissionReservationFailed");
-            submissionPendingSince = PolicyNow;
-            submissionRechecks = 0;
+            submissionEpisode.Restart(PolicyNow);
             review.ThrowIfCancellationRequested();
             currentSettings = ReadStep("SettingsRead", environment.LoadSettings);
             currentLink = ReadStep("WifiRead", () => environment.ReadWifi(settings));
@@ -1054,7 +1031,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             // The durable pending state survives ambiguous replies. ADR-0011 allows a
             // later attempt only through the independent budget and full review chain.
             policy.CredentialsBlocked = true;
-            submissionPendingSince ??= PolicyNow;
+            submissionEpisode.ObservePending(true, PolicyNow);
             journal.Fault("Authentication", "认证提交结果未确认，保留持久安全暂停；稍后进行只读复检定性。");
             return;
         }
