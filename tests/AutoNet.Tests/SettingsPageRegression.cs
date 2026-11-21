@@ -1253,6 +1253,87 @@ internal static class SettingsPageRegression
             var result = editor.Save(Draft(Profile, "TEST-USER-1", PasswordTwo), new SettingsSaveGuard(null));
             Require(result.Outcome == SettingsSaveOutcome.SettingsUnreadable, "守卫读取失败未受控拒绝");
             Require(writes == 0, "守卫读取失败仍执行了写入");
+        })),
+        ("设置页回归：草稿契约集中判定保留字段与最终设置", () => Sync(() =>
+        {
+            var existing = new Settings
+            {
+                InterfaceId = "existing-interface", WifiProfile = "existing-profile",
+                Enabled = false, AllowActiveDisconnect = false, KeepAwakeOnAc = false,
+                ProxyUrl = "http://127.0.0.1:7897/secret", UuEndpoint = "https://uu.example.test/secret",
+                AuthChannelMode = AuthChannelModes.Off
+            };
+            var kept = new SettingsDraft(null, "", "", "", "", true, true, true)
+            {
+                KeepProfile = true, KeepUsername = true, KeepProxyUrl = true, KeepUuEndpoint = true,
+                KeepEnabled = true, KeepAllowActiveDisconnect = true, KeepAwakeOnAcKept = true, KeepAuthChannelMode = true
+            };
+            Require(SettingsDraftContract.NeedsExistingSettings(kept), "全部保留时未要求读取既有设置");
+            var preserved = SettingsDraftContract.Resolve(kept, existing);
+            Require(preserved.InterfaceId == existing.InterfaceId && preserved.WifiProfile == existing.WifiProfile &&
+                preserved.Enabled == existing.Enabled && preserved.AllowActiveDisconnect == existing.AllowActiveDisconnect &&
+                preserved.KeepAwakeOnAc == existing.KeepAwakeOnAc && preserved.ProxyUrl == existing.ProxyUrl &&
+                preserved.UuEndpoint == existing.UuEndpoint && preserved.AuthChannelMode == existing.AuthChannelMode,
+                "保留字段未使用既有值");
+
+            var edited = new SettingsDraft(Profile, "TEST-USER-1", PasswordTwo, "http://127.0.0.1:7897",
+                "https://uu.example.test", true, true, true, AuthChannelModes.Automatic)
+            {
+                KeepProfile = false, KeepProxyUrl = false, KeepUuEndpoint = false,
+                KeepEnabled = false, KeepAllowActiveDisconnect = false, KeepAwakeOnAcKept = false, KeepAuthChannelMode = false
+            };
+            Require(!SettingsDraftContract.NeedsExistingSettings(edited), "全部编辑后仍要求读取既有设置");
+            var resolved = SettingsDraftContract.Resolve(edited, existing);
+            Require(resolved.InterfaceId == Profile.InterfaceId && resolved.WifiProfile == Profile.Name &&
+                resolved.Enabled && resolved.AllowActiveDisconnect && resolved.KeepAwakeOnAc &&
+                resolved.ProxyUrl == "http://127.0.0.1:7897" && resolved.UuEndpoint == "https://uu.example.test" &&
+                resolved.AuthChannelMode == AuthChannelModes.Automatic,
+                "编辑字段未覆盖既有值");
+        })),
+        ("设置页回归：草稿契约判定保存后仍需等待新投影的字段", () => Sync(() =>
+        {
+            var draft = new SettingsDraft(Profile, "TEST-USER-1", "", "http://127.0.0.1:7897",
+                "https://uu.example.test", true, true, true)
+            {
+                KeepProxyUrl = true, KeepUuEndpoint = true
+            };
+            Require(!SettingsDraftContract.HasKeptFields(draft, projected: true, proxyRedacted: false, uuRedacted: false),
+                "完整投影下仍把已显示的地址当成未知");
+            Require(SettingsDraftContract.HasKeptFields(draft, projected: true, proxyRedacted: true, uuRedacted: false),
+                "隐藏地址未要求等待新投影");
+            Require(SettingsDraftContract.HasKeptFields(draft, projected: false, proxyRedacted: false, uuRedacted: false),
+                "无投影且未编辑的地址未被当成未知");
+            var allEdited = draft with { KeepProxyUrl = false, KeepUuEndpoint = false };
+            Require(!SettingsDraftContract.HasKeptFields(allEdited, projected: false, proxyRedacted: false, uuRedacted: false),
+                "全部编辑后仍被当成未知");
+            var profileKept = new SettingsDraft(null, "TEST-USER-1", "", "", "", true, true, true) { KeepProfile = true };
+            Require(SettingsDraftContract.HasKeptFields(profileKept, projected: false, proxyRedacted: false, uuRedacted: false),
+                "未投影且未选择配置时未要求等待新投影");
+        })),
+        ("设置页回归：草稿契约统一本地校验与三态显示", () => Sync(() =>
+        {
+            var missing = new SettingsDraft(null, "TEST-USER-1", "", "", "", true, true, true);
+            Require(SettingsDraftContract.Validate(missing)?.State == SettingsPageSaveState.ValidationFailed,
+                "未选择配置且不保留时未拒绝");
+            var kept = new SettingsDraft(null, "TEST-USER-1", "", "", "", true, true, true) { KeepProfile = true };
+            Require(SettingsDraftContract.Validate(kept) is null, "保留守护目标时被误拒绝");
+            var emptyUser = new SettingsDraft(Profile, "", "", "", "", true, true, true) { KeepUsername = false };
+            Require(SettingsDraftContract.Validate(emptyUser)?.Message == ElevatedSettings.CredentialsEmptyMessage,
+                "明确清空账号时未拒绝");
+
+            var values = new SettingsDraftValues();
+            Require(values.EnabledForDisplay(configProjected: false) is null &&
+                values.AllowActiveDisconnectForDisplay(false) is null &&
+                values.KeepAwakeOnAcForDisplay(false) is null && !values.ChannelModeKnown(false),
+                "无投影且未编辑时选项未显示为未知");
+            Require(values.AnyOptionUnknown(false), "无投影且未编辑时未提示选项未知");
+            values.KeepEnabled = false;
+            Require(values.EnabledForDisplay(false) is true && values.AnyOptionUnknown(false),
+                "明确修改一个选项后其值未变为已知");
+            values.KeepAllowActiveDisconnect = false;
+            values.KeepAwakeOnAcKept = false;
+            values.KeepAuthChannelMode = false;
+            Require(!values.AnyOptionUnknown(false), "全部明确修改后仍提示选项未知");
         }))
     ];
 

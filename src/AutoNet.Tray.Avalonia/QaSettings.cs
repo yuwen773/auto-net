@@ -371,9 +371,7 @@ internal static class QaSettings
             KeepAuthChannelMode = scenario.KeepOptions
         });
         await Task.Delay(160);
-        var optionsUnknown = !page.Content.ConfigProjected &&
-            (page.Draft.KeepEnabled || page.Draft.KeepAllowActiveDisconnect ||
-             page.Draft.KeepAwakeOnAcKept || page.Draft.KeepAuthChannelMode);
+        var optionsUnknown = page.Draft.AnyOptionUnknown(page.Content.ConfigProjected);
         var saveTask = page.SaveAsync();
         var nameDuringSave = "";
         if (scenario.DelayHandoff)
