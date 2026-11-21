@@ -24,6 +24,25 @@ internal static class AvaloniaShellRegression
             foreach (var page in Enum.GetValues<ShellPage>())
                 Require(ShellPages.Info(page).Page == page, "页面目录映射不一致：" + page);
         })),
+        ("壳回归：页面路由表覆盖全部页面且行为声明一致", () => Sync(() =>
+        {
+            Require(ShellRoutes.All.Select(route => route.Page).SequenceEqual(ShellPages.All.Select(info => info.Page)),
+                "路由表顺序或页面集合与导航目录不一致");
+            Require(ShellRoutes.All.Select(route => route.Page).Distinct().Count() == ShellRoutes.All.Count,
+                "路由表存在重复页面");
+            foreach (var page in Enum.GetValues<ShellPage>())
+                Require(ShellRoutes.For(page).Page == page, "路由表缺少页面：" + page);
+
+            Require(ShellRoutes.All.Single(route => route.Mode == ShellPageContentMode.AsyncLoad).Page == ShellPage.Logs,
+                "只有日志页应异步加载");
+            Require(ShellRoutes.All.Single(route => route.TogglesAuthPage).Page == ShellPage.Authentication,
+                "只有认证页应切换浏览器宿主可见性");
+            Require(ShellRoutes.All.Single(route => route.RefreshesProfilesOnEnter).Page == ShellPage.Settings,
+                "只有设置页应在进入时刷新 Wi-Fi 配置");
+            Require(!ShellRoutes.For(ShellPage.Logs).RefreshesOnStatus, "异步日志页不应被状态更新重建");
+            Require(ShellRoutes.All.Where(route => route.IsSyncProjection).All(route => route.RefreshesOnStatus),
+                "同步投影页必须跟随状态刷新");
+        })),
         ("壳回归：快速切换页面时旧读取不覆写当前页", async () =>
         {
             using var coordinator = new PageLoadCoordinator();

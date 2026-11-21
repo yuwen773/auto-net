@@ -95,8 +95,8 @@ public partial class MainView : UserControl
         {
             SyncSelection(page);
             // 进入设置页时重新枚举 Wi-Fi 配置：启动时 WLAN 未就绪或之后新建的配置
-            // 不应要求重启托盘才能选择。
-            if (page == ShellPage.Settings) settingsPage?.RefreshProfiles();
+            // 不应要求重启托盘才能选择。是否需要刷新由页面路由声明。
+            if (ShellRoutes.For(page).RefreshesProfilesOnEnter) settingsPage?.RefreshProfiles();
         });
         shell.ContentChanged += content => Dispatcher.UIThread.Post(() => RenderContent(content));
         shell.StatusChanged += reading => Dispatcher.UIThread.Post(() => RenderStatus(reading));

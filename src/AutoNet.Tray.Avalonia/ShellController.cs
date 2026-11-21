@@ -2,7 +2,8 @@ namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 壳控制器：把导航选择、页面内容代次守卫与状态管道接到一起；不依赖 UI 类型，便于受控测试。
-/// 概览、认证、诊断与设置页内容按状态投影同步重建（#4、#37、#6、#8）；日志页经 <see cref="PageLoadCoordinator"/> 异步加载。
+/// 哪些页面同步投影、哪些异步加载、哪些跟随状态刷新，统一由 <see cref="ShellRoutes"/> 声明；
+/// 日志页经 <see cref="PageLoadCoordinator"/> 异步加载。
 /// 事件在触发线程上回调（状态事件来自读取线程，UI 侧负责调度到界面线程）。
 /// </summary>
 internal sealed class ShellController : IDisposable
@@ -48,18 +49,12 @@ internal sealed class ShellController : IDisposable
     public Task SelectAsync(ShellPage page)
     {
         var previous = SelectedPage;
-        if (previous == ShellPage.Authentication && page != ShellPage.Authentication)
+        if (ShellRoutes.For(previous).TogglesAuthPage && page != previous)
             authPage?.SetPageVisible(false);
         SelectedPage = page;
         SelectionChanged?.Invoke(page);
-        if (page == ShellPage.Overview)
-        {
-            // 概览内容由当前状态投影而来：纯函数、无 I/O，同步应用，无需代次守卫。
-            ApplyOverview(pipe.Current);
-            return Task.CompletedTask;
-        }
-
-        if (page == ShellPage.Authentication)
+        var route = ShellRoutes.For(page);
+        if (route.TogglesAuthPage)
         {
             // 认证页（#37）：状态投影与浏览器宿主分离；普通刷新只重投影文案，
             // 首次打开才附着固定门户地址，打开/切页本身不构成提交意图。
@@ -68,23 +63,29 @@ internal sealed class ShellController : IDisposable
             if (authPage is { } auth) _ = auth.EnsureAttachedAsync();
             return Task.CompletedTask;
         }
-
-        if (page == ShellPage.Diagnostics)
+        if (route.IsSyncProjection)
         {
-            // 诊断页同样由状态投影（#6）：纯函数、无 I/O、无动作；同步应用，状态更新时跟随重建。
-            ApplyDiagnostics(pipe.Current);
+            // 概览、诊断与设置页都由当前状态投影而来：纯函数、无 I/O，同步应用，无需代次守卫。
+            // 设置页（#8）的受限配置由提权窗口自行读取，普通界面绝不读取。
+            ApplySyncProjection(page, pipe.Current);
             return Task.CompletedTask;
         }
-
-        if (page == ShellPage.Settings)
-        {
-            // 设置页（#8）是普通权限的只读投影：事实来自状态快照，修改入口发起独立提权操作。
-            // 与概览/诊断同走同步投影路径；受限配置由提权窗口自行读取，普通界面绝不读取。
-            ApplySettings(pipe.Current);
-            return Task.CompletedTask;
-        }
-
         return coordinator.NavigateAsync(page, load, ApplyContent, ApplyFailure);
+    }
+
+    /// <summary>
+    /// 同步页面的唯一投影入口：导航与状态刷新都经此，哪些页面属于同步投影由
+    /// <see cref="ShellRoutes"/> 声明，不再在两条链上各写一份页面清单。
+    /// </summary>
+    private void ApplySyncProjection(ShellPage page, StatusReading? reading)
+    {
+        switch (page)
+        {
+            case ShellPage.Overview: ApplyOverview(reading); break;
+            case ShellPage.Authentication: ApplyAuthentication(reading); break;
+            case ShellPage.Diagnostics: ApplyDiagnostics(reading); break;
+            case ShellPage.Settings: ApplySettings(reading); break;
+        }
     }
 
     /// <summary>立即刷新一次状态（窗口激活时调用；结果同样按序应用，旧读不覆盖新读）。</summary>
@@ -164,11 +165,9 @@ internal sealed class ShellController : IDisposable
     private void OnStatusUpdated(StatusReading reading)
     {
         StatusChanged?.Invoke(reading);
-        // 概览、认证、诊断与设置页跟随状态更新重建（四者都是纯投影）；其他页面不被状态更新改写。
-        if (SelectedPage == ShellPage.Overview) ApplyOverview(reading);
-        else if (SelectedPage == ShellPage.Authentication) ApplyAuthentication(reading);
-        else if (SelectedPage == ShellPage.Diagnostics) ApplyDiagnostics(reading);
-        else if (SelectedPage == ShellPage.Settings) ApplySettings(reading);
+        // 是否重建由页面注册表决定：同步投影页跟随状态更新，异步页（日志）不被状态更新改写。
+        if (ShellRoutes.For(SelectedPage).RefreshesOnStatus)
+            ApplySyncProjection(SelectedPage, reading);
     }
 
     /// <summary>
