@@ -20,6 +20,7 @@ internal sealed class ConfirmWindow : Window
     public static ConfirmWindow Create(string heading, string body, string confirmText = "确认解除", bool cancelByDefault = false)
     {
         var dialog = new ConfirmWindow();
+        WindowChrome.Track(dialog);
         var headingBlock = new TextBlock { Text = heading, FontSize = 18, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
         var bodyBlock = new TextBlock { Text = body, TextWrapping = TextWrapping.Wrap, Opacity = 0.85, LineHeight = 21 };
 

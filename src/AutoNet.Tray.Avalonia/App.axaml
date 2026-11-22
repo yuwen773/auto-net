@@ -5,46 +5,271 @@
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
+        <!--
+          设计令牌（明）：深墨色导航轨 + 冷瓷底 + 白卡片。
+          语义色（Tone*）同时提供前景与浅色面，文字、图标、底色三通道并行，不单独依赖颜色。
+        -->
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="ShellNavBackground">#F7F7F7</SolidColorBrush>
-          <SolidColorBrush x:Key="ShellStripBackground">#FBFBFB</SolidColorBrush>
-          <SolidColorBrush x:Key="ShellBorder">#E5E5E5</SolidColorBrush>
+          <SolidColorBrush x:Key="CanvasBackground">#F3F5F8</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellNavBackground">#FBFCFD</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellStripBackground">#F3F5F8</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellBorder">#E1E6ED</SolidColorBrush>
           <SolidColorBrush x:Key="CardBackground">#FFFFFF</SolidColorBrush>
-          <SolidColorBrush x:Key="CardBorder">#E2E6EC</SolidColorBrush>
-          <SolidColorBrush x:Key="TextMuted">#626E7A</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneGood">#146C45</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneGoodSurface">#E8F5ED</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneAttention">#1E5FA0</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneAttentionSurface">#E9F1FA</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneWarning">#9E5C08</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneWarningSurface">#FCF4E6</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneProblem">#A62A2A</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneProblemSurface">#FDECEC</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneNeutral">#606A78</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneNeutralSurface">#F0F3F7</SolidColorBrush>
+          <SolidColorBrush x:Key="CardBorder">#E2E8EF</SolidColorBrush>
+          <SolidColorBrush x:Key="TextPrimary">#131A22</SolidColorBrush>
+          <SolidColorBrush x:Key="TextMuted">#5C6876</SolidColorBrush>
+          <SolidColorBrush x:Key="TextSubtle">#6E7987</SolidColorBrush>
+          <SolidColorBrush x:Key="NavText">#1A222C</SolidColorBrush>
+          <SolidColorBrush x:Key="NavTextMuted">#5C6876</SolidColorBrush>
+          <SolidColorBrush x:Key="NavHoverBackground">#EFF3F8</SolidColorBrush>
+          <SolidColorBrush x:Key="NavSelectedBackground">#E7EDF6</SolidColorBrush>
+          <SolidColorBrush x:Key="NavSelectedText">#0F1620</SolidColorBrush>
+          <SolidColorBrush x:Key="NavBrandMarkBackground">#E9EEF5</SolidColorBrush>
+          <SolidColorBrush x:Key="RowHover">#F6F8FA</SolidColorBrush>
+          <SolidColorBrush x:Key="RowSelected">#EDF1F6</SolidColorBrush>
+          <SolidColorBrush x:Key="RowSeparator">#EDF0F4</SolidColorBrush>
+          <SolidColorBrush x:Key="SurfaceSunken">#F6F8FA</SolidColorBrush>
+          <SolidColorBrush x:Key="InputBackground">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="InputBorder">#D7DEE7</SolidColorBrush>
+          <SolidColorBrush x:Key="ScrollThumb">#C6D0DC</SolidColorBrush>
+          <SolidColorBrush x:Key="ScrollThumbHover">#A7B4C3</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonBackground">#151C24</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonForeground">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonHover">#263140</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonPressed">#0C1218</SolidColorBrush>
+          <SolidColorBrush x:Key="SecondaryButtonBackground">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="SecondaryButtonBorder">#D7DEE7</SolidColorBrush>
+          <SolidColorBrush x:Key="SecondaryButtonHover">#F4F6F9</SolidColorBrush>
+          <SolidColorBrush x:Key="FocusRing">#3B6FE0</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGood">#0E6B45</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGoodSurface">#E6F5EC</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttention">#1B5FA8</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttentionSurface">#E8F1FB</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarning">#8A5207</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarningSurface">#FBF2E2</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblem">#A32626</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblemSurface">#FCEBEB</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutral">#596472</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutralSurface">#F0F3F8</SolidColorBrush>
+          <BoxShadows x:Key="CardShadow">0 1 2 0 #0A101828, 0 2 10 0 #07101828</BoxShadows>
+          <BoxShadows x:Key="HeroShadow">0 1 2 0 #08101828, 0 4 14 0 #0A101828</BoxShadows>
         </ResourceDictionary>
+        <!-- 设计令牌（暗）：导航轨比画布更深，卡片以边框而非阴影分层。 -->
         <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="ShellNavBackground">#2B2B2B</SolidColorBrush>
-          <SolidColorBrush x:Key="ShellStripBackground">#292929</SolidColorBrush>
-          <SolidColorBrush x:Key="ShellBorder">#3D3D3D</SolidColorBrush>
-          <SolidColorBrush x:Key="CardBackground">#2A2A2A</SolidColorBrush>
-          <SolidColorBrush x:Key="CardBorder">#3F3F3F</SolidColorBrush>
-          <SolidColorBrush x:Key="TextMuted">#A9B2BD</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneGood">#7BD3A0</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneGoodSurface">#20352A</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneAttention">#8CBDF0</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneAttentionSurface">#1F2C3D</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneWarning">#E2B25C</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneWarningSurface">#37301E</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneProblem">#F09A9A</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneProblemSurface">#3B2426</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneNeutral">#A8B0BC</SolidColorBrush>
-          <SolidColorBrush x:Key="ToneNeutralSurface">#2C3036</SolidColorBrush>
+          <SolidColorBrush x:Key="CanvasBackground">#0F141A</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellNavBackground">#151B23</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellStripBackground">#0F141A</SolidColorBrush>
+          <SolidColorBrush x:Key="ShellBorder">#232B35</SolidColorBrush>
+          <SolidColorBrush x:Key="CardBackground">#171D25</SolidColorBrush>
+          <SolidColorBrush x:Key="CardBorder">#262F3A</SolidColorBrush>
+          <SolidColorBrush x:Key="TextPrimary">#ECF1F7</SolidColorBrush>
+          <SolidColorBrush x:Key="TextMuted">#98A4B3</SolidColorBrush>
+          <SolidColorBrush x:Key="TextSubtle">#83909F</SolidColorBrush>
+          <SolidColorBrush x:Key="NavText">#E6EDF5</SolidColorBrush>
+          <SolidColorBrush x:Key="NavTextMuted">#9AA5B4</SolidColorBrush>
+          <SolidColorBrush x:Key="NavHoverBackground">#1E2631</SolidColorBrush>
+          <SolidColorBrush x:Key="NavSelectedBackground">#27313D</SolidColorBrush>
+          <SolidColorBrush x:Key="NavSelectedText">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="NavBrandMarkBackground">#1E2631</SolidColorBrush>
+          <SolidColorBrush x:Key="RowHover">#1C242E</SolidColorBrush>
+          <SolidColorBrush x:Key="RowSelected">#222C38</SolidColorBrush>
+          <SolidColorBrush x:Key="RowSeparator">#232B35</SolidColorBrush>
+          <SolidColorBrush x:Key="SurfaceSunken">#141A21</SolidColorBrush>
+          <SolidColorBrush x:Key="InputBackground">#11171E</SolidColorBrush>
+          <SolidColorBrush x:Key="InputBorder">#33404E</SolidColorBrush>
+          <SolidColorBrush x:Key="ScrollThumb">#39434F</SolidColorBrush>
+          <SolidColorBrush x:Key="ScrollThumbHover">#4B5765</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonBackground">#EDF2F8</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonForeground">#0F141A</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonHover">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryButtonPressed">#D5DEE9</SolidColorBrush>
+          <SolidColorBrush x:Key="SecondaryButtonBackground">#171D25</SolidColorBrush>
+          <SolidColorBrush x:Key="SecondaryButtonBorder">#33404E</SolidColorBrush>
+          <SolidColorBrush x:Key="SecondaryButtonHover">#1D2631</SolidColorBrush>
+          <SolidColorBrush x:Key="FocusRing">#7AA2FF</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGood">#7FD6A5</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneGoodSurface">#1A2C23</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttention">#8FC0F5</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneAttentionSurface">#16283A</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarning">#E8B862</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneWarningSurface">#2E2716</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblem">#F3A0A0</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneProblemSurface">#33201F</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutral">#A7B0BD</SolidColorBrush>
+          <SolidColorBrush x:Key="ToneNeutralSurface">#202832</SolidColorBrush>
+          <BoxShadows x:Key="CardShadow">0 0 0 0 #00000000</BoxShadows>
+          <BoxShadows x:Key="HeroShadow">0 0 0 0 #00000000</BoxShadows>
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
   </Application.Resources>
   <Application.Styles>
     <FluentTheme />
+
+    <!-- 基础排版与交互：统一控件高度、圆角、手型指针与过渡；页面内文字尺寸由视图构建器给出。 -->
+    <Style Selector="Window">
+      <Setter Property="Background" Value="{DynamicResource CanvasBackground}" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Padding" Value="14,7" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background" Duration="0:0:0.12" />
+          <BrushTransition Property="BorderBrush" Duration="0:0:0.12" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="{DynamicResource PrimaryButtonBackground}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryButtonForeground}" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.primary /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource PrimaryButtonBackground}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource PrimaryButtonForeground}" />
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource PrimaryButtonHover}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource PrimaryButtonForeground}" />
+    </Style>
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource PrimaryButtonPressed}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource PrimaryButtonForeground}" />
+    </Style>
+    <!-- 主按钮禁用时降为弱化底色：深墨填充会让“不可用”的动作看起来仍可点击。 -->
+    <Style Selector="Button.primary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SecondaryButtonBackground}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextSubtle}" />
+    </Style>
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="{DynamicResource SecondaryButtonBackground}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SecondaryButtonBorder}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Button.secondary /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SecondaryButtonBackground}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="Button.secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SecondaryButtonHover}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <!-- 次要按钮禁用时保留描边：否则“当前不可用”的动作会退化成一行普通文字。 -->
+    <Style Selector="Button.secondary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SecondaryButtonBackground}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SecondaryButtonBorder}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextSubtle}" />
+    </Style>
+
+    <!-- 输入控件：主题默认背景在深色下接近纯黑，与卡片脱节；统一到一组输入底色与描边。 -->
+    <Style Selector="TextBox">
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="10,6" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Background" Value="{DynamicResource InputBackground}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Background" Value="{DynamicResource InputBackground}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}" />
+    </Style>
+    <Style Selector="CheckBox, RadioButton">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Cursor" Value="Hand" />
+    </Style>
+
+    <!-- 列表行：中性悬停/选中，不再使用系统高亮蓝；圆角与左缘强调由行内容自身承担。 -->
+    <Style Selector="ListBoxItem">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Foreground" Duration="0:0:0.12" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover">
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource RowHover}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource RowSelected}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+
+    <!-- 技术详情折叠头：Fluent 默认把它画成实心按钮，在卡片里过于抢眼；改为安静的披露行。 -->
+    <Style Selector="Expander /template/ ToggleButton">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Padding" Value="2,5" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="Medium" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton /template/ ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextMuted}" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource RowHover}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+
+    <!-- 滚动条：默认滚动条的深灰滑块在浅色卡片上过于突兀；改为低对比滑块，悬停加深。 -->
+    <Style Selector="ScrollBar /template/ Thumb">
+      <Setter Property="Background" Value="{DynamicResource ScrollThumb}" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="ScrollBar /template/ Thumb:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ScrollThumbHover}" />
+    </Style>
+
+    <!-- 导航轨：深墨底上的浅色条目，选中为整块浅色胶囊，悬停仅提亮文字。 -->
+    <Style Selector="ListBox#nav ListBoxItem">
+      <Setter Property="Foreground" Value="{DynamicResource NavTextMuted}" />
+      <Setter Property="Padding" Value="13,10" />
+      <Setter Property="Margin" Value="0,1" />
+    </Style>
+    <Style Selector="ListBox#nav ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource NavTextMuted}" />
+    </Style>
+    <Style Selector="ListBox#nav ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource NavHoverBackground}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource NavText}" />
+    </Style>
+    <Style Selector="ListBox#nav ListBoxItem:pointerover">
+      <Setter Property="Foreground" Value="{DynamicResource NavText}" />
+    </Style>
+    <Style Selector="ListBox#nav ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource NavSelectedBackground}" />
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource NavSelectedText}" />
+    </Style>
+    <Style Selector="ListBox#nav ListBoxItem:selected">
+      <Setter Property="Foreground" Value="{DynamicResource NavSelectedText}" />
+    </Style>
   </Application.Styles>
 </Application>

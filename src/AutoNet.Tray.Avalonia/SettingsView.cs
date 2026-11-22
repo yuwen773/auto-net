@@ -9,11 +9,12 @@ using Avalonia.Threading;
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
-/// 设置页视觉构建（#8 / #41）：普通权限下的可编辑表单——守护配置、凭据说明、外观三个卡片。
+/// 设置页视觉构建（#8 / #41）：普通权限下的可编辑表单——当前状态、守护配置、凭据说明与外观。
 /// 非秘密字段由后台状态投影预填；账号与密码不由受限存储回读，密码始终遮挡。
 /// 保存按钮把草稿交给注入的 <see cref="SettingsPage"/>（生产 = 独立提权交接），
 /// 主题选择经壳注入的偏好提供者读取当前值、经选择委托当场生效。
 /// 控件树只构建一次：状态轮询只更新只读事实与结果文本，不打断正在输入的焦点与光标。
+/// 窄窗口下标签—控件行折为上下两段，输入框保持可读宽度。
 /// </summary>
 internal static class SettingsView
 {
@@ -23,60 +24,57 @@ internal static class SettingsView
     /// <summary>认证通道单选钮的组名（QA 定位共用）。</summary>
     public const string ChannelGroupName = "AutoNetAuthChannel";
 
+    private const double FieldWidth = 360;
+
     public static Control Build(
         SettingsPage page,
         ThemePreference theme = ThemePreference.System,
         Action<ThemePreference>? themeSelected = null)
     {
         var loading = false;
-        var pageStack = new StackPanel { Spacing = 14, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
-        pageStack.Children.Add(new StackPanel
+        var pageStack = new StackPanel
         {
-            Spacing = 4,
-            Children =
-            {
-                new TextBlock { Text = ShellPages.Info(ShellPage.Settings).Name, FontSize = 26, FontWeight = FontWeight.SemiBold },
-                new TextBlock
-                {
-                    Text = ShellPages.Info(ShellPage.Settings).Description,
-                    FontSize = 13,
-                    TextWrapping = TextWrapping.Wrap,
-                    Opacity = 0.75
-                }
-            }
-        });
+            Spacing = ShellTheming.CardGap,
+            MaxWidth = ShellTheming.PageMaxWidth,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        pageStack.Children.Add(ShellTheming.PageHeader(
+            ShellPages.Info(ShellPage.Settings).Name,
+            ShellPages.Info(ShellPage.Settings).Description));
 
         // 只读事实：来自状态快照，随轮询更新；不参与保存。
-        var recoveryValue = new TextBlock { FontSize = 14, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center };
-        var networkValue = new TextBlock { FontSize = 14, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
-        var facts = new StackPanel { Spacing = 10 };
-        facts.Children.Add(SectionHeader("当前状态"));
+        var recoveryValue = new TextBlock { FontSize = 13.5, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center };
+        var networkValue = new TextBlock { FontSize = 13.5, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        var facts = new StackPanel { Spacing = 12 };
+        facts.Children.Add(ShellTheming.SectionHeader("当前状态"));
         facts.Children.Add(FactRow("自动恢复", recoveryValue));
+        facts.Children.Add(ShellTheming.Hairline());
         facts.Children.Add(FactRow("守护的校园 Wi-Fi", networkValue));
+        facts.Children.Add(ShellTheming.Hairline());
         facts.Children.Add(FactRow("认证地址", new TextBlock
         {
             Text = SettingsModel.PortalLine,
-            FontSize = 14,
+            FontSize = 13.5,
             FontWeight = FontWeight.Medium,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap
         }));
         pageStack.Children.Add(ShellTheming.Card(facts));
 
         // 可编辑表单。
         var profileBox = ShellAccessibility.Named(
-            new ComboBox { MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left }, "校园 Wi-Fi 配置");
+            new ComboBox { MinWidth = 320, Width = FieldWidth, HorizontalAlignment = HorizontalAlignment.Left }, "校园 Wi-Fi 配置");
         foreach (var profile in page.Profiles) profileBox.Items.Add(profile);
 
-        var usernameBox = ShellAccessibility.Named(new TextBox { PlaceholderText = "校园网账号" }, "校园网账号");
-        var passwordBox = ShellAccessibility.Named(new TextBox
-        {
-            PasswordChar = '●',
-            PlaceholderText = "留空则保留已保存的密码"
-        }, "校园网密码");
-        var proxyBox = ShellAccessibility.Named(new TextBox { PlaceholderText = "可选，例如 http://127.0.0.1:7897" }, "本机代理检测地址");
-        var endpointBox = ShellAccessibility.Named(new TextBox { PlaceholderText = "可选，真实 UU 服务检测地址" }, "UU 服务检测地址");
-        var clearProxy = ShellAccessibility.Named(new Button { Content = "清空" }, "清空代理检测地址");
-        var clearEndpoint = ShellAccessibility.Named(new Button { Content = "清空" }, "清空 UU 服务检测地址");
+        var usernameBox = Input("校园网账号");
+        var passwordBox = Input("留空则保留已保存的密码");
+        passwordBox.PasswordChar = '●';
+        var proxyBox = Input("可选，例如 http://127.0.0.1:7897");
+        var endpointBox = Input("可选，真实 UU 服务检测地址");
+        var clearProxy = ShellAccessibility.Named(ShellTheming.SecondaryButton("清空"), "清空代理检测地址");
+        var clearEndpoint = ShellAccessibility.Named(ShellTheming.SecondaryButton("清空"), "清空 UU 服务检测地址");
+        clearProxy.MinWidth = 0;
+        clearEndpoint.MinWidth = 0;
 
         // 三态只用于显示“未确定”：没有可信投影且用户未改动时，页面不知道已保存值。
         var enabledBox = new CheckBox { Content = "启用自动恢复校园网", IsThreeState = true, IsChecked = true };
@@ -86,14 +84,29 @@ internal static class SettingsView
         var channelAuto = new RadioButton { GroupName = ChannelGroupName, Content = "自动：门户改版且认证耗尽时自动以内嵌通道修复" };
         var channelManual = new RadioButton { GroupName = ChannelGroupName, Content = "仅手动（默认）：只在诊断页点按钮时发起" };
         var channelOff = new RadioButton { GroupName = ChannelGroupName, Content = "关闭：不提供内嵌认证通道" };
-        var channelStack = new StackPanel { Spacing = 4, Children = { channelAuto, channelManual, channelOff } };
+        var channelStack = new StackPanel { Spacing = 8, Children = { channelAuto, channelManual, channelOff } };
 
         // 枚举失败或没有可用配置时必须可见：否则用户只会看到一个空下拉框，无从判断原因。
-        var profilesNote = new TextBlock { TextWrapping = TextWrapping.Wrap, LineHeight = 18, FontSize = 12, IsVisible = false };
-        ShellTheming.Themed(profilesNote, TextBlock.ForegroundProperty, "ToneWarning");
+        var profilesNote = NoteBlock();
+        var redactedNote = NoteBlock();
+        var optionsNote = NoteBlock();
+        var projectionNote = NoteBlock();
 
-        var form = new StackPanel { Spacing = 10 };
-        form.Children.Add(SectionHeader("守护配置"));
+        var optionsPanel = new StackPanel { Spacing = 12, Children = { enabledBox, disconnectBox, awakeBox } };
+        optionsPanel.Children.Add(ShellTheming.Hairline(4, 4));
+        optionsPanel.Children.Add(ShellTheming.Label("内嵌认证通道"));
+        optionsPanel.Children.Add(channelStack);
+        optionsPanel.Children.Add(optionsNote);
+        var optionsSurface = new Border
+        {
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(16, 14),
+            Child = optionsPanel
+        };
+        ShellTheming.Themed(optionsSurface, Border.BackgroundProperty, "SurfaceSunken");
+
+        var form = new StackPanel { Spacing = ShellTheming.SectionGap };
+        form.Children.Add(ShellTheming.SectionHeader("守护配置"));
         form.Children.Add(Field("校园 Wi-Fi", profileBox));
         form.Children.Add(profilesNote);
         form.Children.Add(Field("校园网账号", usernameBox));
@@ -101,66 +114,23 @@ internal static class SettingsView
         form.Children.Add(Field("本机代理检测", AddressInput(proxyBox, clearProxy)));
         form.Children.Add(Field("UU 服务检测", AddressInput(endpointBox, clearEndpoint)));
         // 地址含未回显的路径/查询时说明保留规则；保存端按草稿的 Keep 标记保留完整原值。
-        var redactedNote = new TextBlock
-        {
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 18,
-            FontSize = 12,
-            IsVisible = false
-        };
-        ShellTheming.Themed(redactedNote, TextBlock.ForegroundProperty, "ToneWarning");
         form.Children.Add(redactedNote);
-        form.Children.Add(enabledBox);
-        form.Children.Add(disconnectBox);
-        form.Children.Add(awakeBox);
-        form.Children.Add(Field("内嵌认证通道", channelStack));
-        // 无投影时选项显示为“未确定”；说明与保存语义逐条对应（保留原值 / 首次设置默认值）。
-        var optionsNote = new TextBlock
-        {
-            Text = SettingsModel.OptionsUnknownNote,
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 18,
-            FontSize = 12,
-            IsVisible = false
-        };
-        ShellTheming.Themed(optionsNote, TextBlock.ForegroundProperty, "ToneWarning");
-        form.Children.Add(optionsNote);
-        form.Children.Add(new TextBlock
-        {
-            Text = SettingsModel.PasswordNote + "\n账号由后台投影预填；未改动账号时保存端保留已保存的账号，密码仍需输入或留空保留。",
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 20,
-            FontSize = 12,
-            Opacity = 0.75
-        });
-        form.Children.Add(new TextBlock
-        {
-            Text = SettingsModel.SaveNote,
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 20,
-            FontSize = 12,
-            Opacity = 0.75
-        });
-
-        var projectionNote = new TextBlock
-        {
-            Text = SettingsModel.ProjectionUnavailableNote,
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 20,
-            FontSize = 12,
-            IsVisible = false
-        };
-        ShellTheming.Themed(projectionNote, TextBlock.ForegroundProperty, "ToneWarning");
+        form.Children.Add(optionsSurface);
+        form.Children.Add(ShellTheming.Hairline(2, 10));
+        form.Children.Add(ShellTheming.Muted(
+            SettingsModel.PasswordNote + "\n账号由后台投影预填；未改动账号时保存端保留已保存的账号，密码仍需输入或留空保留。", 11.5, 19));
+        form.Children.Add(ShellTheming.Muted(SettingsModel.SaveNote, 11.5, 19));
         form.Children.Add(projectionNote);
 
         var save = ShellAccessibility.Named(
-            new Button { Content = ShellAccessibility.SettingsSave(false), MinWidth = 108 },
+            ShellTheming.PrimaryButton(ShellAccessibility.SettingsSave(false)),
             ShellAccessibility.SettingsSave(false));
-        var discard = ShellAccessibility.Named(new Button { Content = "放弃修改", MinWidth = 108 }, "放弃修改");
+        var discard = ShellAccessibility.Named(ShellTheming.SecondaryButton("放弃修改"), "放弃修改");
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 10,
+            Margin = new Thickness(0, 4, 0, 0),
             Children = { save, discard }
         };
         form.Children.Add(actions);
@@ -169,30 +139,31 @@ internal static class SettingsView
         form.Children.Add(result);
         pageStack.Children.Add(ShellTheming.Card(form));
 
-        pageStack.Children.Add(ShellTheming.Card(new TextBlock
-        {
-            Text = SettingsModel.CredentialNote,
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 21,
-            FontSize = 13
-        }));
+        pageStack.Children.Add(ShellTheming.Card(
+            ShellTheming.NoticeStrip(SettingsModel.CredentialNote)));
 
         // 外观（#9 / 故事 27–29）：跟随系统、浅色、深色三选一；选择即应用并持久化。
-        var appearance = new StackPanel { Spacing = 10 };
-        appearance.Children.Add(SectionHeader("外观"));
-        appearance.Children.Add(new TextBlock
+        var appearance = new StackPanel { Spacing = 12 };
+        appearance.Children.Add(ShellTheming.SectionHeader("外观"));
+        appearance.Children.Add(ShellTheming.Muted(SettingsModel.AppearanceNote, 12.5, 21));
+        var choices = new StackPanel
         {
-            Text = SettingsModel.AppearanceNote,
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 21,
-            FontSize = 13,
-            Opacity = 0.85
-        });
-        var choices = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
+            Orientation = Orientation.Horizontal,
+            Spacing = 26,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
         choices.Children.Add(ThemeChoice(ThemeLabel(ThemePreference.System), ThemePreference.System, theme, themeSelected));
         choices.Children.Add(ThemeChoice(ThemeLabel(ThemePreference.Light), ThemePreference.Light, theme, themeSelected));
         choices.Children.Add(ThemeChoice(ThemeLabel(ThemePreference.Dark), ThemePreference.Dark, theme, themeSelected));
-        appearance.Children.Add(choices);
+        var choicesSurface = new Border
+        {
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(16, 13),
+            Child = choices,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        ShellTheming.Themed(choicesSurface, Border.BackgroundProperty, "SurfaceSunken");
+        appearance.Children.Add(choicesSurface);
         pageStack.Children.Add(ShellTheming.Card(appearance));
 
         // 选项控件与草稿/投影同步：没有可信投影且用户未改动时显示“未确定”，绝不把页面默认值当成已保存值。
@@ -380,9 +351,24 @@ internal static class SettingsView
         return pageStack;
     }
 
+    private static TextBox Input(string placeholder)
+    {
+        var box = new TextBox
+        {
+            PlaceholderText = placeholder,
+            Width = FieldWidth,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        return box;
+    }
+
     private static Control AddressInput(TextBox input, Button clear)
     {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto"),
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
         clear.Margin = new Thickness(8, 0, 0, 0);
         Grid.SetColumn(clear, 1);
         grid.Children.Add(input);
@@ -390,30 +376,35 @@ internal static class SettingsView
         return grid;
     }
 
-    /// <summary>一行事实：标签与值成对呈现，不依赖颜色表达状态。</summary>
-    private static Control FactRow(string caption, Control value)
+    /// <summary>一行事实：标签与值成对呈现，窄窗口折为上下两段，不依赖颜色表达状态。</summary>
+    private static Control FactRow(string caption, Control value) => new AdaptiveField
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-        row.Children.Add(ShellTheming.Themed(
-            new TextBlock { Text = caption, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, Width = 148 },
-            TextBlock.ForegroundProperty, "TextMuted"));
-        row.Children.Add(value);
-        return row;
-    }
+        Breakpoint = 520,
+        LabelWidth = ShellTheming.LabelWidth,
+        Gap = 12,
+        Children = { ShellTheming.Label(caption), value }
+    };
 
-    /// <summary>一行表单：标签与控件成对呈现。</summary>
-    private static Control Field(string caption, Control control)
+    /// <summary>一行表单：标签与控件成对呈现，窄窗口折为上下两段。</summary>
+    private static Control Field(string caption, Control control) => new AdaptiveField
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-        row.Children.Add(new TextBlock
+        Breakpoint = 560,
+        LabelWidth = ShellTheming.LabelWidth,
+        Gap = 12,
+        Children = { ShellTheming.Label(caption), control }
+    };
+
+    /// <summary>可显示/隐藏的警示说明：默认隐藏，语义色前景，行高与正文一致。</summary>
+    private static TextBlock NoteBlock()
+    {
+        var block = new TextBlock
         {
-            Text = caption,
-            Width = 148,
-            FontSize = 13,
-            VerticalAlignment = VerticalAlignment.Center
-        });
-        row.Children.Add(control);
-        return row;
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 18,
+            FontSize = 11.5,
+            IsVisible = false
+        };
+        return ShellTheming.Themed(block, TextBlock.ForegroundProperty, "ToneWarning");
     }
 
     /// <summary>主题单选钮的文案（QA 以同一文案定位控件，单一来源避免逐字漂移）。</summary>
@@ -435,7 +426,4 @@ internal static class SettingsView
         };
         return radio;
     }
-
-    private static TextBlock SectionHeader(string text) =>
-        new() { Text = text, FontSize = 15, FontWeight = FontWeight.SemiBold };
 }
