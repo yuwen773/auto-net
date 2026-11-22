@@ -35,8 +35,9 @@ public static class SubmissionReview
     }
 
     /// <summary>
-    /// 协议载体的最终复核：认证状态与额度 → 时钟可信 → 设置与链路。
-    /// 设置或链路变化统一报告 FinalSettingsOrWifiChanged，与既有日志口径一致。
+    /// 协议载体的最终复核：认证状态与额度 → 时钟可信 → 设置与链路 → 恢复开关。
+    /// 设置或链路变化统一报告 FinalSettingsOrWifiChanged，与既有日志口径一致；
+    /// 恢复开关关闭单独报告 RecoveryDisabled，使本方法脱离首次复核也能独立准入。
     /// </summary>
     public static string? ProtocolFinal(SubmissionReviewFacts current, SubmissionReviewFacts authorized,
         bool clockTrusted)
@@ -46,6 +47,7 @@ public static class SubmissionReview
         if (!clockTrusted) return "FinalClockUntrusted";
         if (!SettingsUnchanged(current.Settings, authorized.Settings) || !LinkUnchanged(current.Link, authorized.Link))
             return "FinalSettingsOrWifiChanged";
+        if (current.Settings is not { Enabled: true }) return "RecoveryDisabled";
         return null;
     }
 

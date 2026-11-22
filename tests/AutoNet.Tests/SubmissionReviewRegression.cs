@@ -52,6 +52,12 @@ internal static class SubmissionReviewRegression
             Require(SubmissionReview.ProtocolFinal(authorized with { Link = link with { Index = 9 } },
                 authorized, true) == "FinalSettingsOrWifiChanged", "链路变化未报告");
 
+            // 独立准入约束：不依赖首次复核先跑过，最终复核自己也拒绝已关闭的恢复开关。
+            var disabled = settings with { Enabled = false };
+            var disabledFacts = new SubmissionReviewFacts(disabled, link, authentication, budget);
+            Require(SubmissionReview.ProtocolFinal(disabledFacts, disabledFacts, true) == "RecoveryDisabled",
+                "最终复核未显式拒绝已关闭的恢复开关");
+
             // 顺序固定：认证/额度问题优先于时钟与设置，日志原因不因组合变化而漂移。
             var multiple = authorized with { Authentication = null, Settings = null };
             Require(SubmissionReview.ProtocolFinal(multiple, authorized, false) == "FinalAuthenticationOrBudgetChanged",
