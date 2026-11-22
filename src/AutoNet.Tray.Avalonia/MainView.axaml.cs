@@ -1,10 +1,13 @@
 using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Data;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using ShapePath = Avalonia.Controls.Shapes.Path;
 
@@ -14,9 +17,13 @@ namespace AutoNet.Tray.Avalonia;
 /// 壳视图：左侧五页导航、页面宿主与底部状态栏。只负责把 <see cref="ShellController"/>
 /// 的选择、内容与状态渲染出来；导航与读取语义都在控制器一侧，动作语义在
 /// <see cref="OverviewActions"/> 一侧，便于受控测试。
+/// 窄窗口下导航轨折叠为图标列，页面边距同步收窄（响应式只改布局密度，不改变任何语义）。
 /// </summary>
 public partial class MainView : UserControl
 {
+    /// <summary>导航轨折叠阈值：低于该宽度时只保留图标（窗口最小宽度 720）。</summary>
+    private const double NavCollapseWidth = 880;
+
     private ShellController? controller;
     private OverviewActions? actions;
     private LogsPage? logsPage;
@@ -29,25 +36,30 @@ public partial class MainView : UserControl
     private AuthChannelLauncher? authChannelLauncher;
     private AuthPageCoordinator? authPage;
     private readonly AuthPageRenderGate<AuthPageView> authGate = new();
+    private readonly List<(ListBoxItem Item, Border Indicator, TextBlock Label)> navEntries = [];
     private DiagnosticsExportState? exportStateShown;
     private Func<ThemePreference>? themeProvider;
     private Action<ThemePreference>? themeSelectedHandler;
     private OverviewContent? overviewShown;
     private DiagnosticsContent? diagnosticsShown;
     private LogsContent? logsShown;
+    private ShellPage? pageShown;
     private bool technicalExpanded;
     private bool syncingSelection;
     private bool channelConfirming;
+    private bool navCollapsed;
 
     public MainView()
     {
         InitializeComponent();
         nav.SelectionChanged += (_, _) =>
         {
+            UpdateNavIndicators();
             if (syncingSelection) return;
             if (nav.SelectedItem is ListBoxItem { Tag: ShellPage page } && page != controller?.SelectedPage)
                 NavigateSafelyAsync(page);
         };
+        SizeChanged += (_, _) => ApplyResponsiveLayout();
     }
 
     /// <summary>接入壳控制器、概览动作、日志页（#7）、设置页（#8 / #41）、兜底开页（#11）、诊断包导出（#12）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
@@ -129,15 +141,16 @@ public partial class MainView : UserControl
     private void BuildNavigation()
     {
         nav.Items.Clear();
+        navEntries.Clear();
         foreach (var info in ShellPages.All)
         {
             var icon = new ShapePath
             {
                 Data = Geometry.Parse(ShellIcons.For(info.Page)),
-                Width = 16,
-                Height = 16,
+                Width = 17,
+                Height = 17,
                 Stretch = Stretch.Uniform,
-                StrokeThickness = 1.4,
+                StrokeThickness = 1.5,
                 VerticalAlignment = VerticalAlignment.Center
             };
             // 图标跟随条目前景色（含选中态）。
@@ -146,18 +159,102 @@ public partial class MainView : UserControl
                 RelativeSource = new RelativeSource { Mode = RelativeSourceMode.FindAncestor, AncestorType = typeof(ListBoxItem) }
             });
 
-            var label = new TextBlock { Text = info.Name, VerticalAlignment = VerticalAlignment.Center };
+            var label = new TextBlock
+            {
+                Text = info.Name,
+                FontSize = 13,
+                FontWeight = FontWeight.Medium,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            // 选中指示：设置式导航的左侧短竖条，仅在当前页可见（形状之外的冗余提示）。
+            var indicator = ShellTheming.Themed(new Border
+            {
+                Width = 3,
+                Height = 16,
+                CornerRadius = new CornerRadius(2),
+                IsVisible = false,
+                VerticalAlignment = VerticalAlignment.Center
+            }, Border.BackgroundProperty, "NavSelectedText");
             var content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 10,
-                Children = { icon, label }
+                Spacing = 12,
+                Children = { indicator, icon, label }
             };
             // 导航项的可访问名称与页面可见名称一致（#14 / 故事 33）；图标是装饰，文本承载信息。
-            nav.Items.Add(ShellAccessibility.Named(
-                new ListBoxItem { Tag = info.Page, Content = content, Padding = new Thickness(12, 9) },
-                ShellAccessibility.NavItem(info.Page)));
+            var item = ShellAccessibility.Named(
+                new ListBoxItem
+                {
+                    Tag = info.Page,
+                    Content = content,
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch
+                },
+                ShellAccessibility.NavItem(info.Page));
+            // 折叠态只剩图标：工具提示补回名称，悬停即可辨认。
+            ToolTip.SetTip(item, info.Name);
+            nav.Items.Add(item);
+            navEntries.Add((item, indicator, label));
         }
+        ApplyResponsiveLayout();
+        UpdateNavIndicators();
+    }
+
+    /// <summary>当前页的导航项显示左侧短竖条；其余隐藏。</summary>
+    private void UpdateNavIndicators()
+    {
+        foreach (var (item, indicator, _) in navEntries)
+            indicator.IsVisible = nav.SelectedItem == item;
+    }
+
+    /// <summary>
+    /// 窄窗口布局：导航轨折叠为图标列（品牌文字换成标记），页面边距按宽度分档收窄。
+    /// 只在密度阈值上切换，不重建控件树，也不影响焦点与选择。
+    /// </summary>
+    private void ApplyResponsiveLayout()
+    {
+        var width = Bounds.Width;
+        var collapsed = width > 0 && width < NavCollapseWidth;
+        if (collapsed != navCollapsed)
+        {
+            navCollapsed = collapsed;
+            navRail.Width = collapsed ? 76 : 236;
+            brandBlock.IsVisible = !collapsed;
+            brandMark.IsVisible = collapsed;
+            foreach (var (item, _, label) in navEntries)
+            {
+                label.IsVisible = !collapsed;
+                item.HorizontalContentAlignment = collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+            }
+        }
+        pageHost.Margin = width < 900
+            ? new Thickness(24, 26, 24, 32)
+            : new Thickness(36, 32, 36, 40);
+    }
+
+    /// <summary>
+    /// 页面切换的一次性入场：先回到页首，再以轻微淡入（0.7 → 1）过渡，避免新页面继承上一页的滚动位置，
+    /// 也避免首帧完全透明导致内容短暂不可见。系统关闭客户端动画时直接呈现终态。
+    /// </summary>
+    private void AnimatePageIn()
+    {
+        pageScroll.Offset = new Vector(0, 0);
+        if (!MotionSettings.AnimationsEnabled)
+        {
+            pageHost.Opacity = 1;
+            return;
+        }
+        var animation = new Animation
+        {
+            Duration = TimeSpan.FromMilliseconds(170),
+            Easing = new CubicEaseOut(),
+            Children =
+            {
+                new KeyFrame { Cue = new Cue(0), Setters = { new Setter(OpacityProperty, 0.7d) } },
+                new KeyFrame { Cue = new Cue(1), Setters = { new Setter(OpacityProperty, 1d) } }
+            }
+        };
+        _ = animation.RunAsync(pageHost);
     }
 
     private void SyncSelection(ShellPage page)
@@ -288,6 +385,15 @@ public partial class MainView : UserControl
                 pageHost.Content = ScaffoldView(scaffold);
                 break;
         }
+        MarkPageEntered(content.Page);
+    }
+
+    /// <summary>页面内容首次挂载时记录并播放一次入场淡入；同一页的状态重建不重播。</summary>
+    private void MarkPageEntered(ShellPage page)
+    {
+        if (pageShown == page) return;
+        pageShown = page;
+        AnimatePageIn();
     }
 
     /// <summary>只保留当前页面的内容缓存：其余页面的指纹缓存一律清空，避免跨页误判跳过。</summary>
@@ -343,30 +449,27 @@ public partial class MainView : UserControl
 
     private static Control ScaffoldView(PageScaffold scaffold)
     {
-        var title = new TextBlock { Text = scaffold.Title, FontSize = 26, FontWeight = FontWeight.SemiBold };
-        var description = new TextBlock
-        {
-            Text = scaffold.Description,
-            TextWrapping = TextWrapping.Wrap,
-            Opacity = 0.8,
-            FontSize = 14
-        };
-        var note = new TextBlock
-        {
-            Text = scaffold.Note,
-            TextWrapping = TextWrapping.Wrap,
-            Opacity = 0.55,
-            FontSize = 12,
-            Margin = new Thickness(0, 12, 0, 0)
-        };
+        var note = ShellTheming.NoticeStrip(scaffold.Note);
+        note.Margin = new Thickness(0, 8, 0, 0);
         return new StackPanel
         {
-            Spacing = 10,
-            MaxWidth = 640,
+            Spacing = ShellTheming.CardGap,
+            MaxWidth = ShellTheming.PageMaxWidth,
             HorizontalAlignment = HorizontalAlignment.Left,
-            Children = { title, description, note }
+            Children =
+            {
+                ShellTheming.PageHeader(scaffold.Title, scaffold.Description),
+                ShellTheming.Card(note)
+            }
         };
     }
 
-    private void RenderStatus(StatusReading reading) => statusText.Text = reading.StripText;
+    private void RenderStatus(StatusReading reading)
+    {
+        statusText.Text = reading.StripText;
+        // 状态点只表达可信度：可信=绿、过期=琥珀、缺失或损坏=中性；文字仍是唯一完整信息。
+        var tone = reading.Snapshot is null || !reading.Valid ? "ToneNeutral"
+            : reading.Fresh ? "ToneGood" : "ToneWarning";
+        statusDot.Bind(Shape.FillProperty, statusDot.GetResourceObservable(tone));
+    }
 }

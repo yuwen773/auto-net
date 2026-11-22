@@ -1,6 +1,6 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.Controls.Shapes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using AutoNet.Core;
@@ -8,9 +8,10 @@ using AutoNet.Core;
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
-/// 概览页视觉构建（迁移工单 #4）：把 <see cref="OverviewContent"/> 渲染为 Fluent 卡片式界面。
-/// 状态、进度与下一步各成区块；动作出现在对应状态附近（解除入口在认证列、恢复开关在进度区）。
-/// 文字、图标与语义色同时呈现；本类只负责构建，交互语义在 <see cref="OverviewActions"/> 一侧。
+/// 概览页视觉构建（迁移工单 #4）：把 <see cref="OverviewContent"/> 渲染为卡片式界面。
+/// 状态作为首屏主视觉——语义浅底的状态区承载图标、标题、解释与下一步；认证事实并列其中。
+/// 「AutoNet 正在做什么」以标签—值行呈现进度，动作紧邻对应状态。文字与语义色并行表达，
+/// 任何状态都不只依赖颜色。本类只负责构建，交互语义在 <see cref="OverviewActions"/> 一侧。
 /// </summary>
 internal static class OverviewView
 {
@@ -23,32 +24,32 @@ internal static class OverviewView
         Action portalOpenRequested,
         Action? restartAuthenticationRequested = null)
     {
-        var page = new StackPanel { Spacing = 14, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
-        page.Children.Add(new StackPanel
+        var page = new PageLayout
         {
-            Spacing = 4,
-            Children =
-            {
-                new TextBlock { Text = content.Title, FontSize = 26, FontWeight = FontWeight.SemiBold },
-                new TextBlock
-                {
-                    Text = ShellPages.Info(content.Page).Description,
-                    FontSize = 13,
-                    TextWrapping = TextWrapping.Wrap,
-                    Opacity = 0.75
-                }
-            }
-        });
-        page.Children.Add(StatusCard(content, technicalExpanded, technicalExpandedChanged, unblockRequested));
-        if (content.PortalOpen.Visible) page.Children.Add(PortalOpenCard(content.PortalOpen, portalOpenRequested));
-        page.Children.Add(ProgressCard(content, recoveryRequested));
-        var restart = ShellAccessibility.Named(new Button
-        {
-            Content = ShellAccessibility.RestartAuthentication, IsEnabled = content.Trusted,
+            NarrowMaxWidth = ShellTheming.PageMaxWidth,
+            WideMaxWidth = ShellTheming.WidePageMaxWidth,
+            WideThreshold = ShellTheming.WideGrowthThreshold,
+            Gap = ShellTheming.CardGap,
             HorizontalAlignment = HorizontalAlignment.Left
-        }, ShellAccessibility.RestartAuthentication);
-        restart.Click += (_, _) => restartAuthenticationRequested?.Invoke();
-        page.Children.Add(restart);
+        };
+        page.Children.Add(ShellTheming.PageHeader(content.Title, ShellPages.Info(content.Page).Description));
+
+        // 宽屏两栏：左栏“当前状态”（必要时附浏览器兜底卡），右栏“AutoNet 正在做什么”（含重新认证）。
+        // 窄屏按同一顺序堆叠，与原来的单列顺序一致。
+        var statusColumn = new StackPanel { Spacing = ShellTheming.CardGap };
+        statusColumn.Children.Add(StatusCard(content, technicalExpanded, technicalExpandedChanged, unblockRequested));
+        if (content.PortalOpen.Visible)
+            statusColumn.Children.Add(PortalOpenCard(content.PortalOpen, portalOpenRequested));
+
+        var progressColumn = new StackPanel { Spacing = ShellTheming.CardGap };
+        progressColumn.Children.Add(ProgressCard(content, recoveryRequested, restartAuthenticationRequested));
+
+        page.Children.Add(new CardColumns
+        {
+            Breakpoint = ShellTheming.TwoColumnThreshold,
+            Gap = 24,
+            Children = { statusColumn, progressColumn }
+        });
         return page;
     }
 
@@ -58,14 +59,14 @@ internal static class OverviewView
     /// </summary>
     private static Control PortalOpenCard(PortalOpenEntryState entry, Action portalOpenRequested)
     {
-        var body = new StackPanel { Spacing = 8 };
+        var body = new StackPanel { Spacing = ShellTheming.SectionGap };
         body.Children.Add(new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = 12,
             Children =
             {
-                ShellTheming.Glyph(ShellIcons.AuthColumnGlyph(OverviewAuthKind.Suspended), entry.Tone, 20),
+                ShellTheming.IconBadge(ShellIcons.AuthColumnGlyph(OverviewAuthKind.Suspended), entry.Tone, 38),
                 ShellTheming.Themed(
                     new TextBlock
                     {
@@ -77,54 +78,38 @@ internal static class OverviewView
                     TextBlock.ForegroundProperty, ShellTheming.ToneKey(entry.Tone))
             }
         });
-        body.Children.Add(new TextBlock
-        {
-            Text = entry.Note,
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 12.5,
-            LineHeight = 19,
-            Opacity = 0.9
-        });
-        var button = ShellAccessibility.Named(new Button
-        {
-            Content = entry.Label,
-            IsEnabled = entry.Enabled,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 2, 0, 0)
-        }, ShellAccessibility.PortalOpen(entry));
+        body.Children.Add(ShellTheming.Body(entry.Note, 12.5));
+        var button = ShellAccessibility.Named(ShellTheming.SecondaryButton(entry.Label), ShellAccessibility.PortalOpen(entry));
+        button.IsEnabled = entry.Enabled;
         button.Click += (_, _) => portalOpenRequested();
         body.Children.Add(button);
         return ShellTheming.Card(body);
     }
 
-    /// <summary>状态卡：主状态与认证事实分列（在线与认证暂停并存），下一步紧跟状态，技术详情按需展开。</summary>
+    /// <summary>
+    /// 状态卡：主状态以语义浅底横幅成为首屏焦点，认证事实并列（在线与认证暂停可并存）；
+    /// “下一步”作为胶囊紧邻解释文字，技术详情按需展开。
+    /// </summary>
     private static Control StatusCard(
         OverviewContent content,
         bool technicalExpanded,
         Action<bool> technicalExpandedChanged,
         Action unblockRequested)
     {
-        var body = new StackPanel { Spacing = 12 };
-        body.Children.Add(SectionHeader("当前网络状态"));
+        var body = new StackPanel { Spacing = ShellTheming.SectionGap };
+        body.Children.Add(ShellTheming.SectionHeader("当前网络状态"));
 
-        if (content.Auth.Visible)
+        var columns = new AdaptiveColumns { Breakpoint = 540, Gap = 32 };
+        columns.Children.Add(NetworkColumn(content));
+        if (content.Auth.Visible) columns.Children.Add(AuthColumn(content, unblockRequested));
+        var banner = new Border
         {
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
-            var network = NetworkColumn(content);
-            var divider = ShellTheming.Themed(new Border { Width = 1, Margin = new Thickness(18, 2, 18, 2) }, Border.BackgroundProperty, "ShellBorder");
-            var auth = AuthColumn(content, unblockRequested);
-            Grid.SetColumn(network, 0);
-            Grid.SetColumn(divider, 1);
-            Grid.SetColumn(auth, 2);
-            row.Children.Add(network);
-            row.Children.Add(divider);
-            row.Children.Add(auth);
-            body.Children.Add(row);
-        }
-        else
-        {
-            body.Children.Add(NetworkColumn(content));
-        }
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(18, 16),
+            Child = columns
+        };
+        ShellTheming.Themed(banner, Border.BackgroundProperty, ShellTheming.ToneSurfaceKey(content.Tone));
+        body.Children.Add(banner);
 
         if (content.HasTechnical)
         {
@@ -132,13 +117,7 @@ internal static class OverviewView
             {
                 Header = "技术详情",
                 IsExpanded = technicalExpanded,
-                Content = new TextBlock
-                {
-                    Text = content.TechnicalDetail,
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = 12.5,
-                    Margin = new Thickness(0, 2, 0, 2)
-                }
+                Content = ShellTheming.Muted(content.TechnicalDetail, 12.5, 19)
             }, ShellAccessibility.TechnicalDetail);
             // 重建时保留展开状态；状态刷新不会把已展开的详情折叠回去。
             expander.PropertyChanged += (_, e) =>
@@ -150,8 +129,13 @@ internal static class OverviewView
 
         if (content.Chips.Count > 0)
         {
-            var chips = new WrapPanel();
-            foreach (var chip in content.Chips) chips.Children.Add(ChipView(chip));
+            var chips = new WrapPanel { Margin = new Thickness(0, 2, 0, 0) };
+            foreach (var chip in content.Chips)
+            {
+                var pill = ShellTheming.Pill(chip.Text, chip.Tone);
+                pill.Margin = new Thickness(0, 0, 8, 6);
+                chips.Children.Add(pill);
+            }
             body.Children.Add(chips);
         }
 
@@ -160,19 +144,19 @@ internal static class OverviewView
 
     private static Control NetworkColumn(OverviewContent content)
     {
-        var column = new StackPanel { Spacing = 6 };
+        var column = new StackPanel { Spacing = 10 };
         column.Children.Add(new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 10,
+            Spacing = 14,
             Children =
             {
-                ShellTheming.Glyph(ShellIcons.StatusGlyph(content.Primary), content.Tone, 30),
+                ShellTheming.IconBadge(ShellIcons.StatusGlyph(content.Primary), content.Tone, 46),
                 ShellTheming.Themed(
                     new TextBlock
                     {
                         Text = content.StatusTitle,
-                        FontSize = 18,
+                        FontSize = 21,
                         FontWeight = FontWeight.SemiBold,
                         VerticalAlignment = VerticalAlignment.Center
                     },
@@ -184,52 +168,42 @@ internal static class OverviewView
             Text = content.StatusExplanation,
             TextWrapping = TextWrapping.Wrap,
             FontSize = 13,
-            LineHeight = 20
+            LineHeight = 21
         });
-        column.Children.Add(Muted("下一步：" + content.NextStep, 13));
+        column.Children.Add(ShellTheming.StepPill("下一步：" + content.NextStep, content.Tone));
         return column;
     }
 
     /// <summary>认证列：认证暂停、门户结构信号或不可确认独立呈现；解除入口紧邻认证事实。</summary>
     private static Control AuthColumn(OverviewContent content, Action unblockRequested)
     {
-        var column = new StackPanel { Spacing = 6 };
+        var column = new StackPanel { Spacing = 8 };
         column.Children.Add(new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = 10,
             Children =
             {
-                ShellTheming.Glyph(ShellIcons.AuthColumnGlyph(content.Auth.Kind), content.Auth.Tone, 22),
+                ShellTheming.IconBadge(ShellIcons.AuthColumnGlyph(content.Auth.Kind), content.Auth.Tone, 34),
                 ShellTheming.Themed(
                     new TextBlock
                     {
                         Text = content.Auth.Title,
-                        FontSize = 15,
+                        FontSize = 14.5,
                         FontWeight = FontWeight.SemiBold,
                         VerticalAlignment = VerticalAlignment.Center
                     },
                     TextBlock.ForegroundProperty, ShellTheming.ToneKey(content.Auth.Tone))
             }
         });
-        column.Children.Add(new TextBlock
-        {
-            Text = content.Auth.Note,
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 12.5,
-            LineHeight = 19,
-            Opacity = 0.9
-        });
+        column.Children.Add(ShellTheming.Muted(content.Auth.Note, 12.5, 19));
         if (content.Unblock.Visible)
         {
             // 名称携带当前认证事实（故事 33）：内容重建即更新，不依据陈旧信息。
-            var button = ShellAccessibility.Named(new Button
-            {
-                Content = content.Unblock.Label,
-                IsEnabled = content.Unblock.Enabled,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(0, 4, 0, 0)
-            }, ShellAccessibility.Unblock(content));
+            var button = ShellAccessibility.Named(ShellTheming.SecondaryButton(content.Unblock.Label),
+                ShellAccessibility.Unblock(content));
+            button.IsEnabled = content.Unblock.Enabled;
+            button.Margin = new Thickness(0, 2, 0, 0);
             button.Click += (_, _) => unblockRequested();
             column.Children.Add(button);
         }
@@ -237,70 +211,79 @@ internal static class OverviewView
         return column;
     }
 
-    /// <summary>进度卡：回答“AutoNet 正在做什么”；恢复开关就在自动恢复行上（动作靠近对应状态）。</summary>
-    private static Control ProgressCard(OverviewContent content, Action<RecoveryIntent> recoveryRequested)
+    /// <summary>
+    /// 进度卡：回答“AutoNet 正在做什么”；恢复开关就在自动恢复行上（动作靠近对应状态）。
+    /// 行间用发丝线分隔，标签列在窄窗口自动折到值上方。
+    /// </summary>
+    private static Control ProgressCard(
+        OverviewContent content,
+        Action<RecoveryIntent> recoveryRequested,
+        Action? restartAuthenticationRequested)
     {
-        var body = new StackPanel { Spacing = 10 };
-        body.Children.Add(SectionHeader("AutoNet 正在做什么"));
+        var body = new StackPanel { Spacing = ShellTheming.SectionGap };
+        body.Children.Add(ShellTheming.SectionHeader("AutoNet 正在做什么"));
 
-        var recoveryRow = new Grid { ColumnDefinitions = new ColumnDefinitions("150,*,Auto") };
-        var caption = Muted("自动恢复", 13);
-        Grid.SetColumn(caption, 0);
-        var state = new TextBlock
-        {
-            Text = content.Recovery.State,
-            FontSize = 13,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        Grid.SetColumn(state, 1);
         // 名称携带当前状态与明确意图（故事 33、40）：状态变化经内容重建更新名称。
-        var button = ShellAccessibility.Named(new Button
-        {
-            Content = content.Recovery.Label,
-            IsEnabled = content.Recovery.Enabled,
-            VerticalAlignment = VerticalAlignment.Center
-        }, ShellAccessibility.RecoveryToggle(content.Recovery));
+        var button = ShellAccessibility.Named(ShellTheming.SecondaryButton(content.Recovery.Label),
+            ShellAccessibility.RecoveryToggle(content.Recovery));
+        button.IsEnabled = content.Recovery.Enabled;
+        button.MinWidth = 0;
         if (content.Recovery.Intent is { } intent) button.Click += (_, _) => recoveryRequested(intent);
-        Grid.SetColumn(button, 2);
-        recoveryRow.Children.Add(caption);
-        recoveryRow.Children.Add(state);
-        recoveryRow.Children.Add(button);
-        body.Children.Add(recoveryRow);
+        var recoveryValue = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 14,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = content.Recovery.State,
+                    FontSize = 13,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+                button
+            }
+        };
+        body.Children.Add(FieldRow("自动恢复", recoveryValue));
 
         foreach (var row in content.Progress)
         {
-            var line = new Grid { ColumnDefinitions = new ColumnDefinitions("150,*") };
-            var rowCaption = Muted(row.Caption, 13);
-            rowCaption.VerticalAlignment = VerticalAlignment.Top;
-            Grid.SetColumn(rowCaption, 0);
-            var value = new StackPanel { Spacing = 2 };
-            value.Children.Add(new TextBlock { Text = row.Value, FontSize = 13, TextWrapping = TextWrapping.Wrap });
-            if (row.Note.Length > 0) value.Children.Add(Muted(row.Note, 11.5));
-            Grid.SetColumn(value, 1);
-            line.Children.Add(rowCaption);
-            line.Children.Add(value);
-            body.Children.Add(line);
+            body.Children.Add(ShellTheming.Hairline());
+            var value = new StackPanel { Spacing = 3 };
+            value.Children.Add(ShellTheming.Body(row.Value, 13));
+            if (row.Note.Length > 0) value.Children.Add(ShellTheming.Muted(row.Note, 11.5, 17));
+            body.Children.Add(FieldRow(row.Caption, value));
+        }
+
+        // 重新认证是额度用尽后的唯一手动出口：放在额度行所在的卡片里，说明它重置什么、不重置什么。
+        if (restartAuthenticationRequested is not null)
+        {
+            body.Children.Add(ShellTheming.Hairline());
+            var restart = ShellAccessibility.Named(ShellTheming.SecondaryButton(ShellAccessibility.RestartAuthentication),
+                ShellAccessibility.RestartAuthentication);
+            restart.IsEnabled = content.Trusted;
+            restart.MinWidth = 0;
+            restart.Click += (_, _) => restartAuthenticationRequested();
+            var restartValue = new StackPanel { Spacing = 7 };
+            restartValue.Children.Add(ShellTheming.Muted(
+                "重置凭据提交额度，之后可再次提交；认证暂停与主动断线额度保持不变，需管理员确认。", 11.5, 17));
+            restartValue.Children.Add(restart);
+            body.Children.Add(FieldRow("重新认证", restartValue));
         }
 
         return ShellTheming.Card(body);
     }
 
-    private static TextBlock SectionHeader(string text) =>
-        new() { Text = text, FontSize = 15, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 2) };
-
-    private static TextBlock Muted(string text, double size) => ShellTheming.Themed(
-        new TextBlock { Text = text, FontSize = size, TextWrapping = TextWrapping.Wrap, LineHeight = size + 6 },
-        TextBlock.ForegroundProperty, "TextMuted");
-
-    private static Control ChipView(OverviewChip chip)
+    /// <summary>标签—值行：宽窗口固定标签列，窄窗口折为上下两段。</summary>
+    private static Control FieldRow(string caption, Control value) => new AdaptiveField
     {
-        var border = new Border
+        Breakpoint = 520,
+        LabelWidth = 150,
+        Gap = 12,
+        Children =
         {
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(9, 3, 9, 3),
-            Margin = new Thickness(0, 0, 6, 4),
-            Child = ShellTheming.Themed(new TextBlock { Text = chip.Text, FontSize = 11.5 }, TextBlock.ForegroundProperty, ShellTheming.ToneKey(chip.Tone))
-        };
-        return ShellTheming.Themed(border, Border.BackgroundProperty, ShellTheming.ToneKey(chip.Tone) + "Surface");
-    }
+            ShellTheming.Muted(caption, 13, 20),
+            value
+        }
+    };
 }

@@ -38,6 +38,7 @@ internal sealed class SettingsWindow : Window
         this.editor = editor;
         Title = "AutoNet · 设置";
         Icon = AppIcons.Load();
+        WindowChrome.Track(this);
         Width = 700;
         SizeToContent = SizeToContent.Height;
         CanResize = false;

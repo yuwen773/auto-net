@@ -29,6 +29,7 @@ public partial class MainWindow : Window
         this.controller = controller;
         Icon = AppIcons.Load();
         InitializeComponent();
+        WindowChrome.Track(this);
         if (controller is not null)
         {
             view.Attach(controller, actions, logs, copy, openFolder, settings, portalOpen, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);

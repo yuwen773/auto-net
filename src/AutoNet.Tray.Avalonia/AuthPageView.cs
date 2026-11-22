@@ -20,13 +20,13 @@ internal sealed class AuthPageView
     private readonly Action retryRequested;
     private readonly StackPanel root;
     private readonly ContentControl glyphHost = new();
-    private readonly TextBlock statusTitle = new() { FontSize = 22, FontWeight = FontWeight.SemiBold };
-    private readonly TextBlock statusExplanation = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 21, FontSize = 14 };
-    private readonly TextBlock nextStep = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 21, FontSize = 13, Opacity = 0.85 };
-    private readonly TextBlock address = new() { FontSize = 14, FontWeight = FontWeight.Medium, TextWrapping = TextWrapping.Wrap };
-    private readonly TextBlock background = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 20, FontSize = 12, Opacity = 0.8 };
-    private readonly TextBlock hostTitle = new() { FontSize = 15, FontWeight = FontWeight.SemiBold };
-    private readonly TextBlock hostDetail = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 20, FontSize = 13, Opacity = 0.85 };
+    private readonly TextBlock statusTitle = new() { FontSize = 21, FontWeight = FontWeight.SemiBold };
+    private readonly TextBlock statusExplanation = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 21, FontSize = 13.5 };
+    private readonly TextBlock nextStep = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 20, FontSize = 12.5 };
+    private readonly TextBlock address = new() { FontSize = 13, FontWeight = FontWeight.Medium, TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock background = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 20, FontSize = 12 };
+    private readonly TextBlock hostTitle = new() { FontSize = 14, FontWeight = FontWeight.SemiBold };
+    private readonly TextBlock hostDetail = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 20, FontSize = 12.5 };
     private readonly TextBlock hostPlaceholder = new()
     {
         TextWrapping = TextWrapping.Wrap,
@@ -53,32 +53,25 @@ internal sealed class AuthPageView
         this.retryRequested = retryRequested;
         this.surfaceProvider = surfaceProvider;
 
-        root = new StackPanel { Spacing = 14, MaxWidth = 980, HorizontalAlignment = HorizontalAlignment.Left };
-        root.Children.Add(new StackPanel
+        root = new StackPanel
         {
-            Spacing = 4,
-            Children =
-            {
-                new TextBlock { Text = ShellPages.Info(ShellPage.Authentication).Name, FontSize = 26, FontWeight = FontWeight.SemiBold },
-                new TextBlock
-                {
-                    Text = ShellPages.Info(ShellPage.Authentication).Description,
-                    FontSize = 13,
-                    TextWrapping = TextWrapping.Wrap,
-                    Opacity = 0.75
-                }
-            }
-        });
+            Spacing = ShellTheming.CardGap,
+            MaxWidth = 980,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        root.Children.Add(ShellTheming.PageHeader(
+            ShellPages.Info(ShellPage.Authentication).Name,
+            ShellPages.Info(ShellPage.Authentication).Description));
 
         // 用 Grid 给状态文字一个受约束的宽度；横向 StackPanel 会以无限宽度测量子项，
         // 长文案（例如结果未知的额度/间隔说明）因此不会换行，只会被卡片裁切。
         var statusRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
         glyphHost.VerticalAlignment = VerticalAlignment.Top;
-        glyphHost.Width = 34;
-        glyphHost.Height = 34;
+        glyphHost.Width = 42;
+        glyphHost.Height = 42;
         var statusText = new StackPanel
         {
-            Spacing = 5,
+            Spacing = 6,
             Margin = new Thickness(14, 0, 0, 0),
             Children = { statusTitle, statusExplanation, nextStep }
         };
@@ -86,71 +79,61 @@ internal sealed class AuthPageView
         Grid.SetColumn(statusText, 1);
         statusRow.Children.Add(glyphHost);
         statusRow.Children.Add(statusText);
-        var statusCard = new StackPanel { Spacing = 10, Children = { statusRow, background } };
+        var statusCard = new StackPanel { Spacing = 12, Children = { statusRow, ShellTheming.Hairline(), background } };
         AutomationProperties.SetName(statusCard, ShellAccessibility.AuthStatus);
         root.Children.Add(ShellTheming.Card(statusCard));
 
-        var addressRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-        addressRow.Children.Add(new TextBlock
+        address.Margin = new Thickness(0, 1, 0, 0);
+        var addressRow = new AdaptiveField
         {
-            Text = "门户地址",
-            FontSize = 13,
-            Width = 148,
-            VerticalAlignment = VerticalAlignment.Center,
-            Opacity = 0.6
-        });
-        addressRow.Children.Add(address);
+            Breakpoint = 560,
+            LabelWidth = ShellTheming.LabelWidth,
+            Gap = 12,
+            Children = { ShellTheming.Label("门户地址"), address }
+        };
         AutomationProperties.SetName(address, ShellAccessibility.AuthAddress);
         root.Children.Add(ShellTheming.Card(addressRow));
 
-        var host = new StackPanel { Spacing = 8, Children = { hostTitle, hostDetail } };
+        var host = new StackPanel { Spacing = 10, Children = { hostTitle, hostDetail } };
         hostSlot = new Border
         {
             MinHeight = 360,
-            Padding = new Thickness(14),
-            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12),
+            CornerRadius = new CornerRadius(10),
             BorderThickness = new Thickness(1),
             Child = hostPlaceholder
         };
         hostSlot.Bind(Border.BorderBrushProperty, hostSlot.GetResourceObservable("CardBorder"));
+        ShellTheming.Themed(hostSlot, Border.BackgroundProperty, "SurfaceSunken");
         AutomationProperties.SetName(hostSlot, ShellAccessibility.AuthHost);
         host.Children.Add(hostSlot);
-        retry = ShellAccessibility.Named(new Button
-        {
-            Content = ShellAccessibility.AuthRetry,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            MinWidth = 170,
-            IsVisible = false
-        }, ShellAccessibility.AuthRetry);
+        retry = ShellAccessibility.Named(ShellTheming.SecondaryButton(ShellAccessibility.AuthRetry),
+            ShellAccessibility.AuthRetry);
+        retry.MinWidth = 170;
+        retry.IsVisible = false;
         retry.Click += (_, _) => retryRequested();
         host.Children.Add(retry);
         root.Children.Add(ShellTheming.Card(host));
 
         // 工单 #24 / ADR-0009：会提权并可能提交凭据的手动入口从只读诊断页移到这里，
         // 与“本页不填表、不提交”的说明分开呈现，并在按钮上方明确警示。
-        var channelBody = new StackPanel { Spacing = 8 };
-        channelBody.Children.Add(new TextBlock
-        {
-            Text = "手动认证修复（会提交凭据）", FontSize = 15, FontWeight = FontWeight.SemiBold
-        });
+        var channelBody = new StackPanel { Spacing = 10 };
+        channelBody.Children.Add(ShellTheming.SectionHeader("手动认证修复（会提交凭据）"));
         channelBody.Children.Add(new TextBlock
         {
             Text = "仅在协议认证反复失败、门户结构变化时使用。点击后会请求管理员授权（UAC），"
                 + "以辅助进程打开固定门户页，并可能自动填写、提交已保存的校园网凭据。",
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 20,
-            FontSize = 12.5
+            FontSize = 12
         });
         channelBody.Children.Add(channelState);
         channelBody.Children.Add(channelNotice);
-        channelButton = ShellAccessibility.Named(new Button
-        {
-            Content = "发起手动认证修复…",
-            MinWidth = 180,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            IsEnabled = false,
-            IsVisible = false
-        }, "手动认证修复：会请求管理员授权并可能提交已保存的凭据");
+        channelButton = ShellAccessibility.Named(ShellTheming.SecondaryButton("发起手动认证修复…"),
+            "手动认证修复：会请求管理员授权并可能提交已保存的凭据");
+        channelButton.MinWidth = 180;
+        channelButton.IsEnabled = false;
+        channelButton.IsVisible = false;
         if (channelLaunch is not null) channelButton.Click += (_, _) => channelLaunch();
         channelBody.Children.Add(channelButton);
         channelCard = ShellTheming.Card(channelBody);
@@ -173,7 +156,7 @@ internal sealed class AuthPageView
     /// <summary>用新的状态投影更新可见文字与宿主表面；不导航、不重建控件树。</summary>
     public void Render(AuthPageContent content)
     {
-        glyphHost.Content = ShellTheming.Glyph(ShellIcons.ToneGlyph(content.Tone), content.Tone, 30);
+        glyphHost.Content = ShellTheming.IconBadge(ShellIcons.ToneGlyph(content.Tone), content.Tone, 42);
         statusTitle.Text = content.StatusTitle;
         statusExplanation.Text = content.StatusExplanation;
         nextStep.Text = content.NextStep;
@@ -192,8 +175,8 @@ internal sealed class AuthPageView
         channelButton.IsVisible = content.Channel is not null;
         if (content.Channel is { } channel)
         {
-            channelState.Text = $"模式：{channel.Mode}｜门户结构信号：{(channel.SignalPresent ? "存在" : "无")}"
-                + (channel.LastConclusion is { } conclusion ? $"｜最近结论：{conclusion}" : "")
+            channelState.Text = $"模式：{AuthPageModel.ChannelModeLabel(channel.Mode)}｜门户结构信号：{(channel.SignalPresent ? "存在" : "无")}"
+                + (channel.LastConclusion is { } conclusion ? $"｜最近结论：{AuthPageModel.ChannelConclusionLabel(conclusion)}" : "")
                 + (channel.Busy ? "｜通道会话进行中" : "");
             channelButton.IsEnabled = channel.SignalPresent && channel.Mode != AuthChannelModes.Off && !channel.Busy;
         }

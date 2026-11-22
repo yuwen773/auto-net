@@ -33,6 +33,7 @@ internal sealed class NoticeWindow : Window
             }
         };
         confirm.Click += (_, _) => window.Close();
+        WindowChrome.Track(window);
         return window;
     }
 }

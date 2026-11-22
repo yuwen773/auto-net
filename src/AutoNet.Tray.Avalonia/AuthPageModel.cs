@@ -413,6 +413,30 @@ internal static class AuthPageModel
     }
 
     /// <summary>宿主状态对应的受控文案：标题、说明与空表面占位文本，全部集中在这一处映射。</summary>
+    /// <summary>
+    /// 通道模式的中文名：设置与快照里存放的是内部标识（Automatic / ManualOnly / Off），
+    /// 界面一律显示中文，不把内部标识直接暴露给用户。
+    /// </summary>
+    internal static string ChannelModeLabel(string mode) => mode switch
+    {
+        AuthChannelModes.Automatic => "自动",
+        AuthChannelModes.ManualOnly => "仅手动",
+        AuthChannelModes.Off => "关闭",
+        _ => "未知"
+    };
+
+    /// <summary>通道最近结论的中文名（来源为 <see cref="LoginResult"/> 的内部标识）。</summary>
+    internal static string ChannelConclusionLabel(string conclusion) => conclusion switch
+    {
+        nameof(LoginResult.Accepted) => "已登录",
+        nameof(LoginResult.RejectedCredentials) => "账号或密码被拒绝",
+        nameof(LoginResult.NeedsInteraction) => "需要人工操作",
+        nameof(LoginResult.Rejected) => "门户拒绝",
+        nameof(LoginResult.Unsupported) => "门户不支持",
+        nameof(LoginResult.RejectedBinding) => "绑定校验未通过",
+        _ => "结果未确认"
+    };
+
     internal readonly record struct AuthPageHostCopy(string Title, string Detail, string Placeholder);
 
     /// <summary>
