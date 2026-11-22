@@ -303,7 +303,7 @@ public sealed class App : Application
         var shell = new ShellController(pipe, (page, token) =>
             ShellRoutes.For(page).Mode == ShellPageContentMode.AsyncLoad
                 ? logsPage.LoadAsync(token)
-                : ShellContent.LoadAsync(page, token), portalOpener, authPage);
+                : throw new InvalidOperationException("同步投影页不应经异步加载接缝。"), portalOpener, authPage);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
         logsPage.Updated += content => shell.ApplyExternal(content);
         var actions = new OverviewActions(pipe.RefreshAsync, qa.Launcher);

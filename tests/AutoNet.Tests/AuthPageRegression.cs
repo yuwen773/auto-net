@@ -377,7 +377,7 @@ internal static class AuthPageRegression
                 var host = new FakeAuthHost();
                 var coordinator = new AuthPageCoordinator(host);
                 var pipe = new StatusPipe(path, TimeSpan.FromMilliseconds(25));
-                using var controller = new ShellController(pipe, authPage: coordinator);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold, authPage: coordinator);
                 await controller.RefreshStatusAsync();
                 await controller.SelectAsync(ShellPage.Authentication);
                 Require(controller.Content is AuthPageContent { Phase: AuthPagePhase.Paused },
@@ -488,7 +488,7 @@ internal static class AuthPageRegression
                 var host = new FakeAuthHost();
                 var coordinator = new AuthPageCoordinator(host);
                 var pipe = new StatusPipe(path, TimeSpan.FromMilliseconds(25));
-                using var controller = new ShellController(pipe, authPage: coordinator);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold, authPage: coordinator);
                 await controller.RefreshStatusAsync();
                 await controller.SelectAsync(ShellPage.Authentication);
                 Require(controller.Content is AuthPageContent { StatusTitle: "需要保存认证信息" },
@@ -650,7 +650,7 @@ internal static class AuthPageRegression
                 var host = new FakeAuthHost();
                 var coordinator = new AuthPageCoordinator(host);
                 var pipe = new StatusPipe(path, TimeSpan.FromMilliseconds(25));
-                using var controller = new ShellController(pipe, authPage: coordinator);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold, authPage: coordinator);
                 await controller.RefreshStatusAsync();
                 await controller.SelectAsync(ShellPage.Authentication);
                 await Task.Delay(50);

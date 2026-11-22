@@ -218,7 +218,7 @@ internal static class DiagnosticsPageRegression
             {
                 var path = Path.Combine(directory, "status.json");
                 var pipe = new StatusPipe(path);
-                using var controller = new ShellController(pipe);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold);
                 var applied = new List<PageContent>();
                 controller.ContentChanged += content => applied.Add(content);
 

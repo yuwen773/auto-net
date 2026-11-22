@@ -36,8 +36,27 @@ internal static class LogRegression
             Require(text.IndexOf("【事件304】", StringComparison.Ordinal) < text.IndexOf("【事件303】", StringComparison.Ordinal));
             Require(ActivityLog.ReadableHistory("").Contains("尚无日志"));
             return Task.CompletedTask;
+        }),
+        ("日志：脱敏摘要不丢弃实际阶段名", () =>
+        {
+            var now = new DateTimeOffset(2026, 11, 22, 12, 0, 0, TimeSpan.Zero);
+            var stages = new[] { "SubmissionBudgetRead", "RecheckSubmission", "AuxiliaryStart", "AuthenticationTotal" };
+            var entries = stages.Select(stage => new ActivityLog
+            {
+                Time = now,
+                Action = "检测",
+                EventCode = "RecoveryDecision",
+                Diagnostics = new DiagnosticData { Stage = stage, Outcome = "None" }
+            }).ToArray();
+            var text = LogSummary.Format(entries);
+            foreach (var stage in stages)
+                Require(text.Contains("步骤 " + stage, StringComparison.Ordinal), "摘要丢弃实际阶段：" + stage);
+            return Task.CompletedTask;
         })
     ];
 
-    private static void Require(bool condition) { if (!condition) throw new Exception("日志行为不符合预期"); }
+    private static void Require(bool condition, string? message = null)
+    {
+        if (!condition) throw new Exception(message ?? "日志行为不符合预期");
+    }
 }

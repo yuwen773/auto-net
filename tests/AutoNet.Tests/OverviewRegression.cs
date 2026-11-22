@@ -295,7 +295,7 @@ internal static class OverviewRegression
             {
                 var path = Path.Combine(directory, "status.json");
                 var pipe = new StatusPipe(path);
-                using var controller = new ShellController(pipe);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold);
                 var applied = new List<PageContent>();
                 controller.ContentChanged += content => applied.Add(content);
 
@@ -330,7 +330,7 @@ internal static class OverviewRegression
                 var path = Path.Combine(directory, "status.json");
                 File.WriteAllText(path, JsonSerializer.Serialize(Online(), Storage.Json));
                 var pipe = new StatusPipe(path, TimeSpan.FromMilliseconds(50));
-                using var controller = new ShellController(pipe);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold);
                 await controller.SelectAsync(ShellPage.Overview);
                 pipe.Start();
 
@@ -362,7 +362,7 @@ internal static class OverviewRegression
                 var path = Path.Combine(directory, "status.json");
                 File.WriteAllText(path, JsonSerializer.Serialize(Online(), Storage.Json));
                 var pipe = new StatusPipe(path, TimeSpan.FromSeconds(30));
-                using var controller = new ShellController(pipe);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold);
                 var contentUpdates = 0;
                 var statusUpdates = 0;
                 controller.ContentChanged += _ => contentUpdates++;

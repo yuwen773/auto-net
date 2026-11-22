@@ -81,7 +81,8 @@ public static class LogSummary
         "MainCycle", "SettingsRead", "SettingsValidation", "DisconnectBudgetRead", "AuthenticationStateRead", "CredentialsRead",
         "WifiRead", "InternetProbe", "PortalInspection", "StatusWrite", "Authentication", "AuthenticationStateWrite", "WifiRequest",
         "DisconnectBudgetWrite", "Auxiliary", "AuxiliaryCancel", "Power", "ServiceLoop", "PreviousLogRead", "ReconnectWifi", "DisconnectWifi", "Authenticate",
-        "DisconnectRecheckInternet", "DisconnectRecheckPortal", "SubmissionRecheck"
+        "DisconnectRecheckInternet", "DisconnectRecheckPortal", "SubmissionRecheck", "SubmissionBudgetRead", "RecheckSubmission",
+        "AuxiliaryStart", "AuthenticationTotal"
     };
 
     /// <summary>One line per entry, oldest first. Every value is allowlisted or a constant.</summary>

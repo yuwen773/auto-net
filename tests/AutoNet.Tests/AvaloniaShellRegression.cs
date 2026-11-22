@@ -117,13 +117,8 @@ internal static class AvaloniaShellRegression
             await stale;
             Require(failures.Count == 1 && applied.SequenceEqual(["新内容"]), "被取代的失败不应回调或应用");
 
-            // 已取消的标记在读取前就被检查：内容加载必须尊重取消。
-            using var cancelled = new CancellationTokenSource();
-            cancelled.Cancel();
-            var observed = false;
-            try { await ShellContent.LoadAsync(ShellPage.Logs, cancelled.Token); }
-            catch (OperationCanceledException) { observed = true; }
-            Require(observed, "已取消的读取仍在继续");
+            // 已取消的读取由 PageLoadCoordinator 与真实日志页加载器覆盖：
+            // 上一用例已验证被取代/销毁的读取会收到取消并丢弃结果。
         }),
         ("壳回归：状态管道按完整性、时间有效性与安全降级规则映射", () => Sync(() =>
         {
@@ -288,7 +283,7 @@ internal static class AvaloniaShellRegression
                 ShellPage? pendingLengthPage = null;
                 var hold = new TaskCompletionSource<PageContent>(TaskCreationOptions.RunContinuationsAsynchronously);
                 using var controller = new ShellController(pipe, (page, token) =>
-                    page == pendingLengthPage ? hold.Task : ShellContent.LoadAsync(page, token));
+                    page == pendingLengthPage ? hold.Task : TestShellLoad.Scaffold(page, token));
 
                 var applied = new List<ShellPage>();
                 var selected = new List<ShellPage>();
