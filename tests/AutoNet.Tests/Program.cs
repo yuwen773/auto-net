@@ -144,6 +144,7 @@ tests = tests.Concat(CycleTraceRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticsPackageRegression.Cases).ToArray();
 tests = tests.Concat(SafetyRegression.Cases).ToArray();
+tests = tests.Concat(SubmissionReviewRegression.Cases).ToArray();
 tests = tests.Concat(AcceptanceRegression.Cases).ToArray();
 tests = tests.Concat(AuthenticationPersistenceRegression.Cases).ToArray();
 tests = tests.Concat(LegacyStateRegression.Cases).ToArray();

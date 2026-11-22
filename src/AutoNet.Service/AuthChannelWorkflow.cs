@@ -82,13 +82,20 @@ public sealed class AuthChannelWorkflow(IMonitorEnvironment environment, IAuthCh
                 bool StillValid()
                 {
                     review.Token.ThrowIfCancellationRequested();
+                    // 事实一次读全再交给纯规则比较：任一读取失败都会落到外层受控 catch 并返回
+                    // Blocked，因此提前读取不会把原先短路拒绝的路径变成放行；每次只读五个本地
+                    // 小文件，复核窗口仍由下面的 5 秒与 2 秒时钟约束把住。
                     var currentSettings = environment.LoadSettings();
                     var currentLink = environment.ReadWifi(settings);
-                    return currentSettings == settings && environment.LoadCredentials() == credentials && currentLink.State == WifiState.Ready &&
-                        currentLink.Index == link.Index && Equals(currentLink.Address, link.Address) && browser.IsBoundTo(settings, currentLink) &&
-                        environment.LoadAuthenticationBlock() == lease.Authentication && environment.LoadSubmissionBudget() == lease.Budget &&
-                        clock.GetElapsedTime(reviewStarted) < TimeSpan.FromSeconds(5) &&
-                        ((clock.GetUtcNow() - utc) - clock.GetElapsedTime(tick)).Duration() <= TimeSpan.FromSeconds(2);
+                    var currentCredentials = environment.LoadCredentials();
+                    var currentAuthentication = environment.LoadAuthenticationBlock();
+                    var currentBudget = environment.LoadSubmissionBudget();
+                    return SubmissionReview.ChannelStillValid(
+                        new(currentSettings, currentLink, currentAuthentication, currentBudget, currentCredentials),
+                        new(settings, link, lease.Authentication, lease.Budget, credentials),
+                        browser.IsBoundTo(settings, currentLink),
+                        clock.GetElapsedTime(reviewStarted) < TimeSpan.FromSeconds(5),
+                        SubmissionReview.ClockTrusted(clock, utc, tick, TimeSpan.FromSeconds(2))) is null;
                 }
                 if (!StillValid()) return ChannelWorkflowOutcome.Blocked;
                 if (!environment.TryRegisterChannelSession(lease, browser.BrowserProcessId, browser.HelperProcessId, browser.ProcessJobName))

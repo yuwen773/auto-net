@@ -955,9 +955,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             var currentSettings = ReadStep("SettingsRead", environment.LoadSettings);
             review.ThrowIfCancellationRequested();
             var currentLink = ReadStep("WifiRead", () => environment.ReadWifi(settings));
-            if (currentSettings is null || currentSettings != settings || !currentSettings.Enabled || currentLink.State != WifiState.Ready ||
-                currentLink.Index != link.Index || !Equals(currentLink.Address, link.Address))
-                return RejectSubmission(currentSettings != settings ? "SettingsChanged" : currentSettings?.Enabled != true ? "RecoveryDisabled" : "WifiChanged");
+            if (SubmissionReview.ProtocolInitial(currentSettings, settings, currentLink, link) is { } initialRejection)
+                return RejectSubmission(initialRejection);
             using var fresh = environment.CreateDirectClient(currentLink);
             var internet = await HealthChecks.InternetDetailedAsync(fresh, review);
             if (internet.Online) return RejectSubmission("FreshInternetRecovered");
@@ -989,13 +988,11 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             var finalAuthentication = ReadStep("AuthenticationStateRead", environment.LoadAuthenticationBlock);
             var finalBudget = ReadStep("SubmissionBudgetRead", environment.LoadSubmissionBudget);
             review.ThrowIfCancellationRequested();
-            if (finalAuthentication != authentication || finalBudget != activeSubmission)
-                return RejectSubmission("FinalAuthenticationOrBudgetChanged");
-            if (((clock.GetUtcNow() - reservationUtc) - clock.GetElapsedTime(reservationTick)).Duration() > TimeSpan.FromSeconds(2))
-                return RejectSubmission("FinalClockUntrusted");
-            var allowed = currentSettings is not null && currentSettings == settings && currentSettings.Enabled && currentLink.State == WifiState.Ready &&
-                currentLink.Index == link.Index && Equals(currentLink.Address, link.Address);
-            if (!allowed) return RejectSubmission("FinalSettingsOrWifiChanged");
+            var finalRejection = SubmissionReview.ProtocolFinal(
+                new(currentSettings, currentLink, finalAuthentication, finalBudget),
+                new(settings, link, authentication, activeSubmission),
+                SubmissionReview.ClockTrusted(clock, reservationUtc, reservationTick, TimeSpan.FromSeconds(2)));
+            if (finalRejection is not null) return RejectSubmission(finalRejection);
             journal.Write("SubmissionAuthorized", "提交授权已持久保存，最终复核通过；尚未表示服务器接受。", new()
                 { Stage = "Submission", ActionId = journal.ActionId, Outcome = "Authorized" });
             return true;
