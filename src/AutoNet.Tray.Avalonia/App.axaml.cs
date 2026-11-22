@@ -292,7 +292,9 @@ public sealed class App : Application
             else Dispatcher.UIThread.Post(action);
         }, () => authChannel?.Describe());
         var shell = new ShellController(pipe, (page, token) =>
-            page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token), portalOpener, authPage);
+            ShellRoutes.For(page).Mode == ShellPageContentMode.AsyncLoad
+                ? logsPage.LoadAsync(token)
+                : ShellContent.LoadAsync(page, token), portalOpener, authPage);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
         logsPage.Updated += content => shell.ApplyExternal(content);
         // 概览/可访问性 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
