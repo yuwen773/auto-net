@@ -29,6 +29,7 @@ public partial class MainWindow : Window
         this.controller = controller;
         Icon = AppIcons.Load();
         InitializeComponent();
+        ApplyInitialSize();
         if (controller is not null)
         {
             view.Attach(controller, actions, logs, copy, openFolder, settings, portalOpen, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);
@@ -40,6 +41,34 @@ public partial class MainWindow : Window
                 if (change.Property == WindowStateProperty || change.Property == IsVisibleProperty)
                     controller.SetWindowVisible(WindowState != WindowState.Minimized && IsVisible);
             };
+        }
+    }
+
+    /// <summary>
+    /// 初始尺寸按主屏幕工作区给出（#37 布局）：门户页面既要横向也要纵向空间，
+    /// 过小的固定窗口只能把浏览器挤成一条缝，用户得一遍遍手动放大。
+    /// 取工作区的 66% × 78%，再夹在 [窗口最小尺寸, 上限] 之间：小屏不越界，大屏也不铺满整块屏幕。
+    /// 拿不到屏幕信息时沿用 XAML 里的默认尺寸。
+    /// </summary>
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+        ApplyInitialSize();
+    }
+
+    private void ApplyInitialSize()
+    {
+        try
+        {
+            if ((Screens?.Primary ?? Screens?.All.FirstOrDefault()) is not { } screen) return;
+            var scaling = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+            var work = screen.WorkingArea;
+            Width = Math.Clamp(work.Width / scaling * 0.66, MinWidth, 1720);
+            Height = Math.Clamp(work.Height / scaling * 0.78, MinHeight, 1100);
+        }
+        catch (Exception)
+        {
+            // 屏幕信息拿不到时沿用 XAML 的默认尺寸；窗口尺寸从不值得让启动失败。
         }
     }
 

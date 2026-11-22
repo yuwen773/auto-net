@@ -3,7 +3,7 @@ using AutoNet.Core;
 namespace AutoNet.Tray.Avalonia;
 
 /// <summary>准备完成的网络边界：已启动的环回允许列表代理。</summary>
-internal sealed record AuthPageBoundary(AuthChannelProxy Proxy);
+internal sealed record AuthPageBoundary(AuthChannelProxy Proxy, WifiLink Link);
 
 /// <summary>
 /// 认证页网络边界（工单 #38）：先确认门户来源、浏览器运行时与校园网卡，再启动环回允许列表代理。
@@ -41,7 +41,7 @@ internal static class AuthPageNetworkBoundary
             var job = ensureJob();
             proxy = await startProxy(link, job).WaitAsync(cancellationToken).ConfigureAwait(false);
             if (!proxy.IsRunning) throw new InvalidOperationException("允许列表代理未运行。");
-            return (null, new AuthPageBoundary(proxy));
+            return (null, new AuthPageBoundary(proxy, link));
         }
         // 取消不是边界失败：让协调器按“取消”语义复位，下一次打开仍可附着。
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

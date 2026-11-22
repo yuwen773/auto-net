@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using AutoNet.Core;
 using AutoNet.Tray.Avalonia;
+using ResourceContext = Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext;
 
 /// <summary>
 /// 认证页网络边界回归（工单 #38）：允许列表完整匹配与两侧大小写归一、请求形态与端口约束、
@@ -39,6 +40,9 @@ internal static class AuthPageBoundaryRegression
         {
             Require(AuthChannelProxy.ParseRequest("CONNECT login.csust.edu.cn:443 HTTP/1.1\r\nHost: login.csust.edu.cn:443\r\n\r\n") ==
                 AuthChannelProxy.ProxyRoute.HttpsTunnel, "允许的 CONNECT 被拒绝");
+            // 主机名大小写必须归一后仍按同一固定门户校验。
+            Require(AuthChannelProxy.ParseRequest("CONNECT LOGIN.CSUST.EDU.CN:443 HTTP/1.1\r\nHost: LOGIN.CSUST.EDU.CN:443\r\n\r\n") ==
+                AuthChannelProxy.ProxyRoute.HttpsTunnel, "允许的大写 CONNECT 被拒绝");
             Require(AuthChannelProxy.ParseRequest("GET http://LOGIN.CSUST.EDU.CN:80/ HTTP/1.1\r\nHost: LOGIN.CSUST.EDU.CN\r\n\r\n") ==
                 AuthChannelProxy.ProxyRoute.HttpRoot, "允许的明文目标被拒绝");
             // 浏览器对默认端口可能省略 Host 头里的端口；请求行已经固定了 443。
@@ -47,6 +51,7 @@ internal static class AuthPageBoundaryRegression
             foreach (var request in new[]
             {
                 "CONNECT login.csust.edu.cn:80 HTTP/1.1\r\nHost: login.csust.edu.cn:80\r\n\r\n",
+                "CONNECT login.csust.edu.cn:802 HTTP/1.1\r\nHost: login.csust.edu.cn:802\r\n\r\n",
                 "GET http://login.csust.edu.cn:443/ HTTP/1.1\r\nHost: login.csust.edu.cn:443\r\n\r\n",
                 // WebSocket 升级绕过资源过滤，必须由代理拒绝，而不是靠页面过滤。
                 "GET http://login.csust.edu.cn/ HTTP/1.1\r\nHost: login.csust.edu.cn\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
@@ -57,6 +62,50 @@ internal static class AuthPageBoundaryRegression
             })
                 Require(AuthChannelProxy.ParseRequest(request) == AuthChannelProxy.ProxyRoute.Denied,
                     "不允许的请求形态被放行：" + request.Split("\r\n")[0]);
+        })),
+        ("认证页边界：802 端口只读取门户呈现所需的资源和配置", () => Sync(() =>
+        {
+            const string origin = "https://login.csust.edu.cn:802";
+            const string assets = origin + "/eportal/public/pageAsset/js/";
+            const string theme = origin + "/eportal/extern/theme_1/version_2/";
+            const string config = origin + "/eportal/portal/page/loadConfig";
+            foreach (var (url, context) in new[]
+            {
+                (assets + "store.js", ResourceContext.Script),
+                (assets + "all.js", ResourceContext.Script),
+                (assets + "layer/theme/default/layer.css?v=3.1", ResourceContext.Stylesheet),
+                (theme + "pc_1.js?v=123", ResourceContext.Script),
+                (theme + "0123456789abcdef0123456789abcdef.jpg", ResourceContext.Image),
+                (config + "?callback=jQuery123_456&wlan_user_ip=10.0.0.1&wlan_user_ssid=&lang=zh_CN", ResourceContext.Script)
+            })
+                Require(AuthPagePortalResources.GetAddress(url, "GET", context)?.AbsoluteUri == url,
+                    "只读展示资源未放行：" + url);
+
+            foreach (var url in new[]
+            {
+                origin + "/eportal/portal/login",
+                origin + "/eportal/portal/logout",
+                assets + "../js/store.js",
+                assets + "%73tore.js",
+                assets + "store.js#fragment",
+                assets + "store.js?v=1&user_password=fixture",
+                config + "?callback=one&callback=two",
+                config + "?callback=one&user_account=fixture",
+                config + "?callback=one&lang=zh%3Buser_password=fixture",
+                config + "?callback=one%28%29",
+                theme + "login.js",
+                "https://login.csust.edu.cn.evil.example:802/eportal/public/pageAsset/js/store.js",
+                "http://login.csust.edu.cn:802/eportal/public/pageAsset/js/store.js"
+            })
+                Require(AuthPagePortalResources.GetAddress(url, "GET", ResourceContext.Script) is null,
+                    "不支持的 802 请求被放行：" + url);
+
+            Require(AuthPagePortalResources.GetAddress(assets + "store.js", "POST", ResourceContext.Script) is null,
+                "展示资源不允许 POST");
+            Require(AuthPagePortalResources.GetAddress(assets + "store.js", "GET", ResourceContext.Document) is null,
+                "展示资源不允许直接导航");
+            Require(!AuthPagePortalResources.IsMediaTypeAllowed(ResourceContext.Script, "text/html"),
+                "HTML 错误页不能作为脚本回填");
         })),
         ("认证页边界：代理把出站连接交给绑定网卡的连接器", async () =>
         {

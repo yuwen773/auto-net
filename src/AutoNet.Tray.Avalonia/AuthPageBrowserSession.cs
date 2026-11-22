@@ -1,3 +1,4 @@
+using AutoNet.Core;
 using Microsoft.Web.WebView2.Core;
 using WebView = Microsoft.Web.WebView2.WinForms.WebView2;
 
@@ -46,6 +47,12 @@ internal sealed class AuthPageBrowserSession : IDisposable
 
     /// <summary>首次导航已确认成功：之后的主框架导航结果不再改写，也不重复发布 Attached。</summary>
     public bool NavigationConfirmed { get; set; }
+
+    /// <summary>最近一次在 ZoomFactor=1 下测得的页面尺寸；导航成功后重测，窗口变化只复用。</summary>
+    public AuthPageZoomMetrics? ZoomMetrics { get; set; }
+
+    /// <summary>加载稳定后的那次补测已经排过：每个会话只补一次，不循环。</summary>
+    public bool ZoomSettled { get; set; }
 
     /// <summary>浏览器进程退出信号；从未创建环境时永远不完成，删除方按有界等待处理。</summary>
     public Task BrowserExited => browserExited.Task;

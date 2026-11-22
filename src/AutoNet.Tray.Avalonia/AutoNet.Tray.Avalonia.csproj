@@ -5,6 +5,9 @@
     <!-- 认证页（#38）：Avalonia 12 没有原生 WebView2 控件，按隔离原型用 NativeControlHost
          承载 WinForms WebView2；浏览器流量只经应用自带的允许列表代理。 -->
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- Avalonia 的 Win32 NativeControlHost 要求清单声明受支持的 Windows 版本，
+         否则点击“上网认证”会在创建子窗口时以未处理异常崩溃。 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- WebView2 包 lib_manual 的多目标引用提示（MSB3277）为包结构固有，与本项目无关。 -->
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
     <!-- 单文件发布契约（#2/T17）只允许 exe 与 pdb；WebView2 包内 XML 文档不是运行时依赖，不复制。 -->

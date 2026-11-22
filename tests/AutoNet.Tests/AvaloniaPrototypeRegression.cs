@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using AutoNet.Tray.Avalonia;
 
@@ -169,6 +170,20 @@ internal static class AvaloniaPrototypeRegression
                 Environment.SetEnvironmentVariable("AUTONET_QA_MODE", previousMode);
                 Environment.SetEnvironmentVariable("AUTONET_QA_MUTEX_SUFFIX", previousSuffix);
             }
+        })),
+        ("原型验证：apphost 清单声明受支持的 Windows 版本以承载原生表面", () => Sync(() =>
+        {
+            // 认证页用 NativeControlHost 承载 WebView2；缺少 supportedOS 时点击“上网认证”
+            // 会在 Avalonia 创建子窗口时以未处理异常退出（真实崩溃见 2026-11-21 事件日志）。
+            var exe = Path.Combine(AppContext.BaseDirectory, "AutoNet.Tray.Avalonia.exe");
+            Require(File.Exists(exe), "测试输出缺少托盘 apphost，无法核验清单");
+            var manifest = Encoding.UTF8.GetString(File.ReadAllBytes(exe));
+            Require(manifest.Contains("supportedOS", StringComparison.Ordinal), "apphost 清单缺少 supportedOS");
+            Require(manifest.Contains("{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}", StringComparison.OrdinalIgnoreCase),
+                "apphost 清单缺少 Windows 10/11 supportedOS");
+            // 托盘必须保持普通权限；清单替换不得顺手提权。
+            Require(manifest.Contains("requestedExecutionLevel", StringComparison.Ordinal) &&
+                manifest.Contains("asInvoker", StringComparison.Ordinal), "apphost 清单未保持 asInvoker");
         })),
         ("原型验证：QA 证据报告为合法 JSON 且包含阶段字段", () => Sync(() =>
         {

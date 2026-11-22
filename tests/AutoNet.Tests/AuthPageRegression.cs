@@ -1234,6 +1234,73 @@ internal static class AuthPageRegression
             Require(qaNotifications == 1, "QA 宿主重复状态仍重复通知：" + qaNotifications);
             qa.SimulateForQa(AuthPageHostStatus.Failed);
             Require(qaNotifications == 2, "QA 宿主状态变化未通知：" + qaNotifications);
+        })),
+        ("认证页回归：宿主只在视口放得下时挂载，最小窗口退回滚动占位", () => Sync(() =>
+        {
+            // 初始窗口取主屏工作区的 66%×78%（2560×1392 → 约 1689×1086），可用高度约 880；
+            // 最小窗口 720x460 约 342。页面固定开销约 484
+            // （标题 60 + 状态 76 + 折叠条 44 + 宿主卡开销 94 + 间距 30 + 最小宿主 180）。
+            const double required = 484;
+            Require(AuthPageView.HostFitsViewport(880, required), "初始窗口未放行宿主");
+            Require(!AuthPageView.HostFitsViewport(342, required), "最小窗口仍挂载宿主");
+            // 边界：恰好相等算放得下，留半个像素容差；视口未知（0）时保持当前状态而不是误判。
+            Require(AuthPageView.HostFitsViewport(required, required), "恰好放得下被拒绝");
+            Require(AuthPageView.HostFitsViewport(required - 0.25, required), "取整误差内被拒绝");
+            Require(!AuthPageView.HostFitsViewport(required - 1, required), "明显放不下仍被放行");
+            Require(!AuthPageView.HostFitsViewport(0, required), "未知视口被当作放得下");
+            Require(AuthPageView.MinimumHostHeight >= 180, "最小宿主高度过小，门户页无法使用");
+        })),
+        ("认证页回归：只读缩放把整页缩进盒子，高度收不下时只消横向滚动", () => Sync(() =>
+        {
+            // 内容 1280×700 放进 1240×650：宽度差一点、高度差得更多，取更小的那个比例 → 整页可见。
+            var both = AuthPageZoom.Fit(new AuthPageZoomMetrics(1280, 700, 1240, 650));
+            Require(Math.Abs(both - 650.0 / 700.0) < 0.0001, "整页放得下时未按高度收：" + both);
+            Require(both <= AuthPageZoom.MaximumZoom && both >= AuthPageZoom.MinimumZoom, "缩放越界：" + both);
+
+            // 小窗口 836×369：按高度只有 0.53，低于可辨认下限，于是只收宽度、纵向留给滚动。
+            var narrow = AuthPageZoom.Fit(new AuthPageZoomMetrics(1280, 700, 836, 369));
+            Require(Math.Abs(narrow - 836.0 / 1280.0) < 0.0001, "放不下整页时未按宽度收：" + narrow);
+
+            // 盒子比内容还大：只缩小不放大。
+            Require(AuthPageZoom.Fit(new AuthPageZoomMetrics(800, 600, 2000, 1200)) == AuthPageZoom.MaximumZoom,
+                "小页面被放大了");
+            // 盒子极窄：宽度比例触到下限，不再往下缩。
+            Require(AuthPageZoom.Fit(new AuthPageZoomMetrics(1280, 700, 600, 800)) == AuthPageZoom.MinimumZoom,
+                "极窄盒子没有停在下限");
+            // 内容与视口相等（自适应页面）：原样显示。
+            Require(AuthPageZoom.Fit(new AuthPageZoomMetrics(836, 369, 836, 369)) == AuthPageZoom.MaximumZoom,
+                "自适应页面被无谓缩放");
+            // 无效尺寸一律回到 1.0，不猜。
+            Require(AuthPageZoom.Fit(new AuthPageZoomMetrics(0, 700, 836, 369)) == AuthPageZoom.MaximumZoom,
+                "内容宽度未知仍给缩放");
+            Require(AuthPageZoom.Fit(new AuthPageZoomMetrics(1280, double.NaN, 836, 369)) == AuthPageZoom.MaximumZoom,
+                "NaN 内容高度仍给缩放");
+        })),
+        ("认证页回归：缩放测量结果按严格四值解析，脚本只读尺寸", () => Sync(() =>
+        {
+            // ExecuteScriptAsync 的返回值是 JSON，字符串值自带一层引号；去掉后才是四个数字。
+            Require(AuthPageZoom.TryParseMeasurement("\"1280;700;836;369\"", out var quoted), "带引号的测量结果解析失败");
+            Require(quoted == new AuthPageZoomMetrics(1280, 700, 836, 369), "测量结果数值不符：" + quoted);
+            Require(AuthPageZoom.TryParseMeasurement("1280;700;836;369", out var bare), "无引号测量结果解析失败");
+            Require(bare == quoted, "两种写法的测量结果不一致");
+
+            foreach (var bad in new[] { null, "", "null", "1280;700;836", "1280;700;836;369;1", "a;b;c;d",
+                "-1;700;836;369", "0;700;836;369", "1280;700;836;NaN", "1e9;700;836;369" })
+            {
+                Require(!AuthPageZoom.TryParseMeasurement(bad, out _), "无效测量被接受：" + (bad ?? "null"));
+            }
+
+            // 脚本只允许读四个尺寸：不碰表单、凭据、存储、请求或页面结构的其他部分。
+            // 这是 ADR-0016 放宽“不注入脚本”的边界条件，必须逐条钉死。
+            var script = AuthPageZoom.MeasureScript;
+            foreach (var read in new[] { "documentElement", "scrollWidth", "scrollHeight", "innerWidth", "innerHeight" })
+                Require(script.Contains(read, StringComparison.Ordinal), "测量脚本缺少只读尺寸：" + read);
+            foreach (var forbidden in new[] { "cookie", "storage", "password", "submit", "form", ".value", "fetch",
+                "xmlhttprequest", "eval", "document.body", "addeventlistener", "click", "chrome.webview" })
+            {
+                Require(!script.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
+                    "测量脚本触及只读边界之外：" + forbidden);
+            }
         }))
     ];
 

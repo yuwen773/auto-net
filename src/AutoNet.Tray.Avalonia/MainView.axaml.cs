@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Data;
 using Avalonia.Input.Platform;
@@ -29,6 +30,7 @@ public partial class MainView : UserControl
     private AuthChannelLauncher? authChannelLauncher;
     private AuthPageCoordinator? authPage;
     private readonly AuthPageRenderGate<AuthPageView> authGate = new();
+    private AuthPageView? authViewShown;
     private DiagnosticsExportState? exportStateShown;
     private Func<ThemePreference>? themeProvider;
     private Action<ThemePreference>? themeSelectedHandler;
@@ -48,6 +50,8 @@ public partial class MainView : UserControl
             if (nav.SelectedItem is ListBoxItem { Tag: ShellPage page } && page != controller?.SelectedPage)
                 NavigateSafelyAsync(page);
         };
+        // 认证页的浏览器需要确定的高度：窗口变化后重新判断是否放得下宿主。
+        pageScroll.LayoutUpdated += (_, _) => UpdateAuthPageFit();
     }
 
     /// <summary>接入壳控制器、概览动作、日志页（#7）、设置页（#8 / #41）、兜底开页（#11）、诊断包导出（#12）与主题选择（#9）并建立渲染通路。应用内只会接入一次。</summary>
@@ -177,6 +181,13 @@ public partial class MainView : UserControl
 
     private void RenderContent(PageContent content)
     {
+        // 认证页按视口高度布局并承载浏览器；其余页面保持顶部对齐与滚动。
+        if (content is not AuthPageContent)
+        {
+            pageHost.VerticalAlignment = VerticalAlignment.Top;
+            if (pageScroll.VerticalScrollBarVisibility != ScrollBarVisibility.Auto)
+                pageScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        }
         switch (content)
         {
             case OverviewContent overview:
@@ -282,12 +293,31 @@ public partial class MainView : UserControl
                 var authView = pendingView!;
                 authView.Render(auth);
                 pageHost.Content = authView.Root;
+                authViewShown = authView;
+                // 认证页撑满视口：浏览器宿主按剩余高度伸缩，门户页按自己的视口排版。
+                pageHost.VerticalAlignment = VerticalAlignment.Stretch;
+                UpdateAuthPageFit();
                 break;
             case PageScaffold scaffold:
                 ClearShown(except: null);
                 pageHost.Content = ScaffoldView(scaffold);
                 break;
         }
+    }
+
+    /// <summary>
+    /// 认证页的宿主适配：视口放得下“固定内容 + 最小宿主高度”时停止滚动，让浏览器吃满剩余高度；
+    /// 放不下时退回滚动并显示占位（占位状态不挂原生表面，滚动不会让浏览器窗口错位）。
+    /// 只在认证页显示期间生效；窗口尺寸变化由 <see cref="UpdateAuthPageFit"/> 反复收敛。
+    /// </summary>
+    private void UpdateAuthPageFit()
+    {
+        if (authViewShown is not { } view || !ReferenceEquals(pageHost.Content, view.Root)) return;
+        var available = pageScroll.Viewport.Height - pageHost.Margin.Top - pageHost.Margin.Bottom;
+        var fits = view.UpdateViewport(available);
+        var visibility = fits ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        if (pageScroll.VerticalScrollBarVisibility != visibility)
+            pageScroll.VerticalScrollBarVisibility = visibility;
     }
 
     /// <summary>只保留当前页面的内容缓存：其余页面的指纹缓存一律清空，避免跨页误判跳过。</summary>

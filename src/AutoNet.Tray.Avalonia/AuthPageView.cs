@@ -13,19 +13,34 @@ namespace AutoNet.Tray.Avalonia;
 /// 视图只渲染传入的 <see cref="AuthPageContent"/>；不读取配置、不访问网络、不提供填表控件。
 /// 手动认证修复只发起“经确认后启动辅助进程”的意图，表单与提交都由辅助进程完成。
 /// 宿主表面由协调器注入，状态刷新只更新文字与宿主表面，**不重建页面**，因此已填内容不会被清空。
+///
+/// 布局（2026-11-22）：浏览器宿主占满页面的剩余高度，门户页面按自己的视口排版。
+/// 但原生表面只能放在确定高度的容器里，所以只有当视口放得下“固定内容 + 最小宿主高度”时，
+/// 页面才停止滚动并挂载浏览器；放不下时退回滚动并显示占位，窗口放大后自动恢复——
+/// 见 <see cref="UpdateViewport"/>。滚动状态下不挂原生表面，避免窗口跟随滚动的未验证路径。
 /// </summary>
 internal sealed class AuthPageView
 {
+    /// <summary>浏览器宿主的最小高度：低于它时门户页只剩很窄的视口，不再值得挂载。</summary>
+    internal const double MinimumHostHeight = 180;
+
+    /// <summary>放不下时压缩到的高度；与“宿主不可用”的降级形态一致。</summary>
+    private const double FallbackHostHeight = 140;
+
+    private const double RowSpacing = 10;
+
     private readonly Func<object?> surfaceProvider;
-    private readonly Action retryRequested;
-    private readonly StackPanel root;
+    private readonly Grid root;
+    private readonly StackPanel headerPanel;
     private readonly ContentControl glyphHost = new();
-    private readonly TextBlock statusTitle = new() { FontSize = 22, FontWeight = FontWeight.SemiBold };
-    private readonly TextBlock statusExplanation = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 21, FontSize = 14 };
-    private readonly TextBlock nextStep = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 21, FontSize = 13, Opacity = 0.85 };
-    private readonly TextBlock address = new() { FontSize = 14, FontWeight = FontWeight.Medium, TextWrapping = TextWrapping.Wrap };
-    private readonly TextBlock background = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 20, FontSize = 12, Opacity = 0.8 };
-    private readonly TextBlock hostTitle = new() { FontSize = 15, FontWeight = FontWeight.SemiBold };
+    private readonly TextBlock statusTitle = new() { FontSize = 17, FontWeight = FontWeight.SemiBold };
+    private readonly TextBlock statusLine = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 19, FontSize = 13, Opacity = 0.85 };
+    private readonly TextBlock address = new()
+    {
+        FontSize = 12, Opacity = 0.65, VerticalAlignment = VerticalAlignment.Center,
+        TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Right
+    };
+    private readonly TextBlock hostTitle = new() { FontSize = 15, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock hostDetail = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 20, FontSize = 13, Opacity = 0.85 };
     private readonly TextBlock hostPlaceholder = new()
     {
@@ -38,23 +53,36 @@ internal sealed class AuthPageView
         TextAlignment = TextAlignment.Center
     };
     private readonly Border hostSlot;
+    private readonly Control hostCard;
     private readonly Button retry;
-    private readonly Control channelCard;
+    private readonly Control statusCard;
+    private readonly Expander channelCard;
     private readonly TextBlock channelState = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 19, FontSize = 12, Opacity = 0.85 };
     private readonly Button channelButton;
     private readonly TextBlock channelNotice = new()
     {
         TextWrapping = TextWrapping.Wrap, LineHeight = 19, FontSize = 12, IsVisible = false
     };
-    private object? surfaceShown;
+
+    private AuthPageContent? content;
+    private object? slotItemShown;
+    private bool hostFits = true;
 
     public AuthPageView(Action retryRequested, Func<object?> surfaceProvider, Action? channelLaunch = null)
     {
-        this.retryRequested = retryRequested;
         this.surfaceProvider = surfaceProvider;
 
-        root = new StackPanel { Spacing = 14, MaxWidth = 980, HorizontalAlignment = HorizontalAlignment.Left };
-        root.Children.Add(new StackPanel
+        // Grid + 星号行：宿主卡吃掉剩余高度，门户页因此得到确定的视口尺寸。
+        root = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+            RowSpacing = RowSpacing,
+            MaxWidth = 1320,
+            // 拉满可用宽度：门户页需要横向空间，Left 对齐会让整页只按文字宽度收缩。
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+
+        headerPanel = new StackPanel
         {
             Spacing = 4,
             Children =
@@ -68,45 +96,48 @@ internal sealed class AuthPageView
                     Opacity = 0.75
                 }
             }
-        });
+        };
+        Grid.SetRow(headerPanel, 0);
+        root.Children.Add(headerPanel);
 
-        // 用 Grid 给状态文字一个受约束的宽度；横向 StackPanel 会以无限宽度测量子项，
-        // 长文案（例如结果未知的额度/间隔说明）因此不会换行，只会被卡片裁切。
+        // 状态卡压缩成“图标 + 结论 + 一行说明”：每省下的一行都直接变成门户页的可用高度。
+        // 免责说明已由页面顶部的描述承担，不在这里重复。
         var statusRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
         glyphHost.VerticalAlignment = VerticalAlignment.Top;
-        glyphHost.Width = 34;
-        glyphHost.Height = 34;
+        glyphHost.Width = 26;
+        glyphHost.Height = 26;
         var statusText = new StackPanel
         {
-            Spacing = 5,
-            Margin = new Thickness(14, 0, 0, 0),
-            Children = { statusTitle, statusExplanation, nextStep }
+            Spacing = 3,
+            Margin = new Thickness(10, 0, 0, 0),
+            Children = { statusTitle, statusLine }
         };
         Grid.SetColumn(glyphHost, 0);
         Grid.SetColumn(statusText, 1);
         statusRow.Children.Add(glyphHost);
         statusRow.Children.Add(statusText);
-        var statusCard = new StackPanel { Spacing = 10, Children = { statusRow, background } };
-        AutomationProperties.SetName(statusCard, ShellAccessibility.AuthStatus);
-        root.Children.Add(ShellTheming.Card(statusCard));
+        AutomationProperties.SetName(statusRow, ShellAccessibility.AuthStatus);
+        statusCard = ShellTheming.Card(statusRow);
+        Grid.SetRow(statusCard, 1);
+        root.Children.Add(statusCard);
 
-        var addressRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-        addressRow.Children.Add(new TextBlock
-        {
-            Text = "门户地址",
-            FontSize = 13,
-            Width = 148,
-            VerticalAlignment = VerticalAlignment.Center,
-            Opacity = 0.6
-        });
-        addressRow.Children.Add(address);
+        // 宿主卡内部同样是 Grid：标题行（含门户地址）与说明固定，承载框吃掉卡片内的剩余高度。
+        var hostHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 12 };
+        hostHeader.Children.Add(hostTitle);
         AutomationProperties.SetName(address, ShellAccessibility.AuthAddress);
-        root.Children.Add(ShellTheming.Card(addressRow));
-
-        var host = new StackPanel { Spacing = 8, Children = { hostTitle, hostDetail } };
+        Grid.SetColumn(address, 1);
+        hostHeader.Children.Add(address);
+        var hostBody = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+            RowSpacing = 8,
+            Children = { hostHeader, hostDetail }
+        };
+        Grid.SetRow(hostHeader, 0);
+        Grid.SetRow(hostDetail, 1);
         hostSlot = new Border
         {
-            MinHeight = 360,
+            MinHeight = MinimumHostHeight,
             Padding = new Thickness(14),
             CornerRadius = new CornerRadius(6),
             BorderThickness = new Thickness(1),
@@ -114,7 +145,8 @@ internal sealed class AuthPageView
         };
         hostSlot.Bind(Border.BorderBrushProperty, hostSlot.GetResourceObservable("CardBorder"));
         AutomationProperties.SetName(hostSlot, ShellAccessibility.AuthHost);
-        host.Children.Add(hostSlot);
+        Grid.SetRow(hostSlot, 2);
+        hostBody.Children.Add(hostSlot);
         retry = ShellAccessibility.Named(new Button
         {
             Content = ShellAccessibility.AuthRetry,
@@ -123,16 +155,16 @@ internal sealed class AuthPageView
             IsVisible = false
         }, ShellAccessibility.AuthRetry);
         retry.Click += (_, _) => retryRequested();
-        host.Children.Add(retry);
-        root.Children.Add(ShellTheming.Card(host));
+        Grid.SetRow(retry, 3);
+        hostBody.Children.Add(retry);
+        hostCard = ShellTheming.Card(hostBody);
+        Grid.SetRow(hostCard, 2);
+        root.Children.Add(hostCard);
 
         // 工单 #24 / ADR-0009：会提权并可能提交凭据的手动入口从只读诊断页移到这里，
-        // 与“本页不填表、不提交”的说明分开呈现，并在按钮上方明确警示。
+        // 与“本页不填表、不提交”的说明分开呈现，并在展开后明确警示。
+        // 折叠成 Expander 是为了不抢占浏览器的空间：只有用户主动展开时才让出宿主高度。
         var channelBody = new StackPanel { Spacing = 8 };
-        channelBody.Children.Add(new TextBlock
-        {
-            Text = "手动认证修复（会提交凭据）", FontSize = 15, FontWeight = FontWeight.SemiBold
-        });
         channelBody.Children.Add(new TextBlock
         {
             Text = "仅在协议认证反复失败、门户结构变化时使用。点击后会请求管理员授权（UAC），"
@@ -153,8 +185,15 @@ internal sealed class AuthPageView
         }, "手动认证修复：会请求管理员授权并可能提交已保存的凭据");
         if (channelLaunch is not null) channelButton.Click += (_, _) => channelLaunch();
         channelBody.Children.Add(channelButton);
-        channelCard = ShellTheming.Card(channelBody);
-        channelCard.IsVisible = false;
+        channelCard = new Expander
+        {
+            Header = new TextBlock { Text = "手动认证修复（会提交凭据）", FontSize = 15, FontWeight = FontWeight.SemiBold },
+            Content = channelBody,
+            IsExpanded = false,
+            IsVisible = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        Grid.SetRow(channelCard, 3);
         root.Children.Add(channelCard);
     }
 
@@ -168,24 +207,57 @@ internal sealed class AuthPageView
     {
         channelNotice.Text = text ?? "";
         channelNotice.IsVisible = !string.IsNullOrEmpty(text);
+        if (!string.IsNullOrEmpty(text)) channelCard.IsExpanded = true;
+    }
+
+    /// <summary>放得下浏览器所需的页面高度：固定行实际高度 + 行间距 + 宿主卡自身开销 + 最小宿主高度。</summary>
+    internal double RequiredHeight
+    {
+        get
+        {
+            // 宿主卡的标题、说明与内边距也占高度，计算时必须一起扣除，否则浏览器会被挤到最小值以下。
+            var hostChrome = Math.Max(0, hostCard.Bounds.Height - hostSlot.Bounds.Height);
+            return MinimumHostHeight + hostChrome + RowSpacing * 3
+                + headerPanel.Bounds.Height + statusCard.Bounds.Height + channelCard.Bounds.Height;
+        }
+    }
+
+    /// <summary>
+    /// 视口是否放得下浏览器（容差半个像素，避免布局取整造成来回切换）。
+    /// 纯函数，离线回归直接钉住默认窗口与最小窗口两侧。
+    /// </summary>
+    internal static bool HostFitsViewport(double availableHeight, double requiredHeight) =>
+        availableHeight > 0 && availableHeight + 0.5 >= requiredHeight;
+
+    /// <summary>
+    /// 用滚动容器的可用高度决定是否挂载浏览器：放得下就停止滚动让宿主吃满剩余高度，
+    /// 放不下就退回滚动并显示占位（占位状态下没有原生表面，滚动不会带来窗口错位）。
+    /// 返回当前是否放得下。
+    /// </summary>
+    public bool UpdateViewport(double availableHeight)
+    {
+        if (availableHeight <= 0) return hostFits;
+        var fits = HostFitsViewport(availableHeight, RequiredHeight);
+        if (fits == hostFits) return fits;
+        hostFits = fits;
+        UpdateHostSlot();
+        return fits;
     }
 
     /// <summary>用新的状态投影更新可见文字与宿主表面；不导航、不重建控件树。</summary>
     public void Render(AuthPageContent content)
     {
-        glyphHost.Content = ShellTheming.Glyph(ShellIcons.ToneGlyph(content.Tone), content.Tone, 30);
+        this.content = content;
+        glyphHost.Content = ShellTheming.Glyph(ShellIcons.ToneGlyph(content.Tone), content.Tone, 24);
         statusTitle.Text = content.StatusTitle;
-        statusExplanation.Text = content.StatusExplanation;
-        nextStep.Text = content.NextStep;
+        // 结论与下一步合并成一行：默认窗口高度有限，这一行是门户页能多出来的高度。
+        statusLine.Text = string.IsNullOrWhiteSpace(content.NextStep)
+            ? content.StatusExplanation
+            : content.StatusExplanation + " " + content.NextStep;
         address.Text = content.PortalAddress;
-        background.Text = content.BackgroundNote;
         hostTitle.Text = content.HostTitle;
         hostDetail.Text = content.HostDetail;
         retry.IsVisible = content.HostRetryVisible;
-        // 受控降级时不显示旧宿主表面，并压缩宿主区高度，保证重试入口留在首屏。
-        hostSlot.MinHeight = content.HostAvailable ? 360 : 140;
-        // 宿主状态文案与模型共用同一映射（#37 审查：避免三处 switch 各自漂移）。
-        hostPlaceholder.Text = AuthPageModel.HostCopyFor(content.HostStatus).Placeholder;
 
         // 手动认证修复入口只在装配了发起器时出现；忙态与模式约束与诊断页原实现一致。
         channelCard.IsVisible = content.Channel is not null;
@@ -198,10 +270,25 @@ internal sealed class AuthPageView
             channelButton.IsEnabled = channel.SignalPresent && channel.Mode != AuthChannelModes.Off && !channel.Busy;
         }
 
-        var surface = content.HostAvailable ? surfaceProvider() : null;
-        if (ReferenceEquals(surface, surfaceShown)) return;
-        surfaceShown = surface;
-        hostSlot.Child = surface as Control ?? hostPlaceholder;
+        UpdateHostSlot();
+    }
+
+    /// <summary>
+    /// 宿主槽位的内容与高度：只有“宿主可用且视口放得下”时才挂原生表面。
+    /// 受控降级或窗口过小时显示占位并压缩高度，保证重试入口留在首屏。
+    /// </summary>
+    private void UpdateHostSlot()
+    {
+        var available = content?.HostAvailable == true;
+        var showSurface = available && hostFits;
+        var item = showSurface ? surfaceProvider() : null;
+        hostPlaceholder.Text = available && !hostFits
+            ? "窗口太小，放大后可查看门户页面。"
+            : content is null ? "" : AuthPageModel.HostCopyFor(content.HostStatus).Placeholder;
+        hostSlot.MinHeight = showSurface ? MinimumHostHeight : FallbackHostHeight;
+        if (ReferenceEquals(item, slotItemShown) && hostSlot.Child is not null) return;
+        slotItemShown = item;
+        hostSlot.Child = item as Control ?? hostPlaceholder;
     }
 }
 

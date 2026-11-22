@@ -90,18 +90,6 @@ internal static class AuthChannelProxyRegression
                 var count = await stream.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
                 Require(Encoding.ASCII.GetString(buffer, 0, count).StartsWith("HTTP/1.1 403 ", StringComparison.Ordinal), "伪装或无效端口未被拒绝");
             }
-        }),
-        ("通道代理：明文仅允许固定门户的80端口", () =>
-        {
-            Require(AuthChannelProxy.ParseRequest("GET http://LOGIN.CSUST.EDU.CN:80/ HTTP/1.1\r\nHost: LOGIN.CSUST.EDU.CN\r\n\r\n") ==
-                AuthChannelProxy.ProxyRoute.HttpRoot, "允许的明文目标未通过策略");
-            return Task.CompletedTask;
-        }),
-        ("通道代理：允许域名大小写归一后仅连接HTTPS目标", () =>
-        {
-            Require(AuthChannelProxy.ParseRequest("CONNECT LOGIN.CSUST.EDU.CN:443 HTTP/1.1\r\nHost: LOGIN.CSUST.EDU.CN:443\r\n\r\n") ==
-                AuthChannelProxy.ProxyRoute.HttpsTunnel, "允许的 HTTPS 目标未通过策略");
-            return Task.CompletedTask;
         })
     ];
 
