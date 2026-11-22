@@ -112,7 +112,7 @@ internal static class RecoveryPersistenceRegression
         ("恢复持久安全：原生请求边界区分IssuedSkippedFailed且不抢其他配置", () =>
         {
             var calls = 0;
-            var other = new WifiLink(true, null, IPAddress.Parse("10.0.0.1"), 7, [], OtherProfile: true);
+            var other = new WifiLink(true, IPAddress.Parse("10.0.0.1"), 7, [], OtherProfile: true);
             foreach (var disconnect in new[] { false, true })
                 Require(Wifi.Request(disconnect, () => other, () => { calls++; return 0; }).Status == WifiRequestStatus.Skipped);
             Require(calls == 0);

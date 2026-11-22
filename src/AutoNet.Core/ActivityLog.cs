@@ -62,11 +62,20 @@ public sealed record ActivityLog
         LastError = status?.LastError
     };
 
+    /// <summary>旧版记录中“重新保存凭据”提示必须附带的安全说明。</summary>
+    public const string ResaveCredentialNote =
+        "说明：这是旧版处理提示。请先检查认证诊断，不要仅为解除暂停而重新保存密码。";
+
+    /// <summary>旧版“恢复联网”记录缺少恢复来源，必须明确不能据此认定是程序自动修复。</summary>
+    public const string LegacyRecoveryNote =
+        "说明：旧版仅记录外网重新可达，未记录恢复来源，不能据此认定是程序自动修复。";
+
     public string ToReadableText()
     {
         var text = new StringBuilder();
         text.AppendLine($"{Time.ToLocalTime():yyyy-MM-dd HH:mm:ss zzz}  【{Action}】");
-        text.AppendLine(Detail);
+        var detail = Detail ?? "";
+        text.AppendLine(detail);
         if (EventCode is not null)
         {
             text.AppendLine($"事件：{EventCode}；运行 {RunId}；序号 {Sequence}；检测轮次 {Cycle}");
@@ -105,8 +114,8 @@ public sealed record ActivityLog
                 if (data.PreviousRunId is not null) text.AppendLine($"前一运行：{data.PreviousRunId}；最后事件序号 {data.PreviousSequence}；故障 {data.PreviousIncidentId}");
             }
         }
-        if (Detail.Contains("请重新保存凭据", StringComparison.Ordinal)) text.AppendLine("说明：这是旧版处理提示。请先检查认证诊断，不要仅为解除暂停而重新保存密码。");
-        if (Action == "恢复联网") text.AppendLine("说明：旧版仅记录外网重新可达，未记录恢复来源，不能据此认定是程序自动修复。");
+        if (detail.Contains("请重新保存凭据", StringComparison.Ordinal)) text.AppendLine(ResaveCredentialNote);
+        if (Action == "恢复联网") text.AppendLine(LegacyRecoveryNote);
         if (Wifi is not null) text.AppendLine($"网络：Wi-Fi {Wifi}；{Direct ?? "外网状态未记录"}；认证 {Portal ?? "未记录"}");
         if (Attempts is { } attempts) text.AppendLine($"本轮自动动作：{attempts} 次");
         if (DisconnectAttempts is { } disconnects) text.AppendLine($"本次故障主动断线：{disconnects}/3 次（连续在线 60 秒重置）");
@@ -128,22 +137,5 @@ public sealed record ActivityLog
         if (Uu is not null) text.AppendLine("UU：" + Uu);
         if (!string.IsNullOrEmpty(LastError)) text.AppendLine("最近异常：" + LastError);
         return text.ToString();
-    }
-
-    public static string ReadableHistory(string content)
-    {
-        var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(300).Reverse();
-        var text = new StringBuilder();
-        foreach (var line in lines)
-        {
-            try
-            {
-                var entry = JsonSerializer.Deserialize<ActivityLog>(line, Json);
-                if (entry is null || entry.Action == "" || entry.Time == default) throw new JsonException();
-                text.AppendLine(entry.ToReadableText());
-            }
-            catch (JsonException) { text.AppendLine("【记录不完整】一条日志暂时无法读取；可刷新重试。\n"); }
-        }
-        return text.Length == 0 ? "这一天尚无日志。后台服务运行后会记录状态变化和恢复动作。" : text.ToString();
     }
 }

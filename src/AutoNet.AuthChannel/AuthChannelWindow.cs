@@ -315,7 +315,7 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
 
     private async Task<AuthChannelConclusion> ExecuteAsync()
     {
-        if (!_options.FromSettings || _options.FixtureDir is not null ||
+        if (!_options.FromSettings ||
             !Uri.TryCreate(_options.StartUrl, UriKind.Absolute, out var portal) || !Settings.IsSupportedPortal(portal))
             return AuthChannelConclusion.Unknown;
         // 托盘重启后仍运行的辅助进程用这条锁阻止第二个通道启动；进程退出即由系统释放。
@@ -413,25 +413,25 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         Microsoft.Web.WebView2.Core.CoreWebView2 core, Credentials credentials, CancellationToken ct)
     {
         var account = await ExecutePointerStepAsync(
-            core, AuthPageStep.FillAccount, AuthPagePointerScript.Account, credentials.Username, ct);
+            core, AuthPagePointerScript.Account, credentials.Username, ct);
         if (account.Takeover) return await BeginTakeoverAsync();
         if (!account.Ok) return await StopForHumanAsync(AuthPageStep.FillAccount, account.Reason);
         NoteStep(account, AuthPageStep.FillAccount);
 
         var password = await ExecutePointerStepAsync(
-            core, AuthPageStep.FillPassword, AuthPagePointerScript.Password, credentials.Password, ct);
+            core, AuthPagePointerScript.Password, credentials.Password, ct);
         if (password.Takeover) return await BeginTakeoverAsync();
         if (!password.Ok) return await StopForHumanAsync(AuthPageStep.FillPassword, password.Reason);
         NoteStep(password, AuthPageStep.FillPassword);
 
         var agreement = await ExecutePointerStepAsync(
-            core, AuthPageStep.AcceptAgreement, AuthPagePointerScript.Agreement, null, ct);
+            core, AuthPagePointerScript.Agreement, null, ct);
         if (agreement.Takeover) return await BeginTakeoverAsync();
         if (!agreement.Ok) return await StopForHumanAsync(AuthPageStep.AcceptAgreement, agreement.Reason);
         NoteStep(agreement, AuthPageStep.AcceptAgreement);
 
         var submit = await ExecutePointerStepAsync(
-            core, AuthPageStep.Submit, AuthPagePointerScript.Submit, null, ct);
+            core, AuthPagePointerScript.Submit, null, ct);
         if (submit.Takeover) return await BeginTakeoverAsync();
         if (!submit.Ok) return await StopForHumanAsync(AuthPageStep.Submit, submit.Reason);
         // 点击已发生：从这里开始按“可能已发送”计。
@@ -451,7 +451,7 @@ internal sealed class AuthChannelWindow : Form, IAuthChannelBrowser
         bool Ok, bool Skipped, bool Takeover, AuthPageStepReason Reason, AuthPageTarget Target);
 
     private async Task<PointerStepOutcome> ExecutePointerStepAsync(
-        Microsoft.Web.WebView2.Core.CoreWebView2 core, AuthPageStep step, string kind, string? value, CancellationToken ct)
+        Microsoft.Web.WebView2.Core.CoreWebView2 core, string kind, string? value, CancellationToken ct)
     {
         var script = AuthPagePointerScript.Step(kind, value is null ? null : JsonSerializer.Serialize(value));
         try

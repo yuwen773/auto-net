@@ -8,7 +8,7 @@ internal static class NetworkRegression
     [
         ("网络诊断：原生关联状态不查询当前连接，属性缺失不误判断连", () =>
         {
-            var link = new WifiLink(false, null, null, 7, []);
+            var link = new WifiLink(false, null, 7, []);
             foreach (var state in new[] { 0, 2, 3, 5, 6, 7, 99 })
             {
                 var observed = Wifi.ReadConnection(link, state, "campus", () => throw new Exception("不应查询当前连接"));
@@ -35,7 +35,7 @@ internal static class NetworkRegression
         {
             var settings = new Settings(); var handler = new MonitorHttp { Online = true };
             using var http = new HttpClient(handler);
-            var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
+            var link = new WifiLink(true, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
             var report = await NetworkDiagnostics.RunAsync(settings, link, http, new("Tun", 9), default);
             Require(report.DirectOnline == true && !report.Mutations && report.PhysicalExitEvidence.Contains("未核验"));
             Require(handler.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));

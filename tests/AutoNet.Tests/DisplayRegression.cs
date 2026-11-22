@@ -18,7 +18,7 @@ internal static class DisplayRegression
                 }, Fresh);
                 Require(!display.TechnicalDetail.Contains(unknown), "技术详情显示了未受控的分类：" + unknown);
                 Require(display.TechnicalDetail.Contains("未知"));
-                Require(display.IsHealthy, "未知诊断分类不应改写独立的联网事实");
+                Require(display.Primary == NetworkPrimaryState.Online, "未知诊断分类不应改写独立的联网事实");
             }
             foreach (var stage in Enum.GetNames<PortalStage>().Where(n => n != "Unknown"))
                 Require(NetworkDisplayMap.Map(Snapshot("校园网在线") with { AuthenticationStage = stage }, Fresh).TechnicalDetail.Contains("认证阶段 " + stage));
@@ -38,7 +38,6 @@ internal static class DisplayRegression
             }
             var unknown = NetworkDisplayMap.Map(Snapshot("某种尚未发布的状态"), Fresh);
             Require(unknown.Primary == NetworkPrimaryState.Unrecognized, "未知状态必须报告为未识别");
-            Require(!unknown.IsHealthy, "未知状态绝不能呈现为健康");
             Require(unknown.Title == "未识别的服务状态");
             Require(unknown.Explanation.Contains("不会把它当作正常"));
             return Task.CompletedTask;
@@ -81,7 +80,6 @@ internal static class DisplayRegression
             }, Fresh);
             Require(display.Primary == NetworkPrimaryState.Online, "网络在线时主状态必须是在线");
             Require(display.Additional.HasFlag(NetworkAdditional.AuthenticationSuspended), "认证暂停必须独立呈现");
-            Require(display.IsHealthy, "网络在线就是在线，不能因为认证暂停而改写主状态");
 
             var suspended = NetworkDisplayMap.Map(Snapshot("已暂停恢复") with { Enabled = false }, Fresh);
             Require(suspended.Additional.HasFlag(NetworkAdditional.RecoveryPaused));
@@ -92,7 +90,7 @@ internal static class DisplayRegression
         }),
         ("展示映射：在线状态必须有直连可达事实且离线绑定拒绝仍为故障", () =>
         {
-            Require(!NetworkDisplayMap.Map(Snapshot("校园网在线") with { Direct = "待检测" }, Fresh).IsHealthy);
+            Require(NetworkDisplayMap.Map(Snapshot("校园网在线") with { Direct = "待检测" }, Fresh).Primary != NetworkPrimaryState.Online);
             var offline = NetworkDisplayMap.Map(Snapshot("需要处理认证") with
             {
                 CredentialsBlocked = true, AuthenticationFailure = "BindingRejected"
@@ -111,7 +109,7 @@ internal static class DisplayRegression
             })
             {
                 Require(NetworkDisplayMap.IsFresh(age) == expected);
-                Require(NetworkDisplayMap.Map(Snapshot("校园网在线"), age).IsHealthy == expected);
+                Require((NetworkDisplayMap.Map(Snapshot("校园网在线"), age).Primary == NetworkPrimaryState.Online) == expected);
             }
             return Task.CompletedTask;
         }),
@@ -127,13 +125,13 @@ internal static class DisplayRegression
                     var status = StatusSnapshotReader.Parse(node.ToJsonString());
                     Require(!StatusSnapshotReader.IsValid(status), $"不应信任空字段 {field}");
                     var display = NetworkDisplayMap.Map(status, Fresh);
-                    Require(!display.IsHealthy && display.Title == "状态不可确认");
+                    Require(display.Primary != NetworkPrimaryState.Online && display.Title == "状态不可确认");
                 }
             var missingTime = JsonNode.Parse(json)!.AsObject();
             missingTime.Remove("UpdatedAt");
-            Require(!NetworkDisplayMap.Map(StatusSnapshotReader.Parse(missingTime.ToJsonString()), Fresh).IsHealthy);
-            Require(!NetworkDisplayMap.Map(Snapshot("校园网在线") with { UpdatedAt = default }, Fresh).IsHealthy);
-            Require(!NetworkDisplayMap.Map(Snapshot("校园网在线") with { Tunnel = null! }, Fresh).IsHealthy);
+            Require(NetworkDisplayMap.Map(StatusSnapshotReader.Parse(missingTime.ToJsonString()), Fresh).Primary != NetworkPrimaryState.Online);
+            Require(NetworkDisplayMap.Map(Snapshot("校园网在线") with { UpdatedAt = default }, Fresh).Primary != NetworkPrimaryState.Online);
+            Require(NetworkDisplayMap.Map(Snapshot("校园网在线") with { Tunnel = null! }, Fresh).Primary != NetworkPrimaryState.Online);
             Require(StatusSnapshotReader.Parse("null") is null);
             return Task.CompletedTask;
         }),
@@ -141,9 +139,9 @@ internal static class DisplayRegression
         {
             var node = JsonNode.Parse(JsonSerializer.Serialize(Snapshot("校园网在线")))!;
             node["futureField"] = "未来字段";
-            Require(NetworkDisplayMap.Map(StatusSnapshotReader.Parse(node.ToJsonString()), Fresh).IsHealthy);
+            Require(NetworkDisplayMap.Map(StatusSnapshotReader.Parse(node.ToJsonString()), Fresh).Primary == NetworkPrimaryState.Online);
             node["State"] = "未来状态";
-            Require(!NetworkDisplayMap.Map(StatusSnapshotReader.Parse(node.ToJsonString()), Fresh).IsHealthy);
+            Require(NetworkDisplayMap.Map(StatusSnapshotReader.Parse(node.ToJsonString()), Fresh).Primary != NetworkPrimaryState.Online);
             return Task.CompletedTask;
         }),
         ("展示映射：需要认证时文案跟随凭据阻断标记而非状态字符串", () =>
@@ -181,11 +179,11 @@ internal static class DisplayRegression
         ("展示映射：状态过期与后台未就绪都不会呈现为健康", () =>
         {
             var stale = NetworkDisplayMap.Map(Snapshot("校园网在线") with { Direct = "外网可达" }, TimeSpan.FromSeconds(20));
-            Require(!stale.IsHealthy, "过期状态不能是健康");
+            Require(stale.Primary != NetworkPrimaryState.Online, "过期状态不能是健康");
             Require(stale.Title == "后台状态已过期" && stale.TechnicalDetail.Contains("20 秒"));
 
             var missing = NetworkDisplayMap.Map(null, Fresh);
-            Require(!missing.IsHealthy && missing.Title == "后台服务未就绪");
+            Require(missing.Primary != NetworkPrimaryState.Online && missing.Title == "后台服务未就绪");
             Require(missing.TechnicalDetail == "未读取到 status.json。");
             return Task.CompletedTask;
         }),

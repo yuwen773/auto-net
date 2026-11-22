@@ -132,7 +132,7 @@ internal static class AvaloniaShellRegression
 
                 var missing = StatusPipe.ReadNow(path, now);
                 Require(missing.Snapshot is null && missing.StripText == "后台服务未就绪", "缺失文件未按未就绪降级");
-                Require(missing.Display.Primary == NetworkPrimaryState.Unrecognized && !missing.Display.IsHealthy, "缺失文件不得呈现健康");
+                Require(missing.Display.Primary == NetworkPrimaryState.Unrecognized, "缺失文件不得呈现健康");
 
                 File.WriteAllText(path, JsonSerializer.Serialize(Online() with { UpdatedAt = now }, Storage.Json));
                 var fresh = StatusPipe.ReadNow(path, now);
@@ -140,15 +140,15 @@ internal static class AvaloniaShellRegression
                 Require(fresh.StripText == "后台服务运行中 · 最近检测 " + Stamp(now), "在线状态栏文本不符");
 
                 var stale = StatusPipe.ReadNow(WriteStatus(directory, Online() with { UpdatedAt = now.AddMinutes(-1) }), now);
-                Require(!stale.Fresh && !stale.Display.IsHealthy && stale.Display.Title == "后台状态已过期", "过期状态未安全降级");
+                Require(!stale.Fresh && stale.Display.Primary != NetworkPrimaryState.Online && stale.Display.Title == "后台状态已过期", "过期状态未安全降级");
                 Require(stale.StripText == "后台状态已过期 · 最后更新 " + Stamp(now.AddMinutes(-1)), "过期状态栏文本不符");
 
                 var future = StatusPipe.ReadNow(WriteStatus(directory, Online() with { UpdatedAt = now.AddSeconds(30) }), now);
-                Require(!future.Fresh && !future.Display.IsHealthy, "未来异常时间不得呈现健康");
+                Require(!future.Fresh && future.Display.Primary != NetworkPrimaryState.Online, "未来异常时间不得呈现健康");
                 Require(future.StripText.StartsWith("后台状态已过期 · 最后更新", StringComparison.Ordinal), "未来异常未按过期降级");
 
                 var skew = StatusPipe.ReadNow(WriteStatus(directory, Online() with { UpdatedAt = now.AddSeconds(3) }), now);
-                Require(skew.Fresh && skew.Display.IsHealthy, "5 秒内的时钟偏差应被容忍");
+                Require(skew.Fresh && skew.Display.Primary == NetworkPrimaryState.Online, "5 秒内的时钟偏差应被容忍");
 
                 File.WriteAllText(path, "{not json");
                 var corrupt = StatusPipe.ReadNow(path, now);
@@ -159,7 +159,7 @@ internal static class AvaloniaShellRegression
                 Require(invalid.Display.Primary == NetworkPrimaryState.Unrecognized && invalid.Display.Title == "状态不可确认", "字段损坏不得呈现健康");
 
                 var unknown = StatusPipe.ReadNow(WriteStatus(directory, Online() with { State = "未来服务状态", UpdatedAt = now }), now);
-                Require(unknown.Valid && !unknown.Display.IsHealthy, "未识别状态不得呈现健康");
+                Require(unknown.Valid, "未识别状态仍应是结构有效的读取");
                 Require(unknown.Display.Primary == NetworkPrimaryState.Unrecognized && unknown.Display.Title == "未识别的服务状态", "未识别状态未按不可确认映射");
             }
             finally { Directory.Delete(directory, recursive: true); }

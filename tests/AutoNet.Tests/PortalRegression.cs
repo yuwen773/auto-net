@@ -430,7 +430,7 @@ internal static class PortalRegression
             // probe; both production probe clients are pinned here so a future handler
             // change cannot silently start following portal redirects.
             Require(!HealthChecks.SystemHandler("").AllowAutoRedirect);
-            Require(!DirectNetwork.CreateHandler(new(true, null, IPAddress.Parse("10.0.0.1"), 7, [])).AllowAutoRedirect);
+            Require(!DirectNetwork.CreateHandler(new(true, IPAddress.Parse("10.0.0.1"), 7, [])).AllowAutoRedirect);
             return Task.CompletedTask;
         }),
         ("探测语义：探测证据带置信度标注，当前均为 Confirmed", async () =>

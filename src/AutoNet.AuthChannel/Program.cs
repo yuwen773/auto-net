@@ -17,7 +17,7 @@ internal static class Program
             var options = ChannelOptions.Parse(args);
             if (options is null)
             {
-                Console.Error.WriteLine("usage: AutoNet.AuthChannel --start-url <url> --result <path> [--timeout <seconds>] [--fixture-dir <dir> --fixture-host <host>]");
+                Console.Error.WriteLine("usage: AutoNet.AuthChannel --start-url <url> --result <path> [--timeout <seconds>]");
                 return 2;
             }
 
@@ -57,14 +57,12 @@ internal sealed record ChannelOptions(
     string StartUrl,
     string ResultPath,
     int TimeoutSeconds,
-    string? FixtureDir,
-    string FixtureHost,
     bool FromSettings = false,
     int HumanWaitSeconds = 600)
 {
     public static ChannelOptions? Parse(string[] args)
     {
-        string? startUrl = null, resultPath = null, fixtureDir = null, fixtureHost = "portal.fixture";
+        string? startUrl = null, resultPath = null;
         var timeout = 90;
         var fromSettings = false;
         var humanWait = 600;
@@ -75,8 +73,6 @@ internal sealed record ChannelOptions(
                 case "--start-url" when i + 1 < args.Length: startUrl = args[++i]; break;
                 case "--result" when i + 1 < args.Length: resultPath = args[++i]; break;
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[++i], out var t) && t is > 0 and <= 600: timeout = t; break;
-                case "--fixture-dir" when i + 1 < args.Length: fixtureDir = Path.GetFullPath(args[++i]); break;
-                case "--fixture-host" when i + 1 < args.Length: fixtureHost = args[++i]; break;
                 case "--from-settings": fromSettings = true; break;
                 case "--human-wait" when i + 1 < args.Length && int.TryParse(args[++i], out var h) && h is >= 0 and <= 3600: humanWait = h; break;
                 default: return null;
@@ -99,8 +95,7 @@ internal sealed record ChannelOptions(
             startUrl = settings.PortalOrigin;
         }
         if (string.IsNullOrWhiteSpace(startUrl) || string.IsNullOrWhiteSpace(resultPath)) { return null; }
-        if (fixtureDir is not null && !Directory.Exists(fixtureDir)) { return null; }
-        return new ChannelOptions(startUrl, resultPath, timeout, fixtureDir, fixtureHost, fromSettings, humanWait);
+        return new ChannelOptions(startUrl, resultPath, timeout, fromSettings, humanWait);
     }
 }
 

@@ -1248,7 +1248,7 @@ internal static class AuthPageRegression
 
     /// <summary>已就绪的校园网卡夹具：只含文档地址，不触碰真实网卡。</summary>
     private static WifiLink Link() =>
-        new(true, null, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
+        new(true, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
 
     private static StatusSnapshot Online() => new()
     {

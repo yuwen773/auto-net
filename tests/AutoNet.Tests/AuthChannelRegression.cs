@@ -5,7 +5,6 @@ using AutoNet.Tray.Avalonia;
 /// 内嵌认证通道结果契约回归（工单 #21 / ADR-0009）：
 /// 结果文件严格读取边界——受控结论词表、时刻必须可解析且不指向未来、
 /// 超大文件与伪造内容拒绝、TryLoad 缺失/坏文件语义明确。
-/// 填表与页面判定的行为证据由 scripts/qa-authchannel.ps1 的夹具门户页提供。
 /// </summary>
 internal static class AuthChannelRegression
 {

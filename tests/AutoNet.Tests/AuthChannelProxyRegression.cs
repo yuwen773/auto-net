@@ -65,7 +65,7 @@ internal static class AuthChannelProxyRegression
         }),
         ("通道代理：域名伪装、IP、端口与主机头不符均拒绝", async () =>
         {
-            var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
+            var link = new WifiLink(true, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
             await using var proxy = await AuthChannelProxy.StartAsync(link);
             foreach (var request in new[]
             {
@@ -110,7 +110,7 @@ internal static class AuthChannelProxyRegression
     public static async Task<int> RunPeerAsync()
     {
         var job = ChannelProcessJob.CreateForCurrentProcess();
-        var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
+        var link = new WifiLink(true, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
         await using var proxy = await AuthChannelProxy.StartAsync(link, job);
         Console.WriteLine("PORT " + proxy.Port); Console.Out.Flush();
         await Task.Run(() => Console.ReadLine());

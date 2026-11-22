@@ -154,7 +154,7 @@ internal static class QaPortal
         // 故事 69：启动失败只给出受控错误；同一授予的后续评估不再启动浏览器（不无限重试）。
         // 以「冷却已满足的播种会话」驱动：手动开页刚写入的冷却会拦下新授予，先播种绕开。
         launchBehavior = "fail";
-        var failing = await DriveSeededAsync("launch-failure-controlled", "launch-failed", shell, pipe, opener, qa, decisions,
+        var failing = await DriveSeededAsync("launch-failure-controlled", "launch-failed", shell, pipe, qa, decisions,
             Grant(grant3), seededLastOpenAt: DateTimeOffset.UtcNow.AddMinutes(-11), expectDelta: 1, expect: PortalOpenOutcome.LaunchFailed);
         // 同一会话再评估：授予已消费，轮询不再启动浏览器。
         var beforeRetry = LaunchCount();
@@ -194,7 +194,7 @@ internal static class QaPortal
             Grant(grant4), expectDelta: 0, expect: PortalOpenOutcome.CooldownActive);
 
         // ADR-0008：新的有效授予 + 冷却已满足 → 恰好自动开一次；同一会话再评估不再开。
-        var opened = await DriveSeededAsync("resume-expired-cooldown-opens-once", "cooldown-satisfied", shell, pipe, opener, qa, decisions,
+        var opened = await DriveSeededAsync("resume-expired-cooldown-opens-once", "cooldown-satisfied", shell, pipe, qa, decisions,
             Grant(grant4), seededLastOpenAt: DateTimeOffset.UtcNow.AddMinutes(-11), expectDelta: 1, expect: PortalOpenOutcome.Opened);
         var onceBefore = LaunchCount();
         var onceOnly = await opened.EvaluateAsync(Trusted(Grant(grant4)));
@@ -203,11 +203,11 @@ internal static class QaPortal
         await shell.RefreshStatusAsync();
 
         // 故事 67：冷却到期本身不循环重开——同一已消费授予在冷却过期后依然不开。
-        await DriveSeededAsync("resume-expiry-no-loop", "already-consumed", shell, pipe, opener, qa, decisions,
+        await DriveSeededAsync("resume-expiry-no-loop", "already-consumed", shell, pipe, qa, decisions,
             Grant(grant4), seededLastOpenAt: DateTimeOffset.UtcNow.AddMinutes(-11), expectDelta: 0, expect: PortalOpenOutcome.AlreadyConsumed);
 
         // 决策 11（时间异常）：LastOpenAt 在未来（时钟回拨形态）→ 冷却视为未满足，绝不提前重开。
-        await DriveSeededAsync("resume-time-anomaly-no-reopen", "cooldown-active", shell, pipe, opener, qa, decisions,
+        await DriveSeededAsync("resume-time-anomaly-no-reopen", "cooldown-active", shell, pipe, qa, decisions,
             Grant(grant5), seededLastOpenAt: DateTimeOffset.UtcNow.AddHours(1), expectDelta: 0, expect: PortalOpenOutcome.CooldownActive);
     }
 
@@ -232,7 +232,7 @@ internal static class QaPortal
     /// 持久状态下的下一次状态读取。
     /// </summary>
     private static async Task<PortalPageOpener> DriveSeededAsync(
-        string step, string reason, ShellController shell, StatusPipe pipe, PortalPageOpener opener, QaEnvironment qa,
+        string step, string reason, ShellController shell, StatusPipe pipe, QaEnvironment qa,
         List<QaPortalDecision> decisions, StatusSnapshot snapshot, DateTimeOffset seededLastOpenAt, int expectDelta, PortalOpenOutcome expect)
     {
         WriteFixture(qa, snapshot);

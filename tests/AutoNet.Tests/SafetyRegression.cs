@@ -157,10 +157,10 @@ internal static class SafetyRegression
             Require(fixture.Http.Requests.Count(u => u.Query.Contains("user_password")) == 1);
             fixture.Http.PortalResult = "-1";
             await FirstDisconnectAsync(restarted, fixture, expected: 0);
-            fixture.Link = new(false, null, null, 7, []);
+            fixture.Link = new(false, null, 7, []);
             await restarted.RunOnceAsync(default);
             Require(fixture.Connects == 1 && fixture.Disconnects == 0);
-            fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
+            fixture.Link = new(true, IPAddress.Parse("10.0.0.1"), 7, []);
             fixture.Http.PortalResult = "0";
             var budget = fixture.LoadSubmissionBudget();
             fixture.Blocked = false; // Clearing the auth pause is separate from #34's audited budget reset.
@@ -177,7 +177,7 @@ internal static class SafetyRegression
             Require((await worker.RunOnceAsync(default)).CredentialsBlocked);
             fixture.Settings = fixture.Settings with { Enabled = false }; await worker.RunOnceAsync(default);
             fixture.Settings = fixture.Settings with { Enabled = true }; fixture.Http.Online = false;
-            fixture.Link = new(false, null, null, 7, []);
+            fixture.Link = new(false, null, 7, []);
             Require((await worker.RunOnceAsync(default)).CredentialsBlocked && fixture.Connects == 1);
             Require(fixture.Http.Requests.All(u => !u.Query.Contains("user_password")));
         }),

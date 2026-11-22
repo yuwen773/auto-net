@@ -13,29 +13,30 @@ internal static class AuthPagePointerRegression
 
     public static readonly (string Name, Func<Task> Run)[] Cases =
     [
-        ("虚拟指针：只有真实动作开始时才出现", () => Sync(() =>
+        ("虚拟指针：只有真实动作完成时才出现且不说成成功", () => Sync(() =>
         {
             var policy = new AuthPagePointerPolicy();
             Require(!policy.View.PointerVisible && policy.View.State == AuthPageStepState.Idle, "初始状态不应显示指针");
 
-            policy.StartStep(AuthPageStep.FillPassword, AuthPageTarget.At(120, 240));
-            Require(policy.View.PointerVisible && policy.View.State == AuthPageStepState.Started, "真实步骤未显示指针");
-            Require(policy.View.X == 120 && policy.View.Y == 240, "指针未采用真实目标位置");
-            Require(policy.View.StepLabel == "填写密码", "步骤名称不符：" + policy.View.StepLabel);
+            // 生产脚本只在真实控件可见后按真实坐标显示指针；目标缺失时不显示。
+            var step = AuthPagePointerScript.Step(AuthPagePointerScript.Password, JsonSerializer.Serialize("fixture"));
+            Require(step.Contains("const visible = rect.width > 0", StringComparison.Ordinal) &&
+                step.Contains("S.step(label, x, y, '', true);", StringComparison.Ordinal),
+                "指针必须在真实控件可见后按真实坐标显示");
+            Require(step.Contains("S.step('', 0, 0,", StringComparison.Ordinal) &&
+                step.Contains("', false);", StringComparison.Ordinal), "目标不可用时不得显示指针");
 
             policy.CompleteStep(AuthPageStep.FillPassword, AuthPageTarget.At(120, 240));
             Require(policy.View.State == AuthPageStepState.Completed && policy.View.PointerVisible,
                 "完成后未保留最后真实目标作为静态指示");
+            Require(policy.View.X == 120 && policy.View.Y == 240, "指针未采用真实目标位置");
+            Require(policy.View.StepLabel == "填写密码", "步骤名称不符：" + policy.View.StepLabel);
             Require(policy.View.Hint.Contains("已完成", StringComparison.Ordinal), "完成提示不符：" + policy.View.Hint);
             Require(!policy.View.Hint.Contains("成功", StringComparison.Ordinal), "完成步骤被说成认证成功");
         })),
         ("虚拟指针：目标不可用、跳过与失败只给步骤提示", () => Sync(() =>
         {
             var policy = new AuthPagePointerPolicy();
-            policy.StartStep(AuthPageStep.Submit, AuthPageTarget.None);
-            Require(!policy.View.PointerVisible && policy.View.State == AuthPageStepState.Unavailable, "目标不可用仍显示指针");
-            Require(policy.View.Hint.Contains("目标控件", StringComparison.Ordinal), "目标不可用缺少步骤提示");
-
             policy.FailStep(AuthPageStep.Submit, AuthPageStepReason.NoSubmitButton);
             Require(!policy.View.PointerVisible && policy.View.State == AuthPageStepState.Failed, "失败仍显示指针");
             Require(policy.View.Hint.Contains("未找到提交按钮", StringComparison.Ordinal), "失败提示不准确：" + policy.View.Hint);
@@ -53,7 +54,7 @@ internal static class AuthPagePointerRegression
         ("虚拟指针：减少动画时显示静态状态", () => Sync(() =>
         {
             var policy = new AuthPagePointerPolicy(reducedMotion: true);
-            policy.StartStep(AuthPageStep.FillAccount, AuthPageTarget.At(10, 20));
+            policy.CompleteStep(AuthPageStep.FillAccount, AuthPageTarget.At(10, 20));
             Require(policy.View.ReducedMotion && policy.ReducedMotion, "减少动画未进入静态状态");
             Require(policy.View.PointerVisible, "减少动画时仍应显示静态指针位置");
 
@@ -68,7 +69,7 @@ internal static class AuthPagePointerRegression
         ("虚拟指针：页面变化清除过期指针且不补演", () => Sync(() =>
         {
             var policy = new AuthPagePointerPolicy();
-            policy.StartStep(AuthPageStep.FillAccount, AuthPageTarget.At(30, 40));
+            policy.CompleteStep(AuthPageStep.FillAccount, AuthPageTarget.At(30, 40));
             policy.NoteViewportChanged();
             Require(!policy.View.PointerVisible && policy.View.State == AuthPageStepState.Unavailable,
                 "页面位置变化后仍显示过期指针");
@@ -82,7 +83,7 @@ internal static class AuthPagePointerRegression
         ("虚拟指针：投影不包含账号密码或页面内容", () => Sync(() =>
         {
             var policy = new AuthPagePointerPolicy();
-            policy.StartStep(AuthPageStep.FillPassword, AuthPageTarget.At(1, 2));
+            policy.CompleteStep(AuthPageStep.FillPassword, AuthPageTarget.At(1, 2));
             policy.CompleteStep(AuthPageStep.FillPassword, AuthPageTarget.At(1, 2));
             policy.FailStep(AuthPageStep.Submit, AuthPageStepReason.NoSubmitButton);
             policy.NoteInteraction(TimeSpan.Zero);
@@ -128,9 +129,9 @@ internal static class AuthPagePointerRegression
         ("手动接管：交互后暂停自动填表和提交", () => Sync(() =>
         {
             var policy = new AuthPagePointerPolicy();
-            policy.StartStep(AuthPageStep.Submit, AuthPageTarget.At(5, 6));
+            policy.CompleteStep(AuthPageStep.Submit, AuthPageTarget.At(5, 6));
             policy.NoteInteraction(TimeSpan.FromSeconds(10));
-            Require(policy.TakeoverActive && !policy.CanAutoAct, "交互后未进入接管");
+            Require(policy.TakeoverActive, "交互后未进入接管");
             Require(policy.View.State == AuthPageStepState.Takeover && !policy.View.PointerVisible, "接管未隐藏指针");
             Require(policy.View.Hint.Contains("正在手动操作", StringComparison.Ordinal), "接管提示不符");
             Require(policy.View.Hint.Contains("暂停", StringComparison.Ordinal), "接管提示未说明已暂停");
@@ -153,7 +154,7 @@ internal static class AuthPagePointerRegression
             Require(policy.TakeoverActive, "复核失败后接管已被清除");
 
             Require(policy.TryResume(start + TimeSpan.FromSeconds(15), all), "空闲满 15 秒且复核齐全仍未恢复");
-            Require(!policy.TakeoverActive && policy.CanAutoAct, "恢复后仍处于接管");
+            Require(!policy.TakeoverActive, "恢复后仍处于接管");
         })),
         ("手动接管：空闲满 15 秒只清除提示且不恢复自动操作", () => Sync(() =>
         {
@@ -167,7 +168,7 @@ internal static class AuthPagePointerRegression
             Require(policy.View.State == AuthPageStepState.Takeover && !policy.View.PointerVisible,
                 "清除提示后投影不再是接管或仍显示指针");
             Require(policy.View.Takeover, "清除提示后投影丢失接管状态");
-            Require(policy.TakeoverActive && !policy.CanAutoAct, "清除提示被当成恢复自动操作");
+            Require(policy.TakeoverActive, "清除提示被当成恢复自动操作");
             Require(!policy.ShouldClearTakeoverHint(start + TimeSpan.FromSeconds(30)), "已清除的提示被重复上报");
 
             policy.NoteInteraction(start + TimeSpan.FromSeconds(31));

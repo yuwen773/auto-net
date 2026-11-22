@@ -98,7 +98,7 @@ If every IPv4 source is temporarily unavailable, return `Rejected/MissingClientI
 
 ### Logging and status
 
-`StatusSnapshot` is the single object written to `status.json` and consumed by the tray. `ActivityLog.Create` projects it into the daily `logs/autonet-YYYY-MM-DD.jsonl` (14-day retention), and `ActivityLog.ToReadableText` renders one entry for the `LogForm` viewer, tolerating older escaped entries.
+`StatusSnapshot` is the single object written to `status.json` and consumed by the tray. `ActivityLog.Create` projects it into the daily `logs/autonet-YYYY-MM-DD.jsonl` (14-day retention). `LogsModel.DetailText` renders each entry for the logs page — `ToReadableText` for current records, the compatibility renderer for older ones — tolerating older escaped entries.
 
 `MonitorWorker.Publish` de-duplicates log lines by a key built from the user-visible status fields, so a steady state does not spam the log. Storage and log failures are swallowed into `lastError` and surfaced in the next successful status write — logging never breaks the monitor loop.
 
