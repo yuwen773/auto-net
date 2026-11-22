@@ -2,31 +2,54 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="using:AutoNet.Tray.Avalonia"
              x:Class="AutoNet.Tray.Avalonia.MainView">
-  <Grid ColumnDefinitions="236,*" RowDefinitions="*,Auto">
-    <Border Grid.Row="0" Grid.Column="0"
+  <!-- 壳骨架：左侧深墨导航轨贯穿上下（含状态条），右侧冷瓷画布承载页面。 -->
+  <Grid ColumnDefinitions="Auto,*" RowDefinitions="*,Auto">
+    <Border x:Name="navRail" Grid.RowSpan="2" Grid.Column="0" Width="236"
             Background="{DynamicResource ShellNavBackground}"
             BorderBrush="{DynamicResource ShellBorder}"
             BorderThickness="0,0,1,0">
-      <DockPanel Margin="0,0,0,8">
-        <StackPanel DockPanel.Dock="Top" Margin="20,22,20,16" Spacing="3">
-          <TextBlock Text="AutoNet" FontSize="21" FontWeight="SemiBold" />
-          <TextBlock Text="校园网连接守护" FontSize="12" Opacity="0.6" />
-        </StackPanel>
-        <ListBox x:Name="nav" Background="Transparent" BorderThickness="0"
-                 SelectionMode="Single" Margin="8,0"
-                 AutomationProperties.Name="{x:Static local:ShellAccessibility.NavList}"
-                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+      <DockPanel>
+        <Grid DockPanel.Dock="Top" Margin="18,22,18,18" ColumnDefinitions="Auto,*">
+          <!-- 折叠态品牌标记：小尺寸窗口下替代文字品牌。 -->
+          <Border x:Name="brandMark" Grid.Column="0" Width="30" Height="30" CornerRadius="9"
+                  Background="{DynamicResource NavBrandMarkBackground}" IsVisible="False"
+                  HorizontalAlignment="Left" VerticalAlignment="Center">
+            <TextBlock Text="A" FontSize="15" FontWeight="SemiBold"
+                       Foreground="{DynamicResource NavText}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel x:Name="brandBlock" Grid.Column="0" Spacing="2">
+            <TextBlock Text="AutoNet" FontSize="19" FontWeight="SemiBold"
+                       Foreground="{DynamicResource NavText}" />
+            <TextBlock Text="校园网连接守护" FontSize="11.5"
+                       Foreground="{DynamicResource NavTextMuted}" />
+          </StackPanel>
+        </Grid>
+        <ListBox x:Name="nav" DockPanel.Dock="Top" Background="Transparent" BorderThickness="0"
+                 SelectionMode="Single" Margin="10,0"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 AutomationProperties.Name="{x:Static local:ShellAccessibility.NavList}" />
       </DockPanel>
     </Border>
-    <ScrollViewer Grid.Row="0" Grid.Column="1" x:Name="pageScroll">
-      <ContentControl x:Name="pageHost" Margin="30,28" VerticalAlignment="Top" HorizontalAlignment="Stretch" />
+
+    <ScrollViewer x:Name="pageScroll" Grid.Row="0" Grid.Column="1"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Background="{DynamicResource CanvasBackground}">
+      <ContentControl x:Name="pageHost" Margin="36,32,36,40" VerticalAlignment="Top"
+                      HorizontalAlignment="Stretch" />
     </ScrollViewer>
-    <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="14,7"
+
+    <Border Grid.Row="1" Grid.Column="1" Padding="20,8"
             Background="{DynamicResource ShellStripBackground}"
             BorderBrush="{DynamicResource ShellBorder}"
             BorderThickness="0,1,0,0">
-      <TextBlock x:Name="statusText" FontSize="12" Opacity="0.85" TextTrimming="CharacterEllipsis"
-                 AutomationProperties.Name="{x:Static local:ShellAccessibility.StatusStrip}" />
+      <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+        <Ellipse x:Name="statusDot" Width="7" Height="7" VerticalAlignment="Center"
+                 Fill="{DynamicResource ToneNeutral}" />
+        <TextBlock x:Name="statusText" FontSize="12" VerticalAlignment="Center"
+                   Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis"
+                   AutomationProperties.Name="{x:Static local:ShellAccessibility.StatusStrip}" />
+      </StackPanel>
     </Border>
   </Grid>
 </UserControl>

@@ -30,6 +30,7 @@ public partial class MainWindow : Window
         Icon = AppIcons.Load();
         InitializeComponent();
         ApplyInitialSize();
+        WindowChrome.Track(this);
         if (controller is not null)
         {
             view.Attach(controller, actions, logs, copy, openFolder, settings, portalOpen, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AutoNet.Core;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Threading;
 
 namespace AutoNet.Tray.Avalonia;
@@ -47,6 +48,18 @@ internal static class QaShell
                 TrayHost.ShowWindow(window);
                 await Task.Delay(300);
 
+                // 响应式/全页证据（可选）：AUTONET_QA_WINDOW_WIDTH / _HEIGHT 仅在 QA 场景下改窗口尺寸，
+                // 用于截取窄窗口布局或完整页面；未设置时保持生产默认尺寸，不影响任何默认 QA 步骤。
+                if (double.TryParse(Environment.GetEnvironmentVariable("AUTONET_QA_WINDOW_WIDTH"),
+                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
+                        out var width) && width is >= 720 and <= 2400)
+                    window.Width = width;
+                if (double.TryParse(Environment.GetEnvironmentVariable("AUTONET_QA_WINDOW_HEIGHT"),
+                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
+                        out var height) && height is >= 460 and <= 2200)
+                    window.Height = height;
+                await Task.Delay(200);
+
                 if (fixtureMode)
                 {
                     // 安全护栏：夹具只允许写 QA 证据目录内的文件，绝不触碰本机真实的 status.json。
@@ -60,7 +73,7 @@ internal static class QaShell
                 foreach (var info in ShellPages.All)
                 {
                     await controller.SelectAsync(info.Page);
-                    await Task.Delay(250);
+                    await Task.Delay(400);
                     var shot = qa.ShellShotPath("shell-nav-" + info.Page.ToString().ToLowerInvariant());
                     WindowCapture.Save(window, shot);
                     Step("nav", info.Page, Path.GetFileName(shot));
