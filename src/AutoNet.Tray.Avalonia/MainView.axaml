@@ -18,7 +18,7 @@
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
       </DockPanel>
     </Border>
-    <ScrollViewer Grid.Row="0" Grid.Column="1">
+    <ScrollViewer Grid.Row="0" Grid.Column="1" x:Name="pageScroll">
       <ContentControl x:Name="pageHost" Margin="30,28" VerticalAlignment="Top" HorizontalAlignment="Stretch" />
     </ScrollViewer>
     <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="14,7"

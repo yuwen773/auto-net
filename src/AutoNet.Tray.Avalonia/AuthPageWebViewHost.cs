@@ -12,7 +12,7 @@ namespace AutoNet.Tray.Avalonia;
 
 /// <summary>
 /// 认证页的真实浏览器宿主（工单 #38）：Avalonia 主窗口经 <see cref="NativeControlHost"/>
-/// 承载 WinForms WebView2，浏览器流量只经应用自带的允许列表代理出站。
+/// 承载 WinForms WebView2。浏览器连接经允许列表代理，802 展示资源由托盘按路径校验后读取。
 ///
 /// 网络边界（与 #38 验收一一对应）：
 /// - 允许列表只放行固定门户主机（<see cref="ProxyHostPolicy"/>），完整匹配、两侧规范化；
@@ -37,8 +37,10 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     private readonly Func<WifiLink, ChannelProcessJob, Task<AuthChannelProxy>> startProxy;
     private readonly Func<bool> channelSessionActive;
     private readonly AuthPageWebViewSurface surface;
+    /// <summary>窗口尺寸变化的防抖：拖动窗口时不做缩放，停下来再量一次。</summary>
+    private readonly DispatcherTimer zoomDebounce;
     private AuthPageHostSnapshot snapshot = AuthPageHostSnapshot.NotAttached;
-    private AuthChannelProxy? proxy;
+    private AuthPageBoundary? boundary;
     private ChannelProcessJob? job;
     private AuthPageBrowserSession? session;
     private int generation;
@@ -56,6 +58,12 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         this.startProxy = startProxy ?? ((link, processJob) => AuthChannelProxy.StartAsync(link, processJob));
         this.channelSessionActive = channelSessionActive ?? (static () => false);
         surface = new AuthPageWebViewSurface(this);
+        zoomDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        zoomDebounce.Tick += (_, _) =>
+        {
+            zoomDebounce.Stop();
+            _ = FitPageAsync(remeasure: true);
+        };
     }
 
     public object? Surface => surface;
@@ -77,7 +85,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         if (Snapshot.Status is AuthPageHostStatus.Attached or AuthPageHostStatus.Attaching)
         {
             // 已附着或正在加载：不重新导航；只补一次错过的表面初始化。
-            if (session is { NavigationRequested: false, Starting: false } pending && proxy is not null && surface.IsCreated)
+            if (session is { NavigationRequested: false, Starting: false } pending && boundary is not null && surface.IsCreated)
                 _ = InitializeBrowserAsync(pending, cancellationToken);
             return Snapshot;
         }
@@ -89,7 +97,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         var attempt = Interlocked.Increment(ref attachAttempt);
         await StopProxyAsync().ConfigureAwait(true);
         if (attempt != Volatile.Read(ref attachAttempt) || Volatile.Read(ref disposed) != 0) return Snapshot;
-        var (failure, boundary) = await AuthPageNetworkBoundary.PrepareAsync(
+        var (failure, prepared) = await AuthPageNetworkBoundary.PrepareAsync(
             portal, runtimeProbe(), readLink, EnsureJob, startProxy, cancellationToken).ConfigureAwait(true);
         var current = attempt == Volatile.Read(ref attachAttempt) && Volatile.Read(ref disposed) == 0;
         if (failure is not null)
@@ -99,12 +107,12 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         }
         if (!current)
         {
-            try { await boundary!.Proxy.DisposeAsync().ConfigureAwait(true); }
+            try { await prepared!.Proxy.DisposeAsync().ConfigureAwait(true); }
             catch (Exception) { }
             return Snapshot;
         }
 
-        proxy = boundary!.Proxy;
+        boundary = prepared;
         // 后台会话可能在准备边界期间开始：丢弃刚启动的代理，只投影会话状态。
         if (channelSessionActive())
         {
@@ -150,7 +158,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     {
         surface.IsVisible = visible;
         // 每次切回本页时补一次初始化：OnSurfaceCreated 只触发一次，错过就再没有入口。
-        if (visible && !channelSessionActive() && proxy is not null && surface.IsCreated
+        if (visible && !channelSessionActive() && boundary is not null && surface.IsCreated
             && session is { NavigationRequested: false, Starting: false } pending)
             _ = InitializeBrowserAsync(pending, CancellationToken.None);
     }
@@ -158,7 +166,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     /// <summary>原生表面创建后回调：此时才有 HWND 可承载 WebView2。</summary>
     internal void OnSurfaceCreated()
     {
-        if (proxy is not null && !channelSessionActive() && session is { } pending)
+        if (boundary is not null && !channelSessionActive() && session is { } pending)
             _ = InitializeBrowserAsync(pending, CancellationToken.None);
     }
 
@@ -186,9 +194,9 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
 
     private async Task InitializeBrowserAsync(AuthPageBrowserSession current, CancellationToken cancellationToken)
     {
-        if (!IsCurrent(current) || current.Starting || current.NavigationRequested || proxy is null || job is null) return;
+        if (!IsCurrent(current) || current.Starting || current.NavigationRequested ||
+            boundary is not { } prepared || job is null) return;
         var processJob = job;
-        var proxyPort = proxy.Port;
         current.Starting = true;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(current.Cancellation.Token, cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(15));
@@ -196,7 +204,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         {
             // 必须用命名参数：位置参数会把用户数据目录绑定到 browserExecutableFolder，
             // 随后误报“运行时未安装”，把路径问题伪装成环境问题。
-            var options = new CoreWebView2EnvironmentOptions(AuthPageBrowserArguments.For(proxyPort));
+            var options = new CoreWebView2EnvironmentOptions(AuthPageBrowserArguments.For(prepared.Proxy.Port));
             var environment = await CoreWebView2Environment.CreateAsync(
                 browserExecutableFolder: null, userDataFolder: current.Directory, options: options)
                 .WaitAsync(timeout.Token).ConfigureAwait(true);
@@ -219,6 +227,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
                 environment.GetProcessInfos().Any(info => !processJob.Contains(checked((int)info.ProcessId))))
                 throw new InvalidOperationException("浏览器进程未全部进入会话进程组。");
 
+            RegisterPortalResources(core, environment, current, prepared);
             core.Settings.AreDevToolsEnabled = false;
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.IsStatusBarEnabled = false;
@@ -258,6 +267,8 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
                         current.NavigationConfirmed = true;
                         Publish(new AuthPageHostSnapshot(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
                             AuthPageModel.HostCopyFor(AuthPageHostStatus.Attached).Detail));
+                        // 页面刚渲染出来，此时量一次内容尺寸最准，也最不会闪。
+                        _ = FitPageAsync(remeasure: true);
                         break;
                     case AuthPageNavigationGate.Decision.Failed:
                         FailBrowser(new InvalidOperationException("门户页面导航未成功。"));
@@ -283,6 +294,123 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
 
     private static bool IsPortalOrigin(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) && Settings.IsPortalOrigin(uri);
+
+    /// <summary>
+    /// 只读缩放：把门户整页缩放到承载盒（ADR-0016，2026-11-22）。测量与设置都是**显示层**行为，
+    /// 只改变显示比例：不填表、不提交、不读写页面内容，任何一步失败都只回落到 1.0，绝不改写页面状态。
+    ///
+    /// <paramref name="remeasure"/> 为真时在 ZoomFactor=1 下重新测量内容尺寸；为假时复用本会话的量值。
+    /// 每个 await 之后都校验代次，旧会话的迟到结果只能丢弃。
+    /// </summary>
+    private async Task FitPageAsync(bool remeasure)
+    {
+        if (session is not { } current || !IsCurrent(current) || !current.NavigationConfirmed) return;
+        var view = current.WebView;
+        if (view?.CoreWebView2 is not { } core) return;
+        try
+        {
+            var metrics = current.ZoomMetrics;
+            if (remeasure || metrics is null)
+            {
+                // 必须在 1.0 下测量：缩放同时改变视口尺寸，在已缩放状态下测量会自指。
+                view.ZoomFactor = AuthPageZoom.MaximumZoom;
+                var raw = await core.ExecuteScriptAsync(AuthPageZoom.MeasureScript);
+                if (!IsCurrent(current) || !current.NavigationConfirmed) return;
+                if (!AuthPageZoom.TryParseMeasurement(raw, out var measured)) return;
+                current.ZoomMetrics = measured;
+                metrics = measured;
+            }
+
+            view.ZoomFactor = AuthPageZoom.Fit(metrics!.Value);
+            if (remeasure && !current.ZoomSettled)
+            {
+                // 图片、字体与门户脚本通常晚于导航完成才把页面撑到最终高度；
+                // 首轮量到的可能是“还没长开的”尺寸，稳定后再校一次。
+                current.ZoomSettled = true;
+                _ = SettleZoomAsync(current);
+            }
+        }
+        catch (Exception)
+        {
+            // 缩放只是显示优化：浏览器已拆除、脚本被拒或页面不可量都只让页面保持原样。
+        }
+    }
+
+    /// <summary>加载稳定后再量一次：只在仍是同一会话时生效，不重试、不循环。</summary>
+    private async Task SettleZoomAsync(AuthPageBrowserSession current)
+    {
+        try { await Task.Delay(TimeSpan.FromSeconds(1.2), current.Cancellation.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        // 回到界面线程再碰浏览器控件：补测可能在其它同步上下文上醒来。
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (IsCurrent(current)) _ = FitPageAsync(remeasure: true);
+        });
+    }
+
+    /// <summary>承载面尺寸变化：拖动窗口期间不动作，停手后再量一次。</summary>
+    internal void OnSurfaceResized()
+    {
+        if (Volatile.Read(ref disposed) != 0) return;
+        if (session is not { NavigationConfirmed: true } current || !IsCurrent(current)) return;
+        zoomDebounce.Stop();
+        zoomDebounce.Start();
+    }
+
+    private void RegisterPortalResources(CoreWebView2 core, CoreWebView2Environment environment,
+        AuthPageBrowserSession current, AuthPageBoundary prepared)
+    {
+        foreach (var context in new[] { CoreWebView2WebResourceContext.Script, CoreWebView2WebResourceContext.Stylesheet,
+            CoreWebView2WebResourceContext.Image })
+        {
+            core.AddWebResourceRequestedFilter(AuthPagePortalResources.Origin + "/*", context,
+                CoreWebView2WebResourceRequestSourceKinds.Document);
+        }
+
+        core.WebResourceRequested += async (_, args) =>
+        {
+            if (!IsCurrent(current) || !prepared.Proxy.IsRunning || channelSessionActive()) return;
+            var context = args.ResourceContext;
+            var address = AuthPagePortalResources.GetAddress(args.Request.Uri, args.Request.Method, context);
+            if (address is null || args.Request.Content is not null) return;
+
+            using var deferral = args.GetDeferral();
+            try
+            {
+                // 新建仅用于本次 GET 的客户端。沿用校园网卡绑定、TLS 校验与禁止重定向，
+                // 不转发浏览器请求头、Cookie 或请求体。
+                var handler = DirectNetwork.CreateHandler(prepared.Link);
+                handler.UseCookies = false;
+                using var client = new HttpClient(handler)
+                {
+                    Timeout = TimeSpan.FromSeconds(2),
+                    MaxResponseContentBufferSize = 4 * 1024 * 1024
+                };
+                using var response = await client.GetAsync(address, current.Cancellation.Token).ConfigureAwait(true);
+                if (!IsCurrent(current)) return;
+                var contentType = response.Content.Headers.ContentType;
+                if (response.StatusCode != System.Net.HttpStatusCode.OK ||
+                    contentType?.MediaType is not { } mediaType ||
+                    !AuthPagePortalResources.IsMediaTypeAllowed(context, mediaType.ToLowerInvariant()))
+                    throw new HttpRequestException("门户展示资源响应无效。");
+
+                var bytes = await response.Content.ReadAsByteArrayAsync(current.Cancellation.Token).ConfigureAwait(true);
+                if (!IsCurrent(current)) return;
+                if (bytes.Length == 0) throw new HttpRequestException("门户展示资源为空。");
+                args.Response = environment.CreateWebResourceResponse(new MemoryStream(bytes, writable: false), 200,
+                    "OK", $"Content-Type: {contentType}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff");
+            }
+            catch (Exception e)
+            {
+                if (!IsCurrent(current) || context != CoreWebView2WebResourceContext.Script) return;
+                // 在事件的 deferral 完成后再拆除 WebView。旧会话的异常不会覆盖新的状态。
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (IsCurrent(current)) FailBrowser(e);
+                });
+            }
+        };
+    }
 
     /// <summary>导航完成的等待上限（与浏览器初始化超时一致）。</summary>
     internal static readonly TimeSpan NavigationTimeout = TimeSpan.FromSeconds(15);
@@ -333,6 +461,7 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     {
         // 任何拆除动作都会让在途的边界准备失效：它完成时不得再改写新会话的代理或状态。
         Interlocked.Increment(ref attachAttempt);
+        zoomDebounce.Stop();
         var discarding = session;
         session = null;
         if (discarding is null) return;
@@ -357,8 +486,8 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
 
     private async Task StopProxyAsync()
     {
-        var stopping = proxy;
-        proxy = null;
+        var stopping = boundary?.Proxy;
+        boundary = null;
         if (stopping is null) return;
         try { await stopping.DisposeAsync().ConfigureAwait(false); }
         catch (Exception) { }
@@ -488,7 +617,10 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
             this.host = host;
             HorizontalAlignment = HorizontalAlignment.Stretch;
             VerticalAlignment = VerticalAlignment.Stretch;
-            MinHeight = 360;
+            // 不在这里设最小高度：宿主该多高由页面布局（星号行 + 页面自己的下限）决定，
+            // 表面若自带下限会把卡片撑破，把下面的内容顶出窗口。
+            // 尺寸变化要重新算缩放：盒子变了，整页放得下的比例也就变了。
+            SizeChanged += (_, _) => host.OnSurfaceResized();
         }
 
         public bool IsCreated => panel is { IsHandleCreated: true };
@@ -502,18 +634,33 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
         {
             var handle = Panel().Handle;
             SetParent(handle, parent.Handle);
+            // 重新附着：解除父子关系时面板被隐藏过，这里必须恢复显示。
+            ShowWindow(handle, ShowWindowCommand.Show);
             host.OnSurfaceCreated();
             return new PlatformHandle(handle, "HWND");
         }
 
         protected override void DestroyNativeControlCore(IPlatformHandle control)
         {
-            if (panel is { IsHandleCreated: true }) SetParent(panel.Handle, IntPtr.Zero);
+            if (panel is { IsHandleCreated: true })
+            {
+                // 切页时承载面被移出可视树：解除父子关系前先隐藏面板。
+                // 否则它会变成桌面上的顶层窗口，在屏幕左上角留下一个白色空窗。
+                ShowWindow(panel.Handle, ShowWindowCommand.Hide);
+                SetParent(panel.Handle, IntPtr.Zero);
+            }
             base.DestroyNativeControlCore(control);
         }
 
         private WinForms.Panel Panel() => panel ??= new WinForms.Panel { Dock = WinForms.DockStyle.Fill };
 
-        [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+        [DllImport("user32.dll", EntryPoint = "SetParent")] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+        [DllImport("user32.dll", EntryPoint = "ShowWindow")] private static extern bool ShowWindow(IntPtr window, ShowWindowCommand command);
+
+        private enum ShowWindowCommand
+        {
+            Hide = 0,
+            Show = 5
+        }
     }
 }
