@@ -282,6 +282,15 @@ public sealed record StatusSnapshot
     public string LastError { get; init; } = "";
     public bool CredentialsBlocked { get; init; }
     /// <summary>
+    /// 后台本轮是否读到了已保存的认证凭据；null 表示旧版服务未提供该字段，
+    /// 托盘必须按“不可确认”降级，不得据此推断凭据是否存在。
+    /// </summary>
+    public bool? CredentialsAvailable { get; init; }
+    /// <summary>
+    /// 后台本轮是否成功读取到设置文件；null 表示旧版服务未提供该字段。
+    /// </summary>
+    public bool? SettingsAvailable { get; init; }
+    /// <summary>
     /// #35 提交额度级别的受控码（见 <see cref="SubmissionBudgetCodes"/>）。旧版服务不写该字段，
     /// 缺省为空字符串；托盘必须按“不可确认”降级，不得据此推断次数或放行提交。
     /// </summary>

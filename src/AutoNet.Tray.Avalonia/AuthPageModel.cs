@@ -153,8 +153,12 @@ internal static class AuthPageModel
         snapshot.NextAttemptAction == nameof(ActionKind.Authenticate) &&
         snapshot.NextAttempt is { } next && next > reading.ReadAt;
 
-    /// <summary>校园 Wi-Fi 已就绪；服务只在此时真正执行低频只读复检。</summary>
-    private static bool RecheckPossible(StatusSnapshot? snapshot) => snapshot is { Wifi: "已连接" };
+    /// <summary>
+    /// 校园 Wi-Fi 已就绪：只认受控码。旧版快照缺少该字段时按“不可确认”处理，
+    /// 不从 <see cref="StatusSnapshot.Wifi"/> 的显示文字猜测链路状态。
+    /// </summary>
+    private static bool RecheckPossible(StatusSnapshot? snapshot) =>
+        snapshot is { WifiLinkCode: WifiLinkCodes.Ready };
 
     /// <summary>复检文案跟随网络条件：Wi-Fi 未就绪时服务会跳过复检，页面不能声称正在复检。</summary>
     private static string RecheckClause(StatusSnapshot? snapshot, string active, string suspended) =>
@@ -202,26 +206,33 @@ internal static class AuthPageModel
     }
 
     /// <summary>
-    /// 缺少设置的可证实形态。不能用 <see cref="NetworkDisplay.Primary"/> 的 <c>SettingsMissing</c>：
-    /// 服务发布的“等待设置”快照缺省 <c>Enabled=false</c>，映射会先判成 <c>RecoveryPaused</c>。
+    /// 缺少设置的可证实形态：优先读取受控字段。旧版快照缺少该字段时才退回既有的
+    /// “等待设置”状态串；不能用 <see cref="NetworkDisplay.Primary"/> 的 <c>SettingsMissing</c>，
+    /// 因为服务发布的“等待设置”快照缺省 <c>Enabled=false</c>，映射会先判成 <c>RecoveryPaused</c>。
     /// </summary>
-    private static bool IsSettingsMissing(StatusSnapshot? snapshot) => snapshot is { State: "等待设置" };
+    private static bool IsSettingsMissing(StatusSnapshot? snapshot) =>
+        snapshot is { SettingsAvailable: false } ||
+        snapshot is { SettingsAvailable: null, State: "等待设置" };
 
     /// <summary>
-    /// 缺少凭据的可证实形态：服务在 Wi-Fi 就绪、外网不可达且没有凭据时发布的受控文案
-    /// “未保存认证信息”。与提交额度一样，这是结构化字段出现前的受控桥接；未命中时
-    /// 不猜测凭据是否存在，也不读取、记录或回显任何账号密码。
+    /// 缺少凭据的可证实形态：优先读取受控字段。旧版快照缺少该字段时才退回受控文案
+    /// “未保存认证信息”；未命中时不猜测凭据是否存在，也不读取、记录或回显任何账号密码。
     /// </summary>
     private static bool MissingCredentials(StatusSnapshot snapshot) =>
+        snapshot is { CredentialsAvailable: false } ||
+        snapshot is { CredentialsAvailable: null } &&
         snapshot.Detail?.Contains("未保存认证信息", StringComparison.Ordinal) == true;
 
     /// <summary>
-    /// 提交额度用尽的受控文案标记。必须同时匹配“提交”语境，避免把主动断线额度
-    /// （“主动断线额度已用尽”）误判为提交额度。未命中时按一般结果未知展示。
+    /// 提交额度用尽：优先读取受控字段 <see cref="StatusSnapshot.SubmissionBudgetExhausted"/>；
+    /// 只有旧版快照缺少该字段时才退回受控文案匹配，且必须同时匹配“提交”语境，
+    /// 避免把主动断线额度（“主动断线额度已用尽”）误判为提交额度。
     /// </summary>
     private static bool SubmissionQuotaExhausted(StatusSnapshot snapshot) =>
-        snapshot.Detail?.Contains("提交额度已用尽", StringComparison.Ordinal) == true ||
-        snapshot.Detail?.Contains("两次额外额度已用尽", StringComparison.Ordinal) == true;
+        snapshot.SubmissionBudgetExhausted == true ||
+        snapshot is { SubmissionBudgetExhausted: null } &&
+        (snapshot.Detail?.Contains("提交额度已用尽", StringComparison.Ordinal) == true ||
+         snapshot.Detail?.Contains("两次额外额度已用尽", StringComparison.Ordinal) == true);
 
     public static OverviewTone ToneFor(AuthPagePhase phase) => phase switch
     {

@@ -163,7 +163,7 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             UpdatePower(false);
             CancelAuxiliary();
             journal.Suspend("SettingsMissing");
-            return Publish(new StatusSnapshot { State = "等待设置", Detail = "请在托盘窗口中设置校园 Wi-Fi 和认证信息。" });
+            return Publish(new StatusSnapshot { State = "等待设置", Detail = "请在托盘窗口中设置校园 Wi-Fi 和认证信息。", SettingsAvailable = false });
         }
         // 本轮已成功读取设置：可作为配置投影。校验失败时投影仍来自本轮实际读到的文件，
         // 且地址只投影安全展示值；读取本身失败时投影保持 null（见 RunOnceAsync 的复位）。
@@ -673,6 +673,8 @@ public sealed class MonitorWorker(IMonitorEnvironment environment, TimeProvider 
             AuthenticationHttpStatus = lastAuthentication?.HttpStatus, CredentialRequestStarted = lastAuthentication?.CredentialRequestStarted ?? false,
             AuthenticationPersistentState = authentication?.State.ToString() ?? "Ready",
             CredentialsBlocked = policy.CredentialsBlocked,
+            CredentialsAvailable = credentials is not null,
+            SettingsAvailable = true,
             SubmissionRetryCode = displaySubmissionDecision.ToString(),
             SubmissionNextPossibleAt = displayNextPossibleAt
         };
