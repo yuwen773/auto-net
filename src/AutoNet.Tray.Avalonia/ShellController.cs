@@ -14,11 +14,11 @@ internal sealed class ShellController : IDisposable
     private readonly PortalPageOpener? portalOpener;
     private readonly AuthPageCoordinator? authPage;
 
-    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageContent>>? load = null,
+    public ShellController(StatusPipe pipe, Func<ShellPage, CancellationToken, Task<PageContent>> load,
         PortalPageOpener? portalOpener = null, AuthPageCoordinator? authPage = null)
     {
         this.pipe = pipe;
-        this.load = load ?? ShellContent.LoadAsync;
+        this.load = load;
         this.portalOpener = portalOpener;
         this.authPage = authPage;
         if (authPage is { } auth) auth.Updated += OnAuthPageUpdated;

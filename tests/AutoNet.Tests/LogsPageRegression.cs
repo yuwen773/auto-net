@@ -310,7 +310,7 @@ internal static class LogsPageRegression
 
                 // 页面不在日志页时，页内更新必须被壳守卫丢弃。
                 using var pipe = new StatusPipe(Path.Combine(statusDirectory, "status.json"), TimeSpan.FromMinutes(5));
-                using var controller = new ShellController(pipe);
+                using var controller = new ShellController(pipe, TestShellLoad.Scaffold);
                 var applied = new List<PageContent>();
                 controller.ContentChanged += content => applied.Add(content);
                 await controller.SelectAsync(ShellPage.Settings);
@@ -324,7 +324,7 @@ internal static class LogsPageRegression
                 // 生产接线形状：导航接缝 + 页内更新汇聚后，日志页呈现受限列表。
                 var logsPage = new LogsPage(() => directory);
                 using var shell = new ShellController(pipe, (page, token) =>
-                    page == ShellPage.Logs ? logsPage.LoadAsync(token) : ShellContent.LoadAsync(page, token));
+                    page == ShellPage.Logs ? logsPage.LoadAsync(token) : TestShellLoad.Scaffold(page, token));
                 logsPage.Updated += content => shell.ApplyExternal(content);
                 await shell.SelectAsync(ShellPage.Logs);
                 Require(shell.Content is LogsContent { Rows.Count: 1 }, "导航接缝必须加载日志页内容");
