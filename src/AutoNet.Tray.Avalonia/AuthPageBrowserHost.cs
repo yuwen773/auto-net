@@ -90,6 +90,20 @@ internal interface IAuthPageBrowserHost : IDisposable
 }
 
 /// <summary>
+/// 宿主快照发布契约：只有快照值实际变化才写入并通知。三个宿主共用同一实现，
+/// 避免订阅方因重复信号做多余投影。
+/// </summary>
+internal static class AuthPageHostPublish
+{
+    public static bool TryPublish(ref AuthPageHostSnapshot snapshot, AuthPageHostSnapshot value)
+    {
+        if (Volatile.Read(ref snapshot) == value) return false;
+        Volatile.Write(ref snapshot, value);
+        return true;
+    }
+}
+
+/// <summary>
 /// 失败关闭的骨架宿主（工单 #37）：**不创建任何浏览器，也不发起网络请求**。
 /// 运行时缺失与边界不可用都返回受控状态，绝不回退直连。生产装配已由
 /// <see cref="AuthPageWebViewHost"/> 接替；本类只用于 QA 夹具与回归验证受控降级，
@@ -107,7 +121,7 @@ internal sealed class UnavailableAuthPageBrowserHost : IAuthPageBrowserHost
 
     public object? Surface => null;
 
-    public AuthPageHostSnapshot Snapshot => snapshot;
+    public AuthPageHostSnapshot Snapshot => Volatile.Read(ref snapshot);
 
     public event Action<AuthPageHostSnapshot>? StateChanged;
 
@@ -129,8 +143,7 @@ internal sealed class UnavailableAuthPageBrowserHost : IAuthPageBrowserHost
 
     private AuthPageHostSnapshot Set(AuthPageHostSnapshot value)
     {
-        snapshot = value;
-        StateChanged?.Invoke(value);
+        if (AuthPageHostPublish.TryPublish(ref snapshot, value)) StateChanged?.Invoke(value);
         return value;
     }
 

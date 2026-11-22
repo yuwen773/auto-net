@@ -346,13 +346,13 @@ internal sealed class AuthPageWebViewHost : IAuthPageBrowserHost
     }
 
     /// <summary>
-    /// 写入快照并通知订阅方。通知与写入同步发生，因此附着完成、导航失败与会话切换
-    /// 都能立即投影；订阅方自己负责线程调度，本方法不等待任何界面工作。
+    /// 写入快照并在值实际变化时通知订阅方。通知与写入同步发生，因此附着完成、导航失败
+    /// 与会话切换都能立即投影；重复快照不产生多余信号。订阅方自己负责线程调度，
+    /// 本方法不等待任何界面工作。
     /// </summary>
     private void Publish(AuthPageHostSnapshot value)
     {
-        Volatile.Write(ref snapshot, value);
-        StateChanged?.Invoke(value);
+        if (AuthPageHostPublish.TryPublish(ref snapshot, value)) StateChanged?.Invoke(value);
     }
 
     private async Task StopProxyAsync()

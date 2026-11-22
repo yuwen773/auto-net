@@ -109,8 +109,7 @@ internal sealed class QaAuthPageHost : IAuthPageBrowserHost
 
     private AuthPageHostSnapshot Set(AuthPageHostSnapshot value)
     {
-        snapshot = value;
-        StateChanged?.Invoke(value);
+        if (AuthPageHostPublish.TryPublish(ref snapshot, value)) StateChanged?.Invoke(value);
         return value;
     }
 }

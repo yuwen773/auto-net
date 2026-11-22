@@ -1213,6 +1213,27 @@ internal static class AuthPageRegression
             Require(episode.Project(changed).Status == AuthPageHostStatus.NetworkBoundaryUnavailable,
                 "宿主状态变化后旧失败投影仍生效");
             Require(episode.Project(observed).Status == AuthPageHostStatus.Attaching, "失败投影清除后未回到宿主快照");
+        })),
+        ("认证页回归：快照未变化时不重复通知", () => Sync(() =>
+        {
+            var portal = new Uri(AuthPageModel.PortalAddress);
+            var unavailable = new UnavailableAuthPageBrowserHost(() => false);
+            var unavailableNotifications = new List<AuthPageHostSnapshot>();
+            unavailable.StateChanged += unavailableNotifications.Add;
+            unavailable.AttachAsync(portal).GetAwaiter().GetResult();
+            unavailable.AttachAsync(portal).GetAwaiter().GetResult();
+            Require(unavailableNotifications.Count == 1
+                && unavailableNotifications[0].Status == AuthPageHostStatus.RuntimeMissing,
+                "重复附着相同结果仍重复通知：" + unavailableNotifications.Count);
+
+            var qa = new QaAuthPageHost();
+            var qaNotifications = 0;
+            qa.StateChanged += _ => qaNotifications++;
+            qa.SimulateForQa(AuthPageHostStatus.Attached);
+            qa.SimulateForQa(AuthPageHostStatus.Attached);
+            Require(qaNotifications == 1, "QA 宿主重复状态仍重复通知：" + qaNotifications);
+            qa.SimulateForQa(AuthPageHostStatus.Failed);
+            Require(qaNotifications == 2, "QA 宿主状态变化未通知：" + qaNotifications);
         }))
     ];
 
