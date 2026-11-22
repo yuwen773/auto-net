@@ -56,6 +56,8 @@ internal sealed class QaAuthPageHost : IAuthPageBrowserHost
 
     public AuthPageHostSnapshot Snapshot => snapshot;
 
+    public event Action<AuthPageHostSnapshot>? StateChanged;
+
     public int AttachCount { get; private set; }
 
     public int NavigationCount { get; private set; }
@@ -69,9 +71,8 @@ internal sealed class QaAuthPageHost : IAuthPageBrowserHost
         cancellationToken.ThrowIfCancellationRequested();
         AttachCount++;
         NavigationCount = AttachCount;
-        snapshot = new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
-            "QA 假宿主已附着固定门户地址；不填表、不提交。");
-        return Task.FromResult(snapshot);
+        return Task.FromResult(Set(new(AuthPageHostStatus.Attached, AuthPageModel.PortalAddress, true,
+            "QA 假宿主已附着固定门户地址；不填表、不提交。")));
     }
 
     public void SetVisible(bool visible)
@@ -91,7 +92,7 @@ internal sealed class QaAuthPageHost : IAuthPageBrowserHost
     public string ReadInputForQa() => input.Text ?? "";
 
     /// <summary>只改写宿主状态用于截图；不创建浏览器、不联网。</summary>
-    public void SimulateForQa(AuthPageHostStatus status) => snapshot = status switch
+    public void SimulateForQa(AuthPageHostStatus status) => Set(status switch
     {
         AuthPageHostStatus.Attaching => new(status, AuthPageModel.PortalAddress, false,
             "QA 夹具：正在加载固定门户页面；不填表、不提交。"),
@@ -104,7 +105,13 @@ internal sealed class QaAuthPageHost : IAuthPageBrowserHost
         AuthPageHostStatus.Failed => new(status, AuthPageModel.PortalAddress, false,
             "QA 夹具：宿主加载失败；可手动重试。"),
         _ => AuthPageHostSnapshot.NotAttached
-    };
+    });
+
+    private AuthPageHostSnapshot Set(AuthPageHostSnapshot value)
+    {
+        if (AuthPageHostPublish.TryPublish(ref snapshot, value)) StateChanged?.Invoke(value);
+        return value;
+    }
 }
 
 /// <summary>认证页一步证据：用户实际看到的状态、地址、宿主状态与截图。</summary>

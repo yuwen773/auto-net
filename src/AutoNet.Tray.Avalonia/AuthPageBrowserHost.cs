@@ -65,6 +65,13 @@ internal interface IAuthPageBrowserHost : IDisposable
     AuthPageHostSnapshot Snapshot { get; }
 
     /// <summary>
+    /// 宿主快照发生变化时触发（附着开始、导航成功、受控失败、会话切换）。
+    /// 这是附着完成的通知信号：订阅方据此立即重新投影，不必等下一次状态轮询。
+    /// 可从任意线程触发，订阅方负责调度到界面线程；实现只在快照实际变化时触发。
+    /// </summary>
+    event Action<AuthPageHostSnapshot>? StateChanged;
+
+    /// <summary>
     /// 只加载固定门户根地址。同一地址重复调用不得重新导航；调用方不得传入其他来源。
     /// 不抛出未受控异常：运行时缺失、边界未就绪与加载失败都转成受控状态。
     /// 后台会话进行中时只投影会话状态，不创建第二个浏览器。
@@ -80,6 +87,20 @@ internal interface IAuthPageBrowserHost : IDisposable
 
     /// <summary>页面是否可见；仅影响呈现，不触发导航、提交或后台状态变更。</summary>
     void SetVisible(bool visible);
+}
+
+/// <summary>
+/// 宿主快照发布契约：只有快照值实际变化才写入并通知。三个宿主共用同一实现，
+/// 避免订阅方因重复信号做多余投影。
+/// </summary>
+internal static class AuthPageHostPublish
+{
+    public static bool TryPublish(ref AuthPageHostSnapshot snapshot, AuthPageHostSnapshot value)
+    {
+        if (Volatile.Read(ref snapshot) == value) return false;
+        Volatile.Write(ref snapshot, value);
+        return true;
+    }
 }
 
 /// <summary>
@@ -100,24 +121,30 @@ internal sealed class UnavailableAuthPageBrowserHost : IAuthPageBrowserHost
 
     public object? Surface => null;
 
-    public AuthPageHostSnapshot Snapshot => snapshot;
+    public AuthPageHostSnapshot Snapshot => Volatile.Read(ref snapshot);
+
+    public event Action<AuthPageHostSnapshot>? StateChanged;
 
     public Task<AuthPageHostSnapshot> AttachAsync(Uri portal, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!Settings.IsSupportedPortal(portal))
         {
-            snapshot = new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false,
-                "认证页只接受固定门户根地址，未发起导航。");
-            return Task.FromResult(snapshot);
+            return Task.FromResult(Set(new(AuthPageHostStatus.Failed, AuthPageModel.PortalAddress, false,
+                "认证页只接受固定门户根地址，未发起导航。")));
         }
 
         // 文案与模型共用同一来源，避免宿主与页面各自维护近似说明。
         var status = runtimeProbe()
             ? AuthPageHostStatus.NetworkBoundaryUnavailable
             : AuthPageHostStatus.RuntimeMissing;
-        snapshot = new(status, AuthPageModel.PortalAddress, false, AuthPageModel.HostCopyFor(status).Detail);
-        return Task.FromResult(snapshot);
+        return Task.FromResult(Set(new(status, AuthPageModel.PortalAddress, false, AuthPageModel.HostCopyFor(status).Detail)));
+    }
+
+    private AuthPageHostSnapshot Set(AuthPageHostSnapshot value)
+    {
+        if (AuthPageHostPublish.TryPublish(ref snapshot, value)) StateChanged?.Invoke(value);
+        return value;
     }
 
     /// <summary>可见性只用于未来的真实宿主；当前实现没有可显示的浏览器表面。</summary>
