@@ -23,7 +23,7 @@ internal sealed record SettingsPageSaveResult(SettingsPageSaveState State, strin
 }
 
 /// <summary>可编辑草稿：普通 UI 进程内存中的临时值，密码不写日志、不进命令行或文件。</summary>
-internal sealed class SettingsDraftValues
+internal sealed partial class SettingsDraftValues
 {
     public WifiProfile? Profile { get; set; }
     /// <summary>用户未在页面明确选择 Wi-Fi：保存端保留受限存储中的当前守护配置。</summary>
@@ -398,15 +398,8 @@ internal sealed class SettingsPage
             lastSavedAt = DateTimeOffset.UtcNow;
             // 只有“页面从未显示过、由接收端保留”的值才算未知；完整显示的地址即使带保留标记，
             // 页面也知道它的值，不能因此把配置投影误标为不可用。
-            var hasKeptFields =
-                (draft.KeepProfile && (draft.Profile is null || !projectedBeforeSave)) ||
-                (draft.KeepProxyUrl && (!projectedBeforeSave || proxyRedactedBeforeSave)) ||
-                (draft.KeepUuEndpoint && (!projectedBeforeSave || uuRedactedBeforeSave)) ||
-                (draft.KeepEnabled && !projectedBeforeSave) ||
-                (draft.KeepAllowActiveDisconnect && !projectedBeforeSave) ||
-                (draft.KeepAwakeOnAcKept && !projectedBeforeSave) ||
-                (draft.KeepAuthChannelMode && !projectedBeforeSave);
-            if (!hasKeptFields)
+            if (!SettingsDraftContract.HasKeptFields(
+                    draft, projectedBeforeSave, proxyRedactedBeforeSave, uuRedactedBeforeSave))
             {
                 Content = WithDraft(Content, draft, lastSavedAt);
                 appliedKey = Content.ProjectionKey;
@@ -504,31 +497,8 @@ internal sealed class SettingsPage
         appliedKey = content.ProjectionKey;
     }
 
-    private static SettingsPageSaveResult? ValidateLocally(SettingsDraft draft)
-    {
-        // 没有明确选择 Wi-Fi 时，KeepProfile 表示由保存端保留受限存储中的当前目标；
-        // 只有既没有选择、也没有保留语义时才是真正的“未选择配置”。
-        if (draft.Profile is null && !draft.KeepProfile)
-            return new(SettingsPageSaveState.ValidationFailed, ElevatedSettings.MissingProfileMessage);
-
-        // 未改动账号（KeepUsername）时由保存端读取受限存储中的账号；只有明确改动后留空才拒绝。
-        if (!draft.KeepUsername && draft.Username.Trim().Length == 0)
-            return new(SettingsPageSaveState.ValidationFailed, ElevatedSettings.CredentialsEmptyMessage);
-
-        try
-        {
-            // 与保存端共用同一套地址与通道规则，避免两处校验漂移。
-            Settings.ValidateConnectionOptions(
-                draft.ProxyUrl.Trim(), draft.UuEndpoint.Trim(), draft.AuthChannelMode);
-        }
-        catch (ArgumentException e)
-        {
-            // Core 的固定业务文案可以呈现；这里不涉及存储或凭据内容。
-            return new(SettingsPageSaveState.ValidationFailed, e.Message);
-        }
-
-        return null;
-    }
+    private static SettingsPageSaveResult? ValidateLocally(SettingsDraft draft) =>
+        SettingsDraftContract.Validate(draft);
 
     private static SettingsPageSaveResult Map(HandoffResult result) => result.Outcome switch
     {

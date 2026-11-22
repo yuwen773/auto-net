@@ -93,7 +93,8 @@ internal static class SettingsModel
     /// 开关值是否已知：没有可信配置投影且用户尚未改动时为未知，界面必须显示为“未确定”，
     /// 不能把页面默认值伪装成已保存配置。
     /// </summary>
-    public static bool OptionKnown(bool keep, bool configProjected) => !(keep && !configProjected);
+    public static bool OptionKnown(bool keep, bool configProjected) =>
+        SettingsDraftContract.OptionKnown(keep, configProjected);
 
     /// <summary>外观分区说明（#9 / 故事 70）：界面偏好不含秘密，按 Windows 用户隔离保存。</summary>
     public const string AppearanceNote =

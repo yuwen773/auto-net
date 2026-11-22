@@ -156,8 +156,7 @@ internal sealed class ElevatedSettings(
         var existing = loadCredentials();
         // #41 审查修复：普通界面只看到地址的安全展示值，未编辑的开关也可能对页面未知。
         // 这些字段必须保留受限存储中的完整原值，不能以展示值或页面默认值覆盖。
-        var needsExisting = draft.KeepProfile || draft.KeepProxyUrl || draft.KeepUuEndpoint || draft.KeepEnabled ||
-            draft.KeepAllowActiveDisconnect || draft.KeepAwakeOnAcKept || draft.KeepAuthChannelMode;
+        var needsExisting = SettingsDraftContract.NeedsExistingSettings(draft);
         Settings? existingSettings = null;
         if (needsExisting || guard is not null)
         {
@@ -200,31 +199,7 @@ internal sealed class ElevatedSettings(
         // 用户没有在页面明确选择 Wi-Fi 时，守护目标以受限存储中的当前值为准：
         // 另一个窗口刚改成网络 B 后，本窗口的旧草稿不能把它改回网络 A。
         // profile 为 null 时 KeepProfile 必为 true，且上面的检查已确认 existingSettings 非空。
-        var profile = draft.Profile;
-        var guardTarget = draft.KeepProfile ? existingSettings : null;
-        var settings = new Settings
-        {
-            InterfaceId = guardTarget?.InterfaceId ?? profile!.InterfaceId,
-            WifiProfile = guardTarget?.WifiProfile ?? profile!.Name,
-            Enabled = draft.KeepEnabled && existingSettings is not null
-                ? existingSettings.Enabled
-                : draft.Enabled,
-            AllowActiveDisconnect = draft.KeepAllowActiveDisconnect && existingSettings is not null
-                ? existingSettings.AllowActiveDisconnect
-                : draft.AllowActiveDisconnect,
-            KeepAwakeOnAc = draft.KeepAwakeOnAcKept && existingSettings is not null
-                ? existingSettings.KeepAwakeOnAc
-                : draft.KeepAwakeOnAc,
-            ProxyUrl = draft.KeepProxyUrl && existingSettings is not null
-                ? existingSettings.ProxyUrl
-                : draft.ProxyUrl.Trim(),
-            UuEndpoint = draft.KeepUuEndpoint && existingSettings is not null
-                ? existingSettings.UuEndpoint
-                : draft.UuEndpoint.Trim(),
-            AuthChannelMode = draft.KeepAuthChannelMode && existingSettings is not null
-                ? existingSettings.AuthChannelMode
-                : draft.AuthChannelMode
-        };
+        var settings = SettingsDraftContract.Resolve(draft, existingSettings);
 
         try
         {

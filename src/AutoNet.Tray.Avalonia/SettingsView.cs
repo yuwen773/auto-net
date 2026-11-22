@@ -199,11 +199,10 @@ internal static class SettingsView
         void SyncOptions()
         {
             var projected = page.Content.ConfigProjected;
-            enabledBox.IsChecked = SettingsModel.OptionKnown(page.Draft.KeepEnabled, projected) ? page.Draft.Enabled : null;
-            disconnectBox.IsChecked = SettingsModel.OptionKnown(page.Draft.KeepAllowActiveDisconnect, projected)
-                ? page.Draft.AllowActiveDisconnect : null;
-            awakeBox.IsChecked = SettingsModel.OptionKnown(page.Draft.KeepAwakeOnAcKept, projected) ? page.Draft.KeepAwakeOnAc : null;
-            var channelKnown = SettingsModel.OptionKnown(page.Draft.KeepAuthChannelMode, projected);
+            enabledBox.IsChecked = page.Draft.EnabledForDisplay(projected);
+            disconnectBox.IsChecked = page.Draft.AllowActiveDisconnectForDisplay(projected);
+            awakeBox.IsChecked = page.Draft.KeepAwakeOnAcForDisplay(projected);
+            var channelKnown = page.Draft.ChannelModeKnown(projected);
             channelAuto.IsChecked = channelKnown && page.Draft.AuthChannelMode == AuthChannelModes.Automatic;
             channelManual.IsChecked = channelKnown && page.Draft.AuthChannelMode is not (AuthChannelModes.Automatic or AuthChannelModes.Off);
             channelOff.IsChecked = channelKnown && page.Draft.AuthChannelMode == AuthChannelModes.Off;
@@ -269,9 +268,7 @@ internal static class SettingsView
             redactedNote.Text = redacted;
             redactedNote.IsVisible = redacted.Length > 0;
             SyncOptionsDeferred();
-            optionsNote.IsVisible = !page.Content.ConfigProjected && (
-                page.Draft.KeepEnabled || page.Draft.KeepAllowActiveDisconnect ||
-                page.Draft.KeepAwakeOnAcKept || page.Draft.KeepAuthChannelMode);
+            optionsNote.IsVisible = page.Draft.AnyOptionUnknown(page.Content.ConfigProjected);
             result.Text = page.Message;
             result.IsVisible = page.Message.Length > 0;
             var tone = page.MessageIsError ? "ToneProblem"
