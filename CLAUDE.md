@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-AutoNet is a Windows-only campus-network watchdog. A background service keeps one saved campus Wi-Fi profile connected and re-authenticates through a Dr.COM portal when the session lapses; a WinForms tray app shows status and holds credentials. Targets `net10.0-windows` on Windows 11 x64, .NET SDK pinned to `10.0.401` (`global.json`, `rollForward: disable`).
+AutoNet is a Windows-only campus-network watchdog. A background service keeps one saved campus Wi-Fi profile connected and re-authenticates through a Dr.COM portal when the session lapses; an Avalonia tray app shows status and holds credentials. Targets `net10.0-windows` on Windows 11 x64, .NET SDK pinned to `10.0.401` (`global.json`, `rollForward: disable`).
 
 `AGENTS.md` holds the repo's own contribution guidelines (style, commit format, boundaries). This file covers commands and architecture; where they overlap, `AGENTS.md` wins.
 
@@ -15,7 +15,6 @@ Everything runs through `pwsh.exe` (PowerShell 7, never `powershell.exe`), Windo
 ```powershell
 pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1            # Release build + regression suite
 pwsh.exe -NoLogo -NoProfile -File scripts/build.ps1 -Publish   # also builds artifacts/AutoNet-win-x64/
-pwsh.exe -NoLogo -NoProfile -File scripts/qa-tray.ps1          # renders tray/log UI to artifacts/ui-qa/*.png
 pwsh.exe -NoLogo -NoProfile -File scripts/qa-avalonia-prototype.ps1  # Avalonia prototype QA: publish/single-file, lifecycle, single instance + elevation, themes, installer layout
 pwsh.exe -NoLogo -NoProfile -File scripts/check-released-reader.ps1   # 回滚兼容判定校验：冻结的 v0.3.1 读取副本与真实旧版逐条比对（工单 #36）
 ```
