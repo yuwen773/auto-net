@@ -352,6 +352,46 @@ internal static class OverviewRegression
                 Require(controller.Content is OverviewContent, "最后一页应为概览内容");
             }
             finally { Directory.Delete(directory, recursive: true); }
+        }),
+        ("概览回归：重复刷新不重复分发且五万次投影保持线性", async () =>
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "autonet-overview-fanout-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var path = Path.Combine(directory, "status.json");
+                File.WriteAllText(path, JsonSerializer.Serialize(Online(), Storage.Json));
+                var pipe = new StatusPipe(path, TimeSpan.FromSeconds(30));
+                using var controller = new ShellController(pipe);
+                var contentUpdates = 0;
+                var statusUpdates = 0;
+                controller.ContentChanged += _ => contentUpdates++;
+                controller.StatusChanged += _ => statusUpdates++;
+                await controller.SelectAsync(ShellPage.Overview);
+                Require(contentUpdates == 1 && statusUpdates == 0, "首次进入概览只应投影一次且不伪造状态通知");
+
+                for (var index = 0; index < 500; index++)
+                {
+                    if (index % 50 == 0)
+                        Storage.AtomicWrite(path, JsonSerializer.Serialize(
+                            index % 100 == 0 ? Online() : Online() with { Enabled = false }, Storage.Json));
+                    await controller.RefreshStatusAsync();
+                }
+                Require(statusUpdates == 500, $"每次刷新只应产生一条状态通知，实际 {statusUpdates}");
+                Require(contentUpdates == 501, $"概览每次状态更新只应重建一次，实际 {contentUpdates}");
+
+                // 发布界面每次重建内容记录而不是复用控件；这里把旧 UI 的“固定刷新不累积”
+                // 守卫换成投影本身的线性预算与结果稳定性。
+                var reading = Reading(Online(), TimeSpan.Zero);
+                var started = Environment.TickCount64;
+                OverviewContent? last = null;
+                for (var index = 0; index < 50_000; index++) last = OverviewModel.From(reading);
+                Require(Environment.TickCount64 - started < 10_000, "五万次状态投影超出预算（疑似累积或重复计算）");
+                Require(last is { StatusTitle: "网络在线", Progress.Count: 4 }
+                    && last.Recovery == new RecoverySwitchState("已开启", "关闭自动恢复", true, RecoveryIntent.Disable),
+                    "重复投影必须保持同一受控结果");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
         })
     ];
 
