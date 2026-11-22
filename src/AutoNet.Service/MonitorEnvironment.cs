@@ -5,10 +5,18 @@ using AutoNet.Core;
 namespace AutoNet.Service;
 
 // Windows, network and persistence boundaries used by offline monitoring fixtures.
-public interface IMonitorEnvironment
+//
+// The environment is split by domain so a consumer or test adapter can depend on only the
+// boundary it uses. MonitorWorker still takes the composed interface; the split is the seam,
+// not a new constructor parameter for every caller.
+public interface IMonitorSettingsSource
 {
     Settings? LoadSettings();
     Credentials? LoadCredentials();
+}
+
+public interface IMonitorAuthenticationStore
+{
     AuthenticationBlock? LoadAuthenticationBlock();
     AuthenticationRecordKind AuthenticationRecordSource => AuthenticationRecordKind.NotRead;
     void BlockAuthentication(AuthenticationBlock block);
@@ -16,6 +24,10 @@ public interface IMonitorEnvironment
     // ADR-0001 recheck resolution: the release audit is appended before the block clears; an
     // audit write failure surfaces as an exception and the caller must not clear the block.
     bool TryResolveSubmissionPending(AuthenticationBlock? expected, SubmissionBudget? budget, AuthenticationBlock next, bool directConfirmation = false);
+}
+
+public interface IMonitorSubmissionGate
+{
     SubmissionBudget? LoadSubmissionBudget();
     bool IsConfirmedSubmissionRestart(SubmissionBudget? budget);
     IDisposable? TryAcquireSubmissionExecution();
@@ -24,20 +36,45 @@ public interface IMonitorEnvironment
     bool TryRegisterChannelSession(ChannelSubmissionLease lease, int processId, int ownerId, string jobName) => false;
     SubmissionReservation TryReserveSubmissionBudget(SubmissionBudget? expected, DateTimeOffset now);
     bool TryTransitionSubmissionBudget(SubmissionBudget expected, SubmissionBudgetState next);
+}
+
+public interface IMonitorDisconnectBudgetStore
+{
     DisconnectBudget LoadDisconnectBudget(Settings settings);
     void SaveDisconnectBudget(Settings settings, DisconnectBudget budget);
     bool TryTransitionDisconnectBudget(Settings settings, DisconnectBudget expected, DisconnectBudget next);
+}
+
+public interface IMonitorWifiGateway
+{
     WifiLink ReadWifi(Settings settings);
     WifiRequestResult ConnectWifi(Settings settings);
     WifiRequestResult DisconnectWifi(Settings settings);
     HttpClient CreateDirectClient(WifiLink link);
+}
+
+public interface IMonitorAuxiliaryProbe
+{
     Task<(string SystemPath, string Uu)> CheckAuxiliaryAsync(Settings settings, WifiLink link, CancellationToken ct);
     void UpdatePower(bool enabled);
+}
+
+public interface IMonitorSink
+{
     void WriteStatus(StatusSnapshot status);
     void WriteLog(string action, string detail, double? seconds, StatusSnapshot? snapshot);
     void WriteDiagnostic(ActivityLog entry);
     ActivityLog? ReadLastDiagnostic() => null;
     void WriteDiagnosticFallback(string summary) { }
+}
+
+/// <summary>
+/// The composed seam consumed by <c>MonitorWorker</c>. It declares no members of its own:
+/// every capability belongs to exactly one domain interface above.
+/// </summary>
+public interface IMonitorEnvironment : IMonitorSettingsSource, IMonitorAuthenticationStore, IMonitorSubmissionGate,
+    IMonitorDisconnectBudgetStore, IMonitorWifiGateway, IMonitorAuxiliaryProbe, IMonitorSink
+{
 }
 
 public sealed class MonitorEnvironment : IMonitorEnvironment, IDisposable
