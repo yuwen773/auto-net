@@ -253,11 +253,17 @@ public sealed class App : Application
     {
         var session = new TraySession();
         var pipe = new StatusPipe(StatusPipe.ResolveStatusPath());
-        // 浏览器兜底开页（#11 / 故事 61–69）：消费记录按 Windows 用户持久化（QA 重定向证据目录）。
-        // 浏览器启动经默认 shell 只带固定门户根地址；QA 模式替换为受控记录器，不弹真实浏览器。
-        Func<string, string?> browserLaunch = tray.Qa.Mode == QaMode.PortalOpen
-            ? QaPortal.RecordLaunch
-            : url =>
+        // QA 场景装配集中在 QaBootstrap：生产路径只注入最终委托，所有「按模式替换真实动作」
+        // 的决定都在那里。认证通道发起器在后面装配，这里用延迟绑定读取它的会话状态（#39）。
+        AuthChannelLauncher? authChannel = null;
+        PortalPageOpener? portalOpener = null;
+        MainWindow? window = null;
+        TrayBalloonNotifier? notifier = null;
+        // 启动清扫只删过期前缀目录；活跃会话目录会被持续写入，不会被误删。
+        if (!tray.Qa.Active) AuthPageWebViewHost.SweepStaleSessions();
+        var qa = QaBootstrap.Compose(tray.Qa, new QaCompositionContext(
+            // 浏览器兜底开页（#11 / 故事 61–69）：只带固定门户根地址；QA 模式替换为受控记录器。
+            BrowserLaunch: url =>
             {
                 try
                 {
@@ -265,28 +271,31 @@ public sealed class App : Application
                     return null;
                 }
                 catch (Exception e) { return e.GetType().Name; }
-            };
-        var portalOpener = new PortalPageOpener(PortalOpenStore.Create(tray.Qa), pipe.RefreshAsync, browserLaunch);
+            },
+            // 认证页（#37/#38/#39）：生产宿主经允许列表代理连接固定门户，网卡从可信状态投影读取；
+            // 读不到时失败关闭，绝不回退直连。auth-page QA 用假宿主验证页面生命周期。
+            AuthHost: () => AuthPageBrowserHostFactory.Production(
+                () => ReadProjectedLink(pipe.Current), () => authChannel?.SessionActive == true),
+            Launcher: Elevation.Launch,
+            // 设置页（#8 / #41）：普通权限下只枚举 AllUsers 配置；保存经独立提权交接。
+            LoadProfiles: () => Wifi.Profiles().Where(profile => profile.AllUsers).ToList(),
+            SaveSettings: SettingsHandoffLauncher.SaveAsync,
+            CopyHandler: null,
+            FolderHandler: null,
+            // 诊断包导出（#12）：保存对话框与提权启动都以委托注入。
+            PickTarget: () => PickDiagnosticTargetAsync(window),
+            ExportLaunch: LaunchDiagnosticsExportAsync,
+            // 内嵌认证通道（#24/#25）：发起器经 UAC 启动辅助进程，结果经受控通知呈现。
+            AuthChannelStart: resultPath => Elevation.LaunchAuthChannel(resultPath, Elevation.StartProcess),
+            AuthChannelPresent: alert => { if (notifier is { } balloon) balloon.Show(alert); },
+            AuthChannelFallback: () => portalOpener!.OpenManuallyAsync(),
+            PortalOpenManual: () => _ = portalOpener!.OpenManuallyAsync()));
+        portalOpener = new PortalPageOpener(PortalOpenStore.Create(tray.Qa), pipe.RefreshAsync, qa.BrowserLaunch);
         // 日志页（#7）：读取既有日志目录；QA 夹具模式只在 logs 模式下重定向到证据目录内的夹具。
         var logsPage = LogsPage.Production(tray.Qa);
-        // 认证页（#37/#38/#39）：浏览器宿主抽象。生产宿主经允许列表代理连接固定门户，
-        // 网卡从可信状态投影读取；读不到时失败关闭，绝不回退直连。auth-page QA 用假宿主验证页面生命周期。
-        // 内嵌认证通道发起器在后面装配，这里用延迟绑定读取它的会话状态（#39）：
-        // 通道会话进行中时认证页不创建第二个浏览器。
-        AuthChannelLauncher? authChannel = null;
-        // 启动清扫只删过期前缀目录；活跃会话目录会被持续写入，不会被误删。
-        if (!tray.Qa.Active) AuthPageWebViewHost.SweepStaleSessions();
-        IAuthPageBrowserHost authHost = tray.Qa.Mode switch
-        {
-            QaMode.AuthPage => new QaAuthPageHost(),
-            // 其他 QA 模式不打开真实浏览器或代理：认证页导航到受控降级，证据仍来自真实窗口。
-            _ when tray.Qa.Active => new UnavailableAuthPageBrowserHost(AuthPageBrowserRuntime.IsWebView2RuntimePresent),
-            _ => AuthPageBrowserHostFactory.Production(
-                () => ReadProjectedLink(pipe.Current), () => authChannel?.SessionActive == true)
-        };
         // 状态投影在读取线程上发起，协调器经此调度器把内容与事件交给界面线程；
         // 已在界面线程时同步执行，避免 QA 驱动时多一次排队。
-        var authPage = new AuthPageCoordinator(authHost, action =>
+        var authPage = new AuthPageCoordinator(qa.AuthHost, action =>
         {
             if (Dispatcher.UIThread.CheckAccess()) action();
             else Dispatcher.UIThread.Post(action);
@@ -297,25 +306,10 @@ public sealed class App : Application
                 : ShellContent.LoadAsync(page, token), portalOpener, authPage);
         // 页内更新与导航加载汇聚到同一守卫：旧结果不覆写当前页（故事 16、50）。
         logsPage.Updated += content => shell.ApplyExternal(content);
-        // 概览/可访问性 QA 用记录适配器替换真实提权启动：只记录明确意图，不弹 UAC；生产路径始终 Elevation.Launch。
-        Action<ElevatedOperationKind> launcher = tray.Qa.Mode switch
-        {
-            QaMode.Overview => QaOverview.RecordLaunch,
-            QaMode.Accessibility => QaAccessibility.RecordLaunch,
-            _ => Elevation.Launch
-        };
-        var actions = new OverviewActions(pipe.RefreshAsync, launcher);
+        var actions = new OverviewActions(pipe.RefreshAsync, qa.Launcher);
         // 设置页（#8 / #41）：普通权限下直接编辑非秘密字段；保存经独立提权交接。
         // 受限配置不从普通进程读取，非秘密值来自 status.json 的配置投影。
-        Func<IReadOnlyList<WifiProfile>> loadProfiles = tray.Qa.Active
-            ? () => QaSettings.Profiles
-            : () => Wifi.Profiles().Where(profile => profile.AllUsers).ToList();
-        Func<SettingsDraft, CancellationToken, Task<HandoffResult>> saveSettings = tray.Qa.Mode == QaMode.Settings
-            ? QaSettings.SaveForQaAsync
-            : tray.Qa.Active
-                ? (_, _) => Task.FromResult(new HandoffResult(HandoffOutcome.Rejected))
-                : SettingsHandoffLauncher.SaveAsync;
-        var settingsPage = new SettingsPage(loadProfiles, saveSettings, () => pipe.RefreshAsync());
+        var settingsPage = new SettingsPage(qa.LoadProfiles, qa.SaveSettings, () => pipe.RefreshAsync());
         // 主题（#9 / 故事 27–29）：设置页外观分区直接读写偏好并当场应用（不走状态投影，
         // 轮询重建不打断选择）；跟随模式下响应系统主题变化，手动选择保持优先。
         // 订阅挂在长驻的托盘进程；提权/提示窗口是短生命周期进程，跟随语义由框架对
@@ -324,40 +318,12 @@ public sealed class App : Application
             platformSettings.ColorValuesChanged += (_, _) => theme!.OnSystemThemeChanged();
         Func<ThemePreference> themeProvider = () => theme!.Current;
         Action<ThemePreference> themeSelected = preference => _ = theme!.Select(preference);
-        // 日志页复制与目录打开在 QA 模式下替换为受控空操作：不触碰用户剪贴板、不启动资源管理器。
-        // 复制文本经 QA 报告的 CopyText 逐字核验；目录入口存在性由截图核验（真实点击为人工项）。
-        Func<string, Task>? copyHandler = tray.Qa.Mode is QaMode.Logs or QaMode.Accessibility ? _ => Task.CompletedTask : null;
-        Action? folderHandler = tray.Qa.Mode is QaMode.Logs or QaMode.Accessibility ? () => { } : null;
         // 诊断包导出（#12 / 故事 71–74、81）：普通界面状态机驱动——保存对话框与提权启动
-        // 都以委托注入；export-diagnostics 与可访问性 QA 模式替换为受控夹具（不弹对话框、不弹 UAC）。
-        MainWindow? window = null;
-        Func<Task<string?>> pickTarget;
-        Func<string, Task<DiagnosticsExportLaunch?>> exportLaunch;
-        if (tray.Qa.Mode is QaMode.ExportDiagnostics or QaMode.Accessibility)
-        {
-            pickTarget = QaExport.PickAsync;
-            exportLaunch = QaExport.LaunchAsync;
-        }
-        else
-        {
-            pickTarget = () => PickDiagnosticTargetAsync(window);
-            exportLaunch = LaunchDiagnosticsExportAsync;
-        }
-        var diagnosticsExporter = new DiagnosticsExporter(pickTarget, exportLaunch);
+        // 都以委托注入；QA 的受控夹具已在装配处选择，不再在本路径分叉。
+        var diagnosticsExporter = new DiagnosticsExporter(qa.PickTarget, qa.ExportLaunch);
         // 内嵌认证通道（工单 #24/#25 / ADR-0009）：发起器消费服务置位的授予并经 UAC 提权
         // 启动辅助进程（辅助进程自读机器级凭据）。结果回读经受控关键通知呈现（不静默）；
-        // 通道无法运行时回退系统浏览器兜底。可访问性 QA 模式全部替换为受控记录/空操作。
-        List<NotificationAlert>? qaPresented = tray.Qa.Mode == QaMode.Notifications ? [] : null;
-        TrayBalloonNotifier? notifier = null;
-        var authChannelStart = tray.Qa.Mode == QaMode.Accessibility
-            ? QaAuthChannel.RecordLaunch
-            : (Func<string, Process?>)(resultPath => Elevation.LaunchAuthChannel(resultPath, Elevation.StartProcess));
-        Action<NotificationAlert>? authChannelPresent = tray.Qa.Mode == QaMode.Accessibility
-            ? null
-            : alert => { if (notifier is { } balloon) balloon.Show(alert); };
-        Func<Task>? authChannelFallback = tray.Qa.Mode == QaMode.Accessibility
-            ? null
-            : () => portalOpener.OpenManuallyAsync();
+        // 通道无法运行时回退系统浏览器兜底。QA 的替换已在装配处完成。
         authChannel = new AuthChannelLauncher(
             async () =>
             {
@@ -365,23 +331,19 @@ public sealed class App : Application
                 // “有门户结构信号、可以提交凭据”的依据。
                 var reading = await pipe.RefreshAsync();
                 return reading.Trusted ? reading.Snapshot : null;
-            }, authChannelStart, authChannelPresent, authChannelFallback,
+            }, qa.AuthChannelStart, qa.AuthChannelPresent, qa.AuthChannelFallback,
             launchActive: () => new AutoNet.Core.SafetyStateStore(AutoNet.Core.Storage.Root).IsChannelLaunchActive());
-        // 兜底开页手动入口（#11）：可访问性 QA 只记录动作意图，不启动浏览器。
-        Action portalOpenManual = tray.Qa.Mode == QaMode.Accessibility
-            ? QaAccessibility.RecordPortalOpen
-            : () => _ = portalOpener.OpenManuallyAsync();
-        window = new MainWindow(session, shell, actions, logsPage, copyHandler, folderHandler, settingsPage,
-            portalOpen: portalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);
+        window = new MainWindow(session, shell, actions, logsPage, qa.CopyHandler, qa.FolderHandler, settingsPage,
+            portalOpen: qa.PortalOpenManual, themeProvider, themeSelected, diagnosticsExporter, authChannel, authPage);
         // 关键通知消费（#10 / T10 / 故事 52–60）：路由把状态读取映射为受控提醒决定（一次提醒、
         // 不重播、未知码降级），呈现交给托盘气泡（复用同一图标）；消费记录按 Windows 用户持久化。
         // notifications QA 模式下呈现替换为受控记录器且不订阅管道——由 QaNotifications 手工驱动
         // 确定时序；消费记录经 Create(qa) 落证据目录，不弹真实气泡、不触碰本机真实记录。
         var notifications = new NotificationRouter(
             NotificationConsumptionStore.Create(tray.Qa),
-            qaPresented is { } sink ? alert => { sink.Add(alert); return true; } : alert => notifier is { } balloon && balloon.Show(alert));
+            qa.PresentedSink is { } sink ? alert => { sink.Add(alert); return true; } : alert => notifier is { } balloon && balloon.Show(alert));
         trayHost = new TrayHost(session, window, shell, actions, () => desktop.Shutdown());
-        if (qaPresented is null)
+        if (qa.AttachNotifications)
         {
             notifier = new TrayBalloonNotifier(trayHost.TrayIcon!);
             pipe.Updated += notifications.Observe;
@@ -400,49 +362,9 @@ public sealed class App : Application
         shell.Start();
 
         if (!tray.Request.StartHidden) TrayHost.ShowWindow(window);
-        switch (tray.Qa.Mode)
-        {
-            case QaMode.Lifecycle:
-            case QaMode.Hold:
-                QaLifecycle.Run(tray.Request, trayHost, window, tray.Qa);
-                break;
-            case QaMode.ThemeRender:
-                QaThemeRender.Run(window, tray.Qa, desktop);
-                break;
-            case QaMode.Shell:
-                QaShell.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.Overview:
-                QaOverview.Run(shell, actions, window, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.Diagnostics:
-                QaDiagnostics.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.Logs:
-                QaLogs.Run(shell, logsPage, window, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.Settings:
-                QaSettings.Run(shell, window, settingsPage, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.ThemePrefs:
-                QaThemePrefs.Run(shell, window, theme!, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.Notifications:
-                QaNotifications.Run(shell, window, notifications, qaPresented!, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.PortalOpen:
-                QaPortal.Run(shell, window, pipe, portalOpener, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.ExportDiagnostics:
-                QaExport.Run(shell, window, diagnosticsExporter, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.Accessibility:
-                QaAccessibility.Run(shell, window, tray.Qa, code => desktop.Shutdown(code));
-                break;
-            case QaMode.AuthPage:
-                QaAuthPage.Run(shell, authPage, window, tray.Qa, code => desktop.Shutdown(code));
-                break;
-        }
+        QaBootstrap.Run(tray.Qa, new QaRunContext(tray.Request, trayHost, window, shell, actions, logsPage,
+            settingsPage, theme!, notifications, qa.PresentedSink!, pipe, portalOpener, diagnosticsExporter, authPage,
+            desktop));
     }
 
     /// <summary>
