@@ -162,7 +162,7 @@ internal static class DiagnosticRegression
                 ("RecoveryDisabled", new MonitorFixture { Settings = new() { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "fixture", Enabled = false } }),
                 ("CredentialsMissing", new MonitorFixture { HasCredentials = false }),
                 ("ActiveDisconnectDisabled", new MonitorFixture { Settings = new() { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "fixture", AllowActiveDisconnect = false } }),
-                ("WaitingForAddress", new MonitorFixture { Link = new(true, null, null, 7, []) })
+                ("WaitingForAddress", new MonitorFixture { Link = new(true, null, 7, []) })
             })
             {
                 fixture.Http.PortalResult = "-1";

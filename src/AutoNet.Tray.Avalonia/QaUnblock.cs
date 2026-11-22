@@ -206,8 +206,8 @@ internal static class QaUnblock
     {
         reads++;
         if (scenario.MutateLinkDuringRecheck && reads > 1)
-            return new(true, null, IPAddress.Parse("10.0.0.99"), 7, []);
-        return new(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
+            return new(true, IPAddress.Parse("10.0.0.99"), 7, []);
+        return new(true, IPAddress.Parse("10.0.0.1"), 7, []);
     }
 
     private static void WriteSettings(string path, string WifiProfile = "TEST-AP-1") => Storage.AtomicWrite(path,

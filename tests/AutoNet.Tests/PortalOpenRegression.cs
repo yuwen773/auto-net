@@ -182,7 +182,9 @@ internal static class PortalOpenRegression
             Require(PortalOpenStore.FileName != NotificationConsumptionStore.FileName, "开页与通知消费记录必须是两个文件");
             Require(PortalOpenStore.DefaultPath().EndsWith(PortalOpenStore.FileName, StringComparison.Ordinal)
                 && PortalOpenStore.DefaultPath().Contains("AutoNet", StringComparison.Ordinal), "生产路径应在用户本地配置目录下");
-            var qa = new QaEnvironment(QaMode.PortalOpen, Path.Combine(Path.GetTempPath(), "AutoNet-qa-fixture"));
+            var qaRoot = Directory.CreateTempSubdirectory("AutoNet-qa-fixture-").FullName;
+            Cleanup.Register(qaRoot);
+            var qa = new QaEnvironment(QaMode.PortalOpen, qaRoot);
             Require(PortalOpenStore.Create(qa).Load().Grants.Count == 0, "QA 激活时路径应指向证据目录");
             // 损坏文件回退为空记录（绝不抛出）；合法记录 roundtrip 按相同键读回。
             var root = Directory.CreateTempSubdirectory("AutoNet-portalopen-").FullName;

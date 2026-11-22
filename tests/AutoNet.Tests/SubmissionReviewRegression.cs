@@ -11,7 +11,7 @@ internal static class SubmissionReviewRegression
             {
                 InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "fixture", Enabled = true
             };
-            var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
+            var link = new WifiLink(true, IPAddress.Parse("10.0.0.1"), 7, []);
             Require(SubmissionReview.ProtocolInitial(settings, settings, link, link) is null, "一致时仍拒绝");
 
             Require(SubmissionReview.ProtocolInitial(null, settings, link, link) == "SettingsChanged",
@@ -35,7 +35,7 @@ internal static class SubmissionReviewRegression
             {
                 InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "fixture", Enabled = true
             };
-            var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
+            var link = new WifiLink(true, IPAddress.Parse("10.0.0.1"), 7, []);
             var authentication = new AuthenticationBlock { State = AuthenticationState.SubmissionPending };
             var budget = new SubmissionBudget { State = SubmissionBudgetState.Reserved, Attempts = 1 };
             var authorized = new SubmissionReviewFacts(settings, link, authentication, budget);
@@ -70,7 +70,7 @@ internal static class SubmissionReviewRegression
             {
                 InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "fixture", Enabled = true
             };
-            var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
+            var link = new WifiLink(true, IPAddress.Parse("10.0.0.1"), 7, []);
             var authentication = new AuthenticationBlock { State = AuthenticationState.SubmissionPending };
             var budget = new SubmissionBudget { State = SubmissionBudgetState.Reserved, Attempts = 1 };
             var credentials = new Credentials("fixture", "never-real");

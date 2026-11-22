@@ -11,7 +11,7 @@
 - **文档同步**：计划文档由“尚未实施”改为“离线实现已落线、未发布、未现场验收”；`CONTEXT.md` 认证页状态更新为 #37/#38/#39 已实现；ADR-0016 补上 WebRTC/STUN 走向未查清；ADR-0017–0021 与 #37–#41 实施记录核对无矛盾。详见 [#42 交付检查记录](progress/42-delivery-check.md)。
 - **现场验收向导**：`bash scripts/live-acceptance.sh`（Git Bash）把本节与 #38/#39/#40 的 `NOT_RUN` 清单串成 12 个阶段，逐项记录 PASS/FAIL/NA 到 `artifacts/validation/live-acceptance/answers.env`。安装、断网、真实凭据提交与覆盖/回滚必须输入 `AUTHORIZE` 才执行，可随时跳过或重跑；只读诊断不会提交凭据。
 - **仍需完成现场验收**：真实学校门户（含 `,0,` 前缀、MAC 令牌、`PHPSESSID`）、真实断网恢复与 15 秒目标、跨管理员账户 UAC、WebRTC/STUN 实际走向、真实 WebView2 展示宿主与门户子资源/802 端口经代理的兼容性、真实通道会话互斥与手动接管、真实 UAC 下的解除与诊断包导出、真实安装/覆盖/回滚、真实存储故障与 ACL。无竞争条件下的断网恢复已于 2026-11-02 实测（见下节）；其余项目见下节与 2026-11-02 记录，不代表已完整验收。
-- 已知遗留：`qa-authchannel.ps1` 夹具模式与当前通道实现不兼容（`ExecuteAsync` 要求 `--from-settings` 且拒绝 `--fixture-dir`），本工单不恢复夹具后门。
+- 已清理（2026-11-22）：`qa-authchannel.ps1` 与 `src/AutoNet.AuthChannel/QaFixtures/` 已删除；通道辅助进程不再解析 `--fixture-dir` / `--fixture-host`，仅保留生产 `--from-settings` 路径。此前记录的夹具模式不兼容问题随之关闭，未恢复夹具后门。
 
 ## 部分现场验收：多 Wi-Fi 环境中的断网恢复（2026-11-01）
 

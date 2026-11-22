@@ -92,7 +92,7 @@ internal static class WebViewProxyRegression
                     await Task.Run(() => Console.ReadLine());
                     view.CoreWebView2.Navigate($"http://127.0.0.1:{args[2]}/after-stop");
                     await Task.Delay(2000);
-                    var link = new WifiLink(true, null, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
+                    var link = new WifiLink(true, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
                     await using (var actualProxy = await AuthChannelProxy.StartAsync(link, job))
                     {
                         using var actualView = new WebView2 { Dock = DockStyle.Fill };

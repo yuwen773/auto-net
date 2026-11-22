@@ -57,9 +57,9 @@ internal static class QaThemePrefs
                     steps.Add(Describe("default-system", theme, window, qa, "theme-default-system"));
 
                     // 故事 27：手动浅色——真实单选钮驱动，即选即存。
-                    steps.Add(await SelectAsync("select-light", controller, window, theme, qa,
+                    steps.Add(await SelectAsync("select-light", window, theme, qa,
                         ThemePreference.Light, "theme-light"));
-                    steps.Add(await SelectAsync("select-dark", controller, window, theme, qa,
+                    steps.Add(await SelectAsync("select-dark", window, theme, qa,
                         ThemePreference.Dark, "theme-dark"));
 
                     // 故事 29（手动优先）：系统主题变化通知后，手动深色保持不变。
@@ -67,7 +67,7 @@ internal static class QaThemePrefs
                     steps.Add(Describe("system-change-ignored", theme, window, qa, null));
 
                     // 跟随系统：回到 Default，窗口实际变体回到操作系统值。
-                    steps.Add(await SelectAsync("select-system", controller, window, theme, qa,
+                    steps.Add(await SelectAsync("select-system", window, theme, qa,
                         ThemePreference.System, "theme-system"));
 
                     // 故事 29（跟随响应）：跟随模式下系统变化重新应用跟随语义。
@@ -75,7 +75,7 @@ internal static class QaThemePrefs
                     steps.Add(Describe("system-change-follows", theme, window, qa, null));
 
                     // 收尾停在深色并落盘：resume 阶段据此验证跨重启保留。
-                    steps.Add(await SelectAsync("final-dark", controller, window, theme, qa,
+                    steps.Add(await SelectAsync("final-dark", window, theme, qa,
                         ThemePreference.Dark, null));
                 }
 
@@ -95,7 +95,7 @@ internal static class QaThemePrefs
     /// 处理器），并非物理鼠标点击；点击语义的视觉确认属人工项。
     /// </summary>
     private static async Task<QaThemePrefsStep> SelectAsync(
-        string scenario, ShellController controller, MainWindow window, ThemeController theme,
+        string scenario, MainWindow window, ThemeController theme,
         QaEnvironment qa, ThemePreference preference, string? shot)
     {
         var radio = window.GetVisualDescendants()

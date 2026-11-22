@@ -240,9 +240,14 @@ internal static class NotificationRouterRegression
 
                 // 暂停消失后，未送达的启动提醒随之失效（事件过时，不再打扰）。
                 var failing = new NotificationRouter(NewStore(out var second), _ => false);
-                failing.Observe(Reading(Online() with { CredentialsBlocked = true }));
-                failing.Observe(Reading(Online()));
-                Require(true, "暂停消失路径不得抛出");
+                Exception? unexpected = null;
+                try
+                {
+                    failing.Observe(Reading(Online() with { CredentialsBlocked = true }));
+                    failing.Observe(Reading(Online()));
+                }
+                catch (Exception e) { unexpected = e; }
+                Require(unexpected is null, "暂停消失路径不得抛出");
                 Directory.Delete(second, recursive: true);
             }
             finally { Directory.Delete(directory, recursive: true); }

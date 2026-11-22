@@ -132,7 +132,7 @@ internal static class AuthPageBoundaryRegression
 
             var disconnected = await AuthPageNetworkBoundary.PrepareAsync(
                 new Uri(AuthPageModel.PortalAddress), true,
-                () => new WifiLink(false, null, null, 0, []), () => job,
+                () => new WifiLink(false, null, 0, []), () => job,
                 (_, _) => throw new InvalidOperationException("不应启动代理"), default);
             Require(disconnected.Boundary is null && disconnected.Failure?.Status == AuthPageHostStatus.NetworkBoundaryUnavailable,
                 "网卡未就绪时未失败关闭");
@@ -205,7 +205,7 @@ internal static class AuthPageBoundaryRegression
     ];
 
     private static WifiLink Link() =>
-        new(true, null, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
+        new(true, IPAddress.Parse("10.0.0.2"), 7, [IPAddress.Parse("10.0.0.1")]);
 
     private static StatusReading Reading(StatusSnapshot snapshot, DateTimeOffset now, bool trusted) =>
         new(snapshot, NetworkDisplayMap.Map(snapshot, TimeSpan.Zero), trusted, trusted, TimeSpan.Zero, now);

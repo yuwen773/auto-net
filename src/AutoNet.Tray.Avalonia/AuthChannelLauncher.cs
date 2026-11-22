@@ -26,7 +26,6 @@ internal sealed class AuthChannelLauncher
         UntrustedState,
         UacDeclined,
         StartFailed,
-        ResultConsumed,
     }
 
     public const string ResultFileName = "auth-channel-result.json";

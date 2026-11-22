@@ -15,11 +15,10 @@ public enum AuthPageStep
     AwaitResult
 }
 
-/// <summary>步骤的受控状态。只有 <see cref="Started"/> 与 <see cref="Completed"/> 代表动作真的发生。</summary>
+/// <summary>步骤的受控状态。只有 <see cref="Completed"/> 代表动作真的发生。</summary>
 public enum AuthPageStepState
 {
     Idle,
-    Started,
     Completed,
     Skipped,
     Unavailable,
@@ -137,17 +136,8 @@ public sealed class AuthPagePointerPolicy
     /// <summary>系统或页面要求减少动画时，覆盖层显示静态状态而不是动画。</summary>
     public bool ReducedMotion { get; private set; }
 
-    /// <summary>只有未处于接管时才允许自动操作；空闲时间本身不会清除接管。</summary>
-    public bool CanAutoAct => !TakeoverActive;
-
     /// <summary>距最近一次受信任输入的时长；从未交互时返回 <see cref="TimeSpan.MaxValue"/>。</summary>
     public TimeSpan IdleFor(TimeSpan now) => lastInteraction is { } last ? now - last : TimeSpan.MaxValue;
-
-    /// <summary>开始一个真实步骤：目标可用时显示指针，否则降级为步骤提示。</summary>
-    public void StartStep(AuthPageStep step, AuthPageTarget target) => view = target.Available
-        ? new(AuthPageStepState.Started, step, true, target.X, target.Y, Label(step), "", TakeoverActive, ReducedMotion)
-        : new(AuthPageStepState.Unavailable, step, false, 0, 0, Label(step), Hint(step, AuthPageStepReason.TargetUnavailable),
-            TakeoverActive, ReducedMotion);
 
     /// <summary>步骤完成：保留最后真实目标作为静态指示，不额外播放动画。</summary>
     public void CompleteStep(AuthPageStep step, AuthPageTarget target) => view = target.Available

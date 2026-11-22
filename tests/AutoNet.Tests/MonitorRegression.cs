@@ -217,13 +217,13 @@ internal static class MonitorRegression
             fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
             fixture.Clock.Advance(TimeSpan.FromSeconds(15)); await worker.RunOnceAsync(default);
             Require(fixture.Disconnects == 1 && fixture.Connects == 0);
-            fixture.Link = new(false, null, null, 7, []);
+            fixture.Link = new(false, null, 7, []);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
             Require(fixture.Connects == 1);
-            fixture.Link = new(true, null, null, 7, []);
+            fixture.Link = new(true, null, 7, []);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
             Require(fixture.Connects == 1 && fixture.Http.Requests.All(u => u.AbsolutePath != "/eportal/portal/login"));
-            fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []);
+            fixture.Link = new(true, IPAddress.Parse("10.0.0.1"), 7, []);
             fixture.Http.PortalResult = "0";
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); var accepted = await worker.RunOnceAsync(default);
             Require(accepted.CredentialRequestStarted && accepted.AuthenticationAcceptedAt is not null && accepted.Direct != "外网可达");
@@ -338,8 +338,8 @@ internal static class MonitorRegression
         ("监测：关联、DHCP、不可用网卡和用户切网不触发重连", async () =>
         {
             foreach (var link in new WifiLink[] {
-                new(false, null, null, 7, [], Connecting: true), new(true, null, null, 7, []),
-                new(false, null, null, 0, []), new(true, null, IPAddress.Parse("10.0.0.1"), 7, [], OtherProfile: true) })
+                new(false, null, 7, [], Connecting: true), new(true, null, 7, []),
+                new(false, null, 0, []), new(true, IPAddress.Parse("10.0.0.1"), 7, [], OtherProfile: true) })
             {
                 var fixture = new MonitorFixture { Link = link };
                 using var worker = new MonitorWorker(fixture, fixture.Clock);
@@ -359,7 +359,7 @@ internal static class MonitorRegression
         }),
         ("监测：日志和状态写入失败后主恢复继续", async () =>
         {
-            var fixture = new MonitorFixture { Link = new(false, null, null, 7, []), FailStatus = true, FailLog = true };
+            var fixture = new MonitorFixture { Link = new(false, null, 7, []), FailStatus = true, FailLog = true };
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             var failed = await worker.RunOnceAsync(default);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2)); await worker.RunOnceAsync(default);
@@ -391,7 +391,7 @@ internal static class MonitorRegression
         ("监测：辅助阻塞不阻塞恢复也不积累重叠检测", async () =>
         {
             var pending = new TaskCompletionSource<(string, string)>();
-            var fixture = new MonitorFixture { Link = new(false, null, null, 7, []),
+            var fixture = new MonitorFixture { Link = new(false, null, 7, []),
                 Auxiliary = (n, _) => n == 1 ? pending.Task : Task.FromResult(("重新检测成功", "会话待实测")) };
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             await worker.RunOnceAsync(default);
@@ -406,7 +406,7 @@ internal static class MonitorRegression
         ("监测：辅助检测阻塞多个周期仍单飞且主循环持续推进", async () =>
         {
             var pending = new TaskCompletionSource<(string, string)>();
-            var fixture = new MonitorFixture { Link = new(false, null, null, 7, []),
+            var fixture = new MonitorFixture { Link = new(false, null, 7, []),
                 Auxiliary = (n, _) => n == 1 ? pending.Task : Task.FromResult(("重新检测成功", "会话待实测")) };
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             await worker.RunOnceAsync(default);
@@ -426,14 +426,14 @@ internal static class MonitorRegression
         }),
         ("监测：系统时间跳变不改变重试和恢复耗时", async () =>
         {
-            var fixture = new MonitorFixture { Link = new(false, null, null, 7, []) };
+            var fixture = new MonitorFixture { Link = new(false, null, 7, []) };
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             await worker.RunOnceAsync(default);
             fixture.Clock.Advance(TimeSpan.FromSeconds(1), TimeSpan.FromHours(-2)); await worker.RunOnceAsync(default);
             Require(fixture.Connects == 1);
             fixture.Clock.Advance(TimeSpan.FromSeconds(1), TimeSpan.FromHours(3)); await worker.RunOnceAsync(default);
             Require(fixture.Connects == 2);
-            fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []); fixture.Http.Online = true;
+            fixture.Link = new(true, IPAddress.Parse("10.0.0.1"), 7, []); fixture.Http.Online = true;
             fixture.Clock.Advance(TimeSpan.FromSeconds(3), TimeSpan.FromDays(1));
             Require((await worker.RunOnceAsync(default)).LastRecoverySeconds == 5);
         }),
@@ -465,7 +465,7 @@ internal static class MonitorRegression
         }),
         ("辅助检测异常后可重试且主恢复继续", async () =>
         {
-            var fixture = new MonitorFixture { Link = new(false, null, null, 7, []) };
+            var fixture = new MonitorFixture { Link = new(false, null, 7, []) };
             fixture.Auxiliary = (_, _) => Task.FromException<(string, string)>(new IOException("fixture-secret-url"));
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             await worker.RunOnceAsync(default);
@@ -480,7 +480,7 @@ internal static class MonitorRegression
         }),
         ("监测：联网恢复只广播一次恢复通知，不随在线状态重复", async () =>
         {
-            var fixture = new MonitorFixture { Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []) };
+            var fixture = new MonitorFixture { Link = new(true, IPAddress.Parse("10.0.0.1"), 7, []) };
             fixture.Http.PortalResult = "0";
             using var worker = new MonitorWorker(fixture, fixture.Clock);
             var offline = await worker.RunOnceAsync(default);
@@ -496,7 +496,7 @@ internal static class MonitorRegression
         }),
         ("监测：进入安全暂停广播一次暂停通知，重启后重新可见", async () =>
         {
-            var fixture = new MonitorFixture { Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, []) };
+            var fixture = new MonitorFixture { Link = new(true, IPAddress.Parse("10.0.0.1"), 7, []) };
             fixture.Http.PortalResult = "0";
             fixture.Http.LoginResult = "{\"result\":0,\"msg\":\"密码错误\"}";
             using var worker = new MonitorWorker(fixture, fixture.Clock);
@@ -607,13 +607,13 @@ internal static class MonitorRegression
             using var worker = new MonitorWorker(fixture, fixture.Clock, qaSubmissionLost: true);
             await worker.RunOnceAsync(default);
             var chkstatusCalls = fixture.Http.Requests.Count(u => u.AbsolutePath == "/drcom/chkstatus");
-            fixture.Link = new(false, null, null, 7, []);
+            fixture.Link = new(false, null, 7, []);
             fixture.Clock.Advance(TimeSpan.FromSeconds(2));
             var offline = await worker.RunOnceAsync(default);
             Require(offline.CredentialsBlocked && fixture.ResolveCalls == 0);
             // Wi-Fi 未就绪时复检不发起任何请求，直接按未知处理并推进调度。
             Require(fixture.Http.Requests.Count(u => u.AbsolutePath == "/drcom/chkstatus") == chkstatusCalls);
-            fixture.Link = new(true, null, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
+            fixture.Link = new(true, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
             fixture.Http.PortalResult = "1";
             fixture.Clock.Advance(TimeSpan.FromSeconds(4));
             var resolved = await worker.RunOnceAsync(default);
@@ -790,7 +790,7 @@ internal sealed class MonitorFixture : IMonitorEnvironment
 {
     public readonly ManualClock Clock = new();
     public Settings Settings { get; set; } = new() { InterfaceId = "00000000-0000-0000-0000-000000000001", WifiProfile = "fixture" };
-    public WifiLink Link { get; set; } = new(true, null, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
+    public WifiLink Link { get; set; } = new(true, IPAddress.Parse("10.0.0.1"), 7, [IPAddress.Parse("10.0.0.2")]);
     public readonly MonitorHttp Http = new();
     public Func<int, CancellationToken, Task<(string, string)>> Auxiliary { get; set; } = (_, _) => Task.FromResult(("系统路径样本未知", "UU 会话待实测"));
     public int AuxiliaryCalls { get; private set; }

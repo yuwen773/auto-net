@@ -79,16 +79,16 @@ internal static class QaExport
                 await shell.SelectAsync(ShellPage.Diagnostics);
                 await Task.Delay(300);
 
-                await DriveAsync("cancel-pick-discards-everything", "cancel-pick", exporter, shell, qa);
+                await DriveAsync("cancel-pick-discards-everything", "cancel-pick", exporter, shell);
                 Require(LaunchTargets.Count == 0, "取消保存不应发起提权");
-                await DriveAsync("deny-uac-cancels-export", "deny-uac", exporter, shell, qa);
+                await DriveAsync("deny-uac-cancels-export", "deny-uac", exporter, shell);
                 Require(LaunchTargets.Count == 1 && LaunchTargets[0].EndsWith("chosen-diagnostic-package.zip", StringComparison.Ordinal),
                     "提权启动应逐字携带用户所选路径");
-                await DriveAsync("success-presents-target", "ok", exporter, shell, qa);
-                await DriveAsync("notes-listed-in-result", "notes", exporter, shell, qa);
-                await DriveAsync("failure-presents-controlled-kind", "fail", exporter, shell, qa);
-                await DriveAsync("pick-exception-controlled", "throw-pick", exporter, shell, qa);
-                await DriveAsync("launch-exception-controlled", "throw-launch", exporter, shell, qa);
+                await DriveAsync("success-presents-target", "ok", exporter, shell);
+                await DriveAsync("notes-listed-in-result", "notes", exporter, shell);
+                await DriveAsync("failure-presents-controlled-kind", "fail", exporter, shell);
+                await DriveAsync("pick-exception-controlled", "throw-pick", exporter, shell);
+                await DriveAsync("launch-exception-controlled", "throw-launch", exporter, shell);
 
                 // 诊断页导出卡的视觉证据（最终失败态之后恢复 ok 场景再截一张成功态）。
                 scenario = "ok";
@@ -128,7 +128,7 @@ internal static class QaExport
     }
 
     /// <summary>驱动一个场景：重置状态机上下文 → 发起导出 → 等待终态 → 记录证据。</summary>
-    private static async Task DriveAsync(string name, string withScenario, DiagnosticsExporter exporter, ShellController shell, QaEnvironment qa)
+    private static async Task DriveAsync(string name, string withScenario, DiagnosticsExporter exporter, ShellController shell)
     {
         lock (Gate) scenario = withScenario;
         var task = exporter.RunAsync();

@@ -11,7 +11,7 @@ public sealed record WifiProfile(string InterfaceId, string InterfaceName, strin
     public override string ToString() => $"{InterfaceName} · {Name}" + (AllUsers ? "" : "（仅当前用户）");
 }
 
-public sealed record WifiLink(bool Connected, NetworkInterface? Adapter, IPAddress? Address, int Index, IPAddress[] DnsServers, bool OtherProfile = false, bool Connecting = false, bool Unavailable = false)
+public sealed record WifiLink(bool Connected, IPAddress? Address, int Index, IPAddress[] DnsServers, bool OtherProfile = false, bool Connecting = false, bool Unavailable = false)
 {
     public WifiState State => OtherProfile ? WifiState.OtherProfile : Connecting ? WifiState.Associating : Index == 0 || Unavailable ? WifiState.Unavailable :
         !Connected ? WifiState.Disconnected : Address is null ? WifiState.WaitingForAddress : WifiState.Ready;
@@ -56,7 +56,7 @@ public static class Wifi
         var adapter = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(n =>
             n.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 &&
             Guid.TryParse(n.Id, out var id) && id == Guid.Parse(settings.InterfaceId));
-        if (adapter is null) return new(false, null, null, 0, []);
+        if (adapter is null) return new(false, null, 0, []);
         using var client = new WlanClient();
         var id = Guid.Parse(settings.InterfaceId);
         Check(WlanEnumInterfaces(client.Handle, IntPtr.Zero, out var list));
@@ -74,7 +74,7 @@ public static class Wifi
         var address = properties.UnicastAddresses.Select(a => a.Address).FirstOrDefault(a =>
             a.AddressFamily == AddressFamily.InterNetwork && !a.ToString().StartsWith("169.254.", StringComparison.Ordinal));
         var link = new WifiLink(false,
-            adapter, address, properties.GetIPv4Properties()?.Index ?? 0,
+            address, properties.GetIPv4Properties()?.Index ?? 0,
             properties.DnsAddresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork).ToArray());
         return ReadConnection(link, state, settings.WifiProfile, () => Current(client.Handle, id));
     }

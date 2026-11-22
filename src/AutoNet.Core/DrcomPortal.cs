@@ -207,9 +207,6 @@ public sealed class DrcomPortal(HttpClient http, Uri origin, Action<PortalStep>?
         return values;
     }
 
-    public async Task<LoginResult> LoginAsync(Credentials credentials, CancellationToken ct) =>
-        (await LoginDetailedAsync(credentials, ct)).Result;
-
     public Task<PortalAttempt> LoginDetailedAsync(Credentials credentials, CancellationToken ct, Func<CancellationToken, bool>? authorizeSubmission = null,
         bool allowUnknownStatus = false, Func<CancellationToken, Task<bool>>? authorizeSubmissionAsync = null)
         => ExecuteAsync(credentials, ct, authorizeSubmission, allowUnknownStatus, authorizeSubmissionAsync);

@@ -200,7 +200,7 @@ internal static class OverviewModel
         IReadOnlyList<OverviewRow> progress = snapshot is null
             ? [new OverviewRow("进度", display.Title + "，暂不显示进度信息。")]
             : ProgressRows(snapshot, submission);
-        IReadOnlyList<OverviewChip> chips = snapshot is null ? [] : Chips(display.Additional, display.Primary, snapshot, submission);
+        IReadOnlyList<OverviewChip> chips = snapshot is null ? [] : Chips(display.Additional, display.Primary, submission);
 
         var content = new OverviewContent
         {
@@ -531,7 +531,7 @@ internal static class OverviewModel
     }
 
     // 附加事实标签：恢复开关关闭由进度行与开关呈现，不重复为标签；额度用尽已是主状态时不重复。
-    private static IReadOnlyList<OverviewChip> Chips(NetworkAdditional additional, NetworkPrimaryState primary, StatusSnapshot snapshot, OverviewSubmissionBudget submission)
+    private static IReadOnlyList<OverviewChip> Chips(NetworkAdditional additional, NetworkPrimaryState primary, OverviewSubmissionBudget submission)
     {
         var chips = new List<OverviewChip>();
         if (additional.HasFlag(NetworkAdditional.DisconnectQuotaExhausted) && primary != NetworkPrimaryState.DisconnectQuotaExhausted)

@@ -282,7 +282,12 @@ internal static class LogsModel
         if (entry.CredentialRequestStarted == true) lines.Add("已发起凭据请求");
         lines.Add("");
         lines.Add("说明：");
-        lines.Add(entry.Detail);
+        var detail = entry.Detail ?? "";
+        lines.Add(detail);
+        // 旧记录的渲染曾只出现在未再使用的兼容入口里；这里保持与新版详情相同的安全说明，
+        // 避免旧日志被读成“程序已自动修复”或“重新保存密码即可解除暂停”。
+        if (detail.Contains("请重新保存凭据", StringComparison.Ordinal)) lines.Add(ActivityLog.ResaveCredentialNote);
+        if (entry.Action == "恢复联网") lines.Add(ActivityLog.LegacyRecoveryNote);
         return string.Join(Environment.NewLine, lines);
     }
 

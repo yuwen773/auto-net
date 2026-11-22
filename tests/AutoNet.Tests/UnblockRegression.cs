@@ -508,8 +508,8 @@ internal static class UnblockRegression
         }
 
         private WifiLink ReadLink() => LinkReady
-            ? new(true, null, IPAddress.Parse(LinkAddress), LinkIndex, [])
-            : new(false, null, null, 0, []);
+            ? new(true, IPAddress.Parse(LinkAddress), LinkIndex, [])
+            : new(false, null, 0, []);
 
         private Settings? LoadSettings() => File.Exists(SettingsPath)
             ? JsonSerializer.Deserialize<Settings>(Storage.ReadShared(SettingsPath), Storage.Json) : null;

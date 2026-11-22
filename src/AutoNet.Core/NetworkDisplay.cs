@@ -67,10 +67,7 @@ public sealed record NetworkDisplay(
     string Title,
     string Explanation,
     string NextStep,
-    string TechnicalDetail)
-{
-    public bool IsHealthy => Primary == NetworkPrimaryState.Online;
-}
+    string TechnicalDetail);
 
 /// <summary>
 /// Pure projection from <see cref="StatusSnapshot"/> to the state the window renders. No I/O, no
