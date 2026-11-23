@@ -1,1 +1,3 @@
 *.sh text eol=lf
+# 黄金夹具由导出器生成 LF；固定行尾，避免 autocrlf 让逐字节比对在 CI 上漂移。
+fixtures/cross-language/*.json text eol=lf

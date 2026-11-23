@@ -1,0 +1,1224 @@
+{
+  "schema": "autonet.golden.recovery/1",
+  "constants": {
+    "fastRetrySeconds": 2,
+    "fastRetryWindowSeconds": 15,
+    "backoffCeilingSeconds": 60,
+    "disconnectCooldownSeconds": 120,
+    "disconnectAttemptCap": 3,
+    "stalledRoundThreshold": 3,
+    "stalledObservationSeconds": 30,
+    "onlineResetSeconds": 60,
+    "authenticationAttemptCap": 3
+  },
+  "cases": [
+    {
+      "name": "联网稳定时不执行任何动作",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": true,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "Online",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "None",
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "断连优先重连，快重试 2 秒，第 4 次后 60 秒封顶",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Disconnected",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "ReconnectWifi",
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225600000,
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225601000,
+          "wifi": "Disconnected",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "ReconnectWifiCooldown",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225602000,
+          "wifi": "Disconnected",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "ReconnectWifi",
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225602000,
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 2,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225604000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225604000,
+          "wifi": "Disconnected",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "ReconnectWifi",
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 2,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225604000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225604000,
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 3,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225606000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225624000,
+          "wifi": "Disconnected",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "ReconnectWifi",
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 3,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225606000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225624000,
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 4,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225644000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225684000,
+          "wifi": "Disconnected",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "ReconnectWifi",
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 4,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225644000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225684000,
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 5,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225724000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225744000,
+          "wifi": "Disconnected",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "ReconnectWifi",
+          "expect": {
+            "reason": "ReconnectWifiRequired",
+            "attempts": 5,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225724000,
+            "nextAttemptAction": "ReconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "确认需要认证时立即提交，冷却期不重复",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "Authenticate",
+          "expect": {
+            "reason": "AuthenticateRequired",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225600000,
+          "expect": {
+            "reason": "AuthenticateRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225601000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "AuthenticateCooldown",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225602000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "Authenticate",
+          "expect": {
+            "reason": "AuthenticateRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "已认证但上游故障不提交密码",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "LoggedIn",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 1,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "门户未知时连续 3 轮且满 30 秒才主动断线",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 1,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225610000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 2,
+            "observationSeconds": 10,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225630000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "DisconnectWifi",
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 3,
+            "observationSeconds": 30,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "主动断线完成前保持未确认，完成后按 120 秒冷却累计 3 次上限",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 1,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225630000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 2,
+            "observationSeconds": 30,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225660000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "DisconnectWifi",
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 3,
+            "observationSeconds": 60,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225660000,
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 1,
+            "disconnectAttempts": 1,
+            "nextAttempt": 1767225780000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 3,
+            "observationSeconds": 60,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225661000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "DisconnectCompletionUnconfirmed",
+            "attempts": 1,
+            "disconnectAttempts": 1,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 4,
+            "observationSeconds": 61,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "disconnectCompleted",
+          "now": 1767225665000,
+          "expect": {
+            "reason": "DisconnectCompletionUnconfirmed",
+            "attempts": 1,
+            "disconnectAttempts": 1,
+            "nextAttempt": 1767225785000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 4,
+            "observationSeconds": 65,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225785000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "DisconnectWifi",
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 1,
+            "disconnectAttempts": 1,
+            "nextAttempt": 1767225785000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 5,
+            "observationSeconds": 185,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225785000,
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 2,
+            "disconnectAttempts": 2,
+            "nextAttempt": 1767225905000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 5,
+            "observationSeconds": 185,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "disconnectCompleted",
+          "now": 1767225790000,
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 2,
+            "disconnectAttempts": 2,
+            "nextAttempt": 1767225910000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 5,
+            "observationSeconds": 190,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225910000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "DisconnectWifi",
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 2,
+            "disconnectAttempts": 2,
+            "nextAttempt": 1767225910000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 6,
+            "observationSeconds": 310,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225910000,
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 3,
+            "disconnectAttempts": 3,
+            "nextAttempt": 1767226030000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 6,
+            "observationSeconds": 310,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "disconnectCompleted",
+          "now": 1767225915000,
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 3,
+            "disconnectAttempts": 3,
+            "nextAttempt": 1767226035000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 6,
+            "observationSeconds": 315,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767226030000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "DisconnectBudgetExhausted",
+            "attempts": 3,
+            "disconnectAttempts": 3,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 7,
+            "observationSeconds": 430,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "恢复在线连续满 60 秒才重置断线额度",
+      "steps": [
+        {
+          "op": "restoreDisconnectBudget",
+          "now": 1767225600000,
+          "budgetAttempts": 2,
+          "budgetState": "Completed",
+          "budgetCompletedAt": 1767225700000,
+          "expect": {
+            "reason": "NotEvaluated",
+            "attempts": 0,
+            "disconnectAttempts": 2,
+            "nextAttemptAction": "None",
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": true,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "Online",
+            "attempts": 0,
+            "disconnectAttempts": 2,
+            "nextAttemptAction": "None",
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225660000,
+          "wifi": "Ready",
+          "directOnline": true,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "Online",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "None",
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "重启后未确认的断线请求保持阻断",
+      "steps": [
+        {
+          "op": "restoreDisconnectBudget",
+          "now": 1767225600000,
+          "budgetAttempts": 1,
+          "budgetState": "RequestPending",
+          "budgetCompletedAt": 1767225600000,
+          "expect": {
+            "reason": "NotEvaluated",
+            "attempts": 0,
+            "disconnectAttempts": 1,
+            "nextAttemptAction": "None",
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "DisconnectCompletionUnconfirmed",
+            "attempts": 0,
+            "disconnectAttempts": 1,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 1,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225630000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "DisconnectCompletionUnconfirmed",
+            "attempts": 0,
+            "disconnectAttempts": 1,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 2,
+            "observationSeconds": 30,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "恢复禁用、凭据缺失与暂停时都不动作",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": false,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "RecoveryDisabled",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "None",
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": false,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "CredentialsMissing",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "setCredentialsBlocked",
+          "now": 1767225600000,
+          "credentialsBlocked": true,
+          "expect": {
+            "reason": "CredentialsMissing",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": true
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "AuthenticationPaused",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "关闭主动断线后门户未知不触发断线",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": false,
+          "action": "None",
+          "expect": {
+            "reason": "ActiveDisconnectDisabled",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "认证退避可被显式推迟",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "Authenticate",
+          "expect": {
+            "reason": "AuthenticateRequired",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225600000,
+          "expect": {
+            "reason": "AuthenticateRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "deferAuthentication",
+          "now": 1767225720000,
+          "deferUntil": 1767225720000,
+          "expect": {
+            "reason": "AuthenticateRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225602000,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225602000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "AuthenticateCooldown",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225720000,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225720000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "NeedsLogin",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "Authenticate",
+          "expect": {
+            "reason": "AuthenticateRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225720000,
+            "nextAttemptAction": "Authenticate",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "观察中断清空连续失败采样",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 1,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225610000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 2,
+            "observationSeconds": 10,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "interruptObservation",
+          "now": 1767225600000,
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 0,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225640000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225670000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 1,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "撤销未发出的断线预留后重新可请求",
+      "steps": [
+        {
+          "op": "observe",
+          "now": 1767225600000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 1,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225630000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "None",
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 0,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 2,
+            "observationSeconds": 30,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "attempted",
+          "now": 1767225630000,
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225640000,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 2,
+            "observationSeconds": 30,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "cancelUnissuedDisconnectReservation",
+          "now": 1767225600000,
+          "expect": {
+            "reason": "InsufficientFailureSamples",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225640000,
+            "nextAttemptAction": "None",
+            "outageSince": 1767225600000,
+            "failedRounds": 2,
+            "observationSeconds": 0,
+            "credentialsBlocked": false
+          }
+        },
+        {
+          "op": "observe",
+          "now": 1767225631000,
+          "wifi": "Ready",
+          "directOnline": false,
+          "portal": "Unknown",
+          "enabled": true,
+          "hasCredentials": true,
+          "allowActiveDisconnect": true,
+          "action": "DisconnectWifi",
+          "expect": {
+            "reason": "DisconnectWifiRequired",
+            "attempts": 1,
+            "disconnectAttempts": 0,
+            "nextAttempt": 1767225630000,
+            "nextAttemptAction": "DisconnectWifi",
+            "outageSince": 1767225600000,
+            "failedRounds": 3,
+            "observationSeconds": 31,
+            "credentialsBlocked": false
+          }
+        }
+      ]
+    }
+  ]
+}

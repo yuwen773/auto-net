@@ -1,0 +1,167 @@
+{
+  "schema": "autonet.golden.submission-budget/1",
+  "cases": [
+    {
+      "name": "文件不存在表示没有额度记录",
+      "expect": {
+        "outcome": "Missing"
+      }
+    },
+    {
+      "name": "已重置的零次记录有效",
+      "content": "{\"Version\":1,\"State\":\"Concluded\",\"Attempts\":0,\"ReservedAt\":\"0001-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Valid",
+        "state": "Concluded",
+        "attempts": 0,
+        "exhausted": false
+      }
+    },
+    {
+      "name": "预留中的一次记录有效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Valid",
+        "state": "Reserved",
+        "attempts": 1,
+        "reservedAt": 1767225600000,
+        "nextPossibleAt": 1767225720000,
+        "exhausted": false
+      }
+    },
+    {
+      "name": "可能已发出的两次记录有效",
+      "content": "{\"Version\":1,\"State\":\"PossiblySent\",\"Attempts\":2,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Valid",
+        "state": "PossiblySent",
+        "attempts": 2,
+        "reservedAt": 1767225600000,
+        "nextPossibleAt": 1767225720000,
+        "exhausted": false
+      }
+    },
+    {
+      "name": "已结束但保留次数的记录有效",
+      "content": "{\"Version\":1,\"State\":\"Concluded\",\"Attempts\":2,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Valid",
+        "state": "Concluded",
+        "attempts": 2,
+        "reservedAt": 1767225600000,
+        "nextPossibleAt": 1767225720000,
+        "exhausted": false
+      }
+    },
+    {
+      "name": "三次记录有效且视为耗尽",
+      "content": "{\"Version\":1,\"State\":\"PossiblySent\",\"Attempts\":3,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Valid",
+        "state": "PossiblySent",
+        "attempts": 3,
+        "reservedAt": 1767225600000,
+        "nextPossibleAt": 1767225720000,
+        "exhausted": true
+      }
+    },
+    {
+      "name": "未知版本无效",
+      "content": "{\"Version\":2,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "未知状态字符串无效",
+      "content": "{\"Version\":1,\"State\":\"Done\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "次数越界无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":4,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "零次但非结束态无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":0,\"ReservedAt\":\"0001-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "零次但带时刻无效",
+      "content": "{\"Version\":1,\"State\":\"Concluded\",\"Attempts\":0,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "有次数但缺预留时刻无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"0001-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "间隔不足 120 秒无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:01:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "多余字段无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\",\"Extra\":1}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "重复字段无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"22222222-2222-2222-2222-222222222222\",\"Attempts\":1}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "缺字段无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "Revision 不是 GUID 无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"not-a-guid\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "Revision 带花括号无效",
+      "content": "{\"Version\":1,\"State\":\"Reserved\",\"Attempts\":1,\"ReservedAt\":\"2026-01-01T00:00:00+00:00\",\"NextPossibleAt\":\"2026-01-01T00:02:00+00:00\",\"Revision\":\"{22222222-2222-2222-2222-222222222222}\"}",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "非对象无效",
+      "content": "[]",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    },
+    {
+      "name": "破损 JSON 无效",
+      "content": "{broken",
+      "expect": {
+        "outcome": "Invalid"
+      }
+    }
+  ]
+}

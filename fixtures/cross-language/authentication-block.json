@@ -1,0 +1,443 @@
+{
+  "schema": "autonet.golden.authentication-block/1",
+  "cases": [
+    {
+      "name": "文件不存在时返回空",
+      "expect": {
+        "kind": "Missing"
+      }
+    },
+    {
+      "name": "64 位大写十六进制指纹按人工暂停",
+      "content": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expect": {
+        "kind": "LegacyFingerprintShape",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "64 位小写十六进制指纹按人工暂停",
+      "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": {
+        "kind": "LegacyFingerprintShape",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "64 位全零指纹按人工暂停",
+      "content": "0000000000000000000000000000000000000000000000000000000000000000",
+      "expect": {
+        "kind": "LegacyFingerprintShape",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 记录保留原始失败分类",
+      "content": "{\r\n  \"Failure\": 15\r\n}",
+      "expect": {
+        "kind": "LegacyRecord",
+        "blocksSubmissions": true,
+        "state": "CredentialsRejected",
+        "failure": "CredentialsRejected",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 绑定拒绝保留分类",
+      "content": "{\r\n  \"Failure\": 19\r\n}",
+      "expect": {
+        "kind": "LegacyRecord",
+        "blocksSubmissions": true,
+        "state": "BindingRejected",
+        "failure": "BindingRejected",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 需要人工交互保留分类",
+      "content": "{\r\n  \"Failure\": 16\r\n}",
+      "expect": {
+        "kind": "LegacyRecord",
+        "blocksSubmissions": true,
+        "state": "InteractionRequired",
+        "failure": "InteractionRequired",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 缺网关参数保留分类",
+      "content": "{\r\n  \"Failure\": 18\r\n}",
+      "expect": {
+        "kind": "LegacyRecord",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "MissingGatewayParameters",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 安全写入失败保留分类",
+      "content": "{\r\n  \"Failure\": 20\r\n}",
+      "expect": {
+        "kind": "LegacyRecord",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "SafetyPersistence",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 无原因仍按暂停",
+      "content": "{\r\n  \"Failure\": 0\r\n}",
+      "expect": {
+        "kind": "LegacyRecord",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 字符串枚举无法解释仍阻断",
+      "content": "{\"Failure\":\"CredentialsRejected\"}",
+      "expect": {
+        "kind": "InvalidJson",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "失败-only 越界失败值仍阻断",
+      "content": "{\"Failure\":99}",
+      "expect": {
+        "kind": "LegacyRecord",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "缺 Revision 的当前记录按缺字段阻断",
+      "content": "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\"}",
+      "expect": {
+        "kind": "MissingFields",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "Revision 不是 GUID 时按无效 JSON 阻断",
+      "content": "{\"Version\":1,\"State\":0,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"not-a-guid\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "InvalidJson",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "Revision 带花括号时按无效 JSON 阻断",
+      "content": "{\"Version\":1,\"State\":0,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"{11111111-1111-1111-1111-111111111111}\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "InvalidJson",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "只有版本字段按缺字段阻断",
+      "content": "{\"Version\":1}",
+      "expect": {
+        "kind": "MissingFields",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "重复版本字段按缺字段阻断",
+      "content": "{\"Version\":1,\"Version\":1}",
+      "expect": {
+        "kind": "MissingFields",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "未知版本按不支持阻断",
+      "content": "{\"Version\":99,\"State\":0,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "UnsupportedVersion",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "未知状态按无效阻断",
+      "content": "{\"Version\":1,\"State\":42,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "InvalidState",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "尝试次数越界按无效阻断",
+      "content": "{\"Version\":1,\"State\":0,\"Failure\":0,\"Attempts\":4,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "InvalidState",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "提交待确认但次数为零按无效阻断",
+      "content": "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":0,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "InvalidState",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "破损 JSON 按无效阻断",
+      "content": "{broken",
+      "expect": {
+        "kind": "InvalidJson",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "空文件按无效阻断",
+      "content": "",
+      "expect": {
+        "kind": "InvalidJson",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "状态写成字符串按无效阻断",
+      "content": "{\"Version\":1,\"State\":\"Ready\",\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\"}",
+      "expect": {
+        "kind": "InvalidJson",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "次数写成字符串按无效阻断",
+      "content": "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":\"1\",\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\"}",
+      "expect": {
+        "kind": "InvalidJson",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "数组按非对象阻断",
+      "content": "[]",
+      "expect": {
+        "kind": "NonObject",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "数字按非对象阻断",
+      "content": "0",
+      "expect": {
+        "kind": "NonObject",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "字符串按非对象阻断",
+      "content": "\"ready\"",
+      "expect": {
+        "kind": "NonObject",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "当前就绪记录不阻断",
+      "content": "{\"Version\":1,\"State\":0,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "CurrentRecord",
+        "blocksSubmissions": false,
+        "state": "Ready",
+        "failure": "None",
+        "attempts": 1,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "提交待确认记录不授予提交",
+      "content": "{\"Version\":1,\"State\":1,\"Failure\":0,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "CurrentRecord",
+        "blocksSubmissions": true,
+        "state": "SubmissionPending",
+        "failure": "None",
+        "attempts": 1,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "冷却记录允许重试且保留退避",
+      "content": "{\"Version\":1,\"State\":2,\"Failure\":13,\"Attempts\":2,\"RetryDelaySeconds\":60,\"RetryNotBefore\":\"2026-01-01T00:01:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "CurrentRecord",
+        "blocksSubmissions": false,
+        "state": "RetryCoolingDown",
+        "failure": "Transport",
+        "attempts": 2,
+        "retryDelaySeconds": 60
+      }
+    },
+    {
+      "name": "凭据拒绝终态阻断",
+      "content": "{\"Version\":1,\"State\":4,\"Failure\":15,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "CurrentRecord",
+        "blocksSubmissions": true,
+        "state": "CredentialsRejected",
+        "failure": "CredentialsRejected",
+        "attempts": 1,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "设备绑定拒绝终态阻断",
+      "content": "{\"Version\":1,\"State\":3,\"Failure\":19,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "CurrentRecord",
+        "blocksSubmissions": true,
+        "state": "BindingRejected",
+        "failure": "BindingRejected",
+        "attempts": 1,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "需要人工交互终态阻断",
+      "content": "{\"Version\":1,\"State\":5,\"Failure\":16,\"Attempts\":3,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "CurrentRecord",
+        "blocksSubmissions": true,
+        "state": "InteractionRequired",
+        "failure": "InteractionRequired",
+        "attempts": 3,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "交互终态可带结构类降级原因",
+      "content": "{\"Version\":1,\"State\":5,\"Failure\":16,\"Attempts\":3,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":18}",
+      "expect": {
+        "kind": "CurrentRecord",
+        "blocksSubmissions": true,
+        "state": "InteractionRequired",
+        "failure": "InteractionRequired",
+        "attempts": 3,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "非交互态带降级原因按不一致阻断",
+      "content": "{\"Version\":1,\"State\":3,\"Failure\":19,\"Attempts\":1,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":18}",
+      "expect": {
+        "kind": "InconsistentState",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    },
+    {
+      "name": "冷却记录缺退避时刻按无效阻断",
+      "content": "{\"Version\":1,\"State\":2,\"Failure\":13,\"Attempts\":2,\"RetryDelaySeconds\":0,\"RetryNotBefore\":\"0001-01-01T00:00:00+00:00\",\"Revision\":\"11111111-1111-1111-1111-111111111111\",\"ChannelFallbackCause\":0}",
+      "expect": {
+        "kind": "InvalidState",
+        "blocksSubmissions": true,
+        "state": "SafetyBlocked",
+        "failure": "None",
+        "attempts": 0,
+        "retryDelaySeconds": 0
+      }
+    }
+  ]
+}
