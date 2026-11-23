@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "只读预览：仅核心默认能力；不授予 shell、文件系统、HTTP 或进程执行权限。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
