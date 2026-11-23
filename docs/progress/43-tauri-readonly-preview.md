@@ -70,9 +70,59 @@ Rust 测试合计 29 个（contracts 单元 7 + 投影 3、core 单元 3 + golde
 | React typecheck/test/build | **PASS** | 本机 10 个 Vitest；CI 前端步骤通过 |
 | 跨语言夹具与安装契约 | **PASS** | 本机与 CI parity 均通过 |
 | Tauri Windows 原生构建 | **PASS（CI）** | MSVC runner 上的 `tauri build --no-bundle` 通过 |
-| Tauri 原生启动、GUI、托盘、单实例、关闭隐藏 | **NOT_RUN** | 待在隔离 Windows 11 环境用普通用户执行 |
-| 真实非管理员 / UAC / 高 DPI | **NOT_RUN** | 同上 |
+| Tauri 原生启动、GUI、托盘、单实例、关闭隐藏 | **PASS（主机）** | 2026-11-23 在本机以普通用户实跑，见下节 |
+| 真实非管理员 / UAC / 高 DPI | **PARTIAL（主机）** | 非管理员启动通过；未触发 UAC；主机 100% DPI，125%/150% 待隔离 VM |
+| 隔离 Windows 11 VM 共存验收 | **NOT_RUN** | 当前环境没有可用 VM；主机结果不能替代 |
 | 真实安装/升级/卸载、实网认证 | **NOT_RUN** | 按边界不在本机执行 |
+
+### 主机普通用户非破坏性运行验收（2026-11-23，SAIL）
+
+本节是**主机验收**，不等同于隔离 Windows 11 VM 共存验收；M1 不因本节关闭。
+
+环境与方法：Windows 11 家庭版 26200，用户 `SAIL\yuwen`（`isAdmin=False`），系统缩放 100%（96 DPI），
+WebView2 `158.0.4370.33`。运行对象是 CI run
+[45123544743](https://github.com/yuwen773/auto-net/actions/runs/45123544743) 的 `autonet-preview` artifact，
+`head_sha` `b2357807e34e74af59cdd9342ce5d761d39d2cf0`；artifact zip SHA-256
+`2BFA6F571A54EF83206FF65ED7066DE074F686DFEC48E958F6EAB33C64CFF19D`，解压出的
+`autonet-preview.exe` SHA-256 `E2E8CF14F949053FD354F9E1FCC68B83823E1AFD6F55DAAC811BF14B5DEEBACA`，
+产品名 `AutoNet Preview`，文件版本 `0.1.0`，`NotSigned`。该文件是 CI 构建产物，不是正式发布件。
+
+基线：`AutoNet` 服务 `Running`（PID 15508），HKLM Run 项仍为
+`"C:\Program Files\AutoNet\tray\AutoNet.Tray.exe" --tray`；`C:\ProgramData\AutoNet\private` 对普通用户
+ACL 拒绝；无 `autonet-preview` 进程或托盘图标。全程未执行 `install.ps1`、未停止/启动服务、
+未读取/写入 `private` 内容（仅尝试读取 ACL 以确认普通用户被拒绝）、未提交凭据、未主动触发联网恢复。
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 普通用户启动、无 UAC | **PASS** | 进程未提权；窗口标题 `AutoNet Preview（只读）` |
+| 只读状态页与边界说明 | **PASS** | 显示“校园网在线”“AutoNet · 已安装”“正在运行”与“只读边界”，无保存/诊断入口 |
+| 托盘图标与菜单 | **PASS** | 溢出区可见 `AutoNet Preview（只读）`；菜单为“显示主窗口”“退出预览” |
+| 关闭即隐藏 | **PASS** | 发送 `WM_CLOSE` 后主窗口 `IsWindowVisible=False`，进程仍存活 |
+| 托盘左键恢复 | **PASS** | 点击托盘图标后主窗口重新可见 |
+| 单实例 | **PASS** | 再次启动 `autonet-preview.exe` 以退出码 0 结束，原窗口恢复，进程数保持 1 |
+| 主题切换 | **PASS** | `浅色`/`深色` 可切换并立即重绘；键盘 Space 可激活；重启后仍保持深色 |
+| 日志页 | **PASS** | 当日尾部 200 条、可切到 2026-11-22、可刷新；仅显示白名单字段 |
+| 键盘顺序 | **PASS** | Tab 顺序为“跟随系统 → 浅色 → 深色 → 刷新状态 → 日期 → 刷新 → 日志列表” |
+| 最小/大窗口 | **PASS** | 900×620（配置最小值）与 1600×1000 均正常重排，无崩溃 |
+| 现有服务独立性 | **PASS** | 服务 PID 15508 全程及退出后均为 `Running`；Run 项不变；非日志稳定文件哈希前后一致；仅当日日志追加 |
+| 高 DPI 125%/150% | **NOT_RUN** | 主机固定 100%；更改缩放需注销/重登，留待隔离 VM |
+| UAC/提权路径 | **NOT_RUN** | 预览以 `asInvoker` 普通用户运行，未触发 UAC |
+| 隔离 VM 共存 | **NOT_RUN** | 当前环境无可用 VM |
+
+现场事件说明：验收窗口内（15:02:03–15:02:40）现有 C# 服务按其自身策略完成了一次门户 `Transport`
+失败后的恢复动作：15:02:33 开始恢复并写入安全状态，15:02:36 请求 Wi-Fi 断开/重连，随后状态变为
+“已切换其他 Wi-Fi”，`DisconnectAttempts=1`。这些动作由服务进程自主执行，不是预览命令；预览的四个命令
+均为只读，没有服务控制、Wi-Fi 写入或凭据提交面。记录此事件是为了说明主机不是静默环境，不能把它当作
+预览触发的恢复测试；本次日志中未观察到 `Submission` 阶段的认证提交事件。隔离 VM 验收仍应在服务静默或
+可控条件下重做。
+
+普通用户无法读取 `private`，因此不能做该目录内容的前后哈希比对；只能确认 ACL 始终拒绝、目录 mtime 在
+15:02:36 由服务自身的安全状态写入更新。非 `private` 的稳定文件哈希前后一致；当日日志由 6,759,031 字节
+增长到 7,024,560 字节，旧日志未变。截图、UI 树与 before/after JSON 保存在本地 gitignored 的
+`artifacts/acceptance/host-2026-11-23/`，未提交，避免把桌面截图带入仓库。
+
+结论：主机非破坏性运行验收通过；隔离 Windows 11 VM 共存仍未验证。M1 保持打开，PR #64 保持 Draft，
+不启动 M2 功能迁移。
 
 ## 独立评审后的修复
 
@@ -93,12 +143,11 @@ Rust 测试合计 29 个（contracts 单元 7 + 投影 3、core 单元 3 + golde
 
 ## 未运行（NOT_RUN）
 
-- **Tauri Windows 原生启动**：原生构建已在 CI 的 MSVC runner 上通过；本机没有 MSVC 链接器，
-  GNU 工具链链接 cdylib 时报 `export ordinal too large`，因此 WebView2 窗口、托盘、单实例与关闭隐藏
-  仍未在本机实跑，也未在隔离 Windows 11 环境验收。
-- **真实非管理员账户启动**、真实 UAC、真实 Windows 11 VM 的视觉/键盘/高 DPI 检查。
+- **隔离 Windows 11 VM 共存验收**：当前环境没有可用 VM；主机普通用户验收不能替代隔离环境证据。
+- **高 DPI 125%/150% 与真实 UAC 提权**：主机固定 100% 缩放，预览以 `asInvoker` 运行，未触发 UAC。
 - **真实安装/升级/卸载**：按要求不在本机执行 `install.ps1`；预览不生成安装器，也未注册服务。
-- **校园网在线/离线现场验收**：未做任何会改变连接或提交凭据的实网测试。
+- **主动的校园网在线/离线现场验收**：未由本次验收主动执行会改变连接或提交凭据的实网测试；
+  验收窗口内现有服务自身发生过一次恢复动作（见上节），不计为预览验收结果。
 - 浏览器版回退页只在单测中覆盖，未在真实浏览器做端到端检查。
 
 ## 已知限制
