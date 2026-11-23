@@ -1,0 +1,12 @@
+[package]
+name = "autonet-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AutoNet 跨语言只读 DTO 与脱敏投影（P0/P1）"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
