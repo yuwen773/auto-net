@@ -46,12 +46,33 @@
 | --- | --- | --- |
 | `pwsh scripts/build.ps1` | 0 警告，`633/633 passed` | `artifacts/validation/` |
 | `pwsh scripts/build-rust.ps1`（纯 crate） | rustfmt、clippy `-D warnings`、29 个 Rust 测试通过 | `artifacts/validation/rust/` |
-| `pwsh scripts/qa-crosslang-parity.ps1` | 4 个夹具逐字节一致；安装契约一致；Rust golden 通过 | `artifacts/validation/crosslang/` |
+| `pwsh scripts/qa-crosslang-parity.ps1` | 5 个夹具逐字节一致；安装契约一致；Rust golden 通过 | `artifacts/validation/crosslang/` |
 | `pwsh scripts/qa-tauri-ui.ps1 -SkipInstall` | typecheck、10 个 Vitest 用例、Vite 构建通过 | `artifacts/validation/qa-tauri-ui/` |
 | `cargo check/clippy -p autonet-preview`（GNU） | Tauri 外壳的 Rust 代码通过类型检查与 `-D warnings` | 本机临时运行 |
 | `AUTONET_DPAPI_SAME_MACHINE=1 cargo test -p autonet-storage` | 同机 DPAPI 解密夹具通过 | 本机临时运行 |
 
 Rust 测试合计 29 个（contracts 单元 7 + 投影 3、core 单元 3 + golden 3、storage 单元 9 + golden 4）。
+
+### CI 证据（PR #64，提交 `bbf5c14`）
+
+| 工作流 | 结果 | 链接 |
+| --- | --- | --- |
+| Rust / Tauri read-only preview（PR run） | 两个 job 均通过，含 MSVC 下的 `pnpm tauri build --no-bundle` | https://github.com/yuwen773/auto-net/actions/runs/45122072881 |
+| Windows offline regression（PR run） | `build` 与 `install-smoke` 均通过 | https://github.com/yuwen773/auto-net/actions/runs/45122072762 |
+| 同提交 push run | 两个工作流均通过 | https://github.com/yuwen773/auto-net/actions/runs/45122034771 · https://github.com/yuwen773/auto-net/actions/runs/45122034757 |
+
+### 验收状态（M1）
+
+| 项 | 状态 | 依据 |
+| --- | --- | --- |
+| C# 回归与既有 Windows CI | **PASS** | 本机 `633/633`；CI `build`、`install-smoke` 通过 |
+| Rust fmt/clippy/test | **PASS** | 本机 29 个测试；CI parity 与 workspace job 通过 |
+| React typecheck/test/build | **PASS** | 本机 10 个 Vitest；CI 前端步骤通过 |
+| 跨语言夹具与安装契约 | **PASS** | 本机与 CI parity 均通过 |
+| Tauri Windows 原生构建 | **PASS（CI）** | MSVC runner 上的 `tauri build --no-bundle` 通过 |
+| Tauri 原生启动、GUI、托盘、单实例、关闭隐藏 | **NOT_RUN** | 待在隔离 Windows 11 环境用普通用户执行 |
+| 真实非管理员 / UAC / 高 DPI | **NOT_RUN** | 同上 |
+| 真实安装/升级/卸载、实网认证 | **NOT_RUN** | 按边界不在本机执行 |
 
 ## 独立评审后的修复
 
@@ -72,10 +93,9 @@ Rust 测试合计 29 个（contracts 单元 7 + 投影 3、core 单元 3 + golde
 
 ## 未运行（NOT_RUN）
 
-- **Tauri Windows 原生构建与启动**：本机没有 MSVC 链接器。GNU 工具链能通过
-  `cargo check -p autonet-preview` 与 clippy，但链接 cdylib 时报 `export ordinal too large`，
-  因此外壳的可执行文件、WebView2 窗口、托盘、单实例与关闭隐藏均未在本机实跑。
-  CI 的 `rust-tauri` job 使用 `windows-2025` 的 MSVC 覆盖构建，但尚未在本次会话中看到远端运行结果。
+- **Tauri Windows 原生启动**：原生构建已在 CI 的 MSVC runner 上通过；本机没有 MSVC 链接器，
+  GNU 工具链链接 cdylib 时报 `export ordinal too large`，因此 WebView2 窗口、托盘、单实例与关闭隐藏
+  仍未在本机实跑，也未在隔离 Windows 11 环境验收。
 - **真实非管理员账户启动**、真实 UAC、真实 Windows 11 VM 的视觉/键盘/高 DPI 检查。
 - **真实安装/升级/卸载**：按要求不在本机执行 `install.ps1`；预览不生成安装器，也未注册服务。
 - **校园网在线/离线现场验收**：未做任何会改变连接或提交凭据的实网测试。
