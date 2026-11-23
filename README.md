@@ -68,6 +68,21 @@ pwsh.exe -NoLogo -NoProfile -File .\scripts\build.ps1 -Publish
 
 构建证据位于被忽略的 `artifacts/validation/`，记录有效 SDK、源码 commit、是否存在已跟踪改动、真实测试退出码与结果。发布包附 `build.json`、`tests.txt` 和 `SHA256SUMS.txt`；哈希用于校验一致性，不等同代码签名。Windows CI 只运行离线夹具，不需要校园账号；远端是否通过需查看实际 workflow 运行。
 
+### Rust / Tauri 只读预览（P1）
+
+`crates/` 是恢复策略、契约与只读存储的 Rust 对照实现，`apps/desktop/` 是 Tauri 2 + React 预览，只读取
+`status.json`、日志与服务状态，不访问 `private/`、不改 Wi-Fi、不提交凭据，也不替代现有服务。
+
+```powershell
+pwsh.exe -NoLogo -NoProfile -File scripts/build-rust.ps1        # 纯 crate：fmt + clippy + test
+pwsh.exe -NoLogo -NoProfile -File scripts/qa-crosslang-parity.ps1  # C# 导出 → 夹具比对 → Rust golden
+pwsh.exe -NoLogo -NoProfile -File scripts/qa-tauri-ui.ps1 -SkipInstall  # 前端 typecheck + test + build
+```
+
+需要 Rust 1.100.0 与 pnpm 10.26.2；Tauri 外壳构建还需要 Windows MSVC 与 WebView2。跨语言夹具位于
+`fixtures/cross-language/`，由 `tests/AutoNet.Tests.dll --export-golden-fixtures` 生成。首轮记录与
+`NOT_RUN` 清单见 [docs/progress/43-tauri-readonly-preview.md](docs/progress/43-tauri-readonly-preview.md)。
+
 只读本机诊断，不连接/断开 Wi-Fi、不提交凭据：
 
 ```powershell
