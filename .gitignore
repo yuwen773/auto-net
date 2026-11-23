@@ -15,3 +15,8 @@ local-secrets/
 *.pcapng
 credentials.dpapi
 auth-block.txt
+# Rust / Tauri 只读预览的构建产物
+/target/
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/gen/

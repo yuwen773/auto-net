@@ -1,0 +1,13 @@
+[package]
+name = "autonet-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AutoNet 纯恢复策略的 Rust 对照实现（P0）"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = { workspace = true }

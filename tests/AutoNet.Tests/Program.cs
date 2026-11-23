@@ -12,6 +12,8 @@ if (args.FirstOrDefault() == "--handoff-test-peer") return await SettingsHandoff
 if (args.FirstOrDefault() == "--settings-save-peer") return SettingsSaveRegression.RunSavePeer(args);
 if (args.FirstOrDefault() == "--settings-lock-peer") return SettingsSaveRegression.RunLockPeer(args);
 if (args.FirstOrDefault() == "--submission-budget-test-peer") return SubmissionBudgetRegression.RunPeer(args);
+if (args.FirstOrDefault() == "--export-golden-fixtures")
+    return args.Length > 1 ? GoldenFixtureExport.Export(args[1], args.Contains("--dpapi")) : 2;
 if (args.FirstOrDefault() == "--legacy-reader-corpus") return args.Length > 1 ? LegacyStateRegression.WriteCorpus(args[1]) : 2;
 if (args.FirstOrDefault() == "--legacy-reader-probe") return args.Length > 1 ? LegacyStateRegression.RunProbe(args[1]) : 2;
 if (args.FirstOrDefault() == "--submission-retry-test-peer") return SubmissionRetryRegression.RunPeer(args);
@@ -168,6 +170,7 @@ tests = tests.Concat(NotificationRouterRegression.Cases).ToArray();
 tests = tests.Concat(PortalOpenRegression.Cases).ToArray();
 tests = tests.Concat(DiagnosticsExporterRegression.Cases).ToArray();
 tests = tests.Concat(AccessibilityRegression.Cases).ToArray();
+tests = tests.Concat(GoldenFixtureExport.Cases).ToArray();
 
 if (args.Length != 0 && (args.Length != 2 || args[0] != "--filter"))
 {

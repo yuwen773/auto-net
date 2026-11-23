@@ -1,0 +1,24 @@
+[package]
+name = "autonet-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AutoNet 只读状态解释：历史认证记录、提交额度、状态文件与日志尾部（P0/P1）"
+publish = false
+
+[features]
+default = ["dpapi"]
+# 预览应用关闭该特性：凭证解密代码不进入 Tauri 二进制。
+dpapi = ["dep:windows-sys"]
+
+[dependencies]
+autonet-contracts = { path = "../autonet-contracts" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"], optional = true }
+
+[dev-dependencies]
+sha2 = { workspace = true }

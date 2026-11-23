@@ -1,0 +1,56 @@
+{
+  "schema": "autonet.golden.install-lifecycle/1",
+  "source": "scripts/install.ps1",
+  "notes": [
+    "手工维护：安装路径、服务定义与 ACL 来自 install.ps1；qa-crosslang-parity.ps1 会逐项核对脚本文本。",
+    "P0 只冻结契约，不运行安装器；真实安装/回退见 docs/VALIDATION.md 与 qa-install-smoke.ps1。"
+  ],
+  "service": {
+    "name": "AutoNet",
+    "displayName": "AutoNet 校园网连接守护",
+    "start": "Automatic",
+    "account": "LocalSystem",
+    "dependsOn": ["WlanSvc", "Tcpip"],
+    "binaryPath": "\"C:\\Program Files\\AutoNet\\service\\AutoNet.Service.exe\"",
+    "failureActions": ["restart/5000", "restart/15000", "restart/60000"],
+    "failureResetSeconds": 86400
+  },
+  "paths": {
+    "installRoot": "C:\\Program Files\\AutoNet",
+    "service": "C:\\Program Files\\AutoNet\\service\\AutoNet.Service.exe",
+    "tray": "C:\\Program Files\\AutoNet\\tray\\AutoNet.Tray.exe",
+    "authChannel": "C:\\Program Files\\AutoNet\\authchannel\\AutoNet.AuthChannel.exe",
+    "dataRoot": "C:\\ProgramData\\AutoNet",
+    "private": "C:\\ProgramData\\AutoNet\\private",
+    "settings": "C:\\ProgramData\\AutoNet\\private\\settings.json",
+    "credentials": "C:\\ProgramData\\AutoNet\\private\\credentials.dpapi",
+    "authBlock": "C:\\ProgramData\\AutoNet\\private\\auth-block.txt",
+    "submissionBudget": "C:\\ProgramData\\AutoNet\\private\\submission-budget.json",
+    "status": "C:\\ProgramData\\AutoNet\\status.json",
+    "logs": "C:\\ProgramData\\AutoNet\\logs"
+  },
+  "bundle": [
+    "service/AutoNet.Service.exe",
+    "tray/AutoNet.Tray.exe",
+    "authchannel/AutoNet.AuthChannel.exe"
+  ],
+  "acl": {
+    "installRoot": ["Administrators:FullControl", "SYSTEM:FullControl", "Users:ReadAndExecute"],
+    "dataRoot": ["Administrators:FullControl", "SYSTEM:FullControl", "Users:ReadAndExecute"],
+    "logs": ["Administrators:FullControl", "SYSTEM:FullControl", "Users:ReadAndExecute"],
+    "private": ["Administrators:FullControl", "SYSTEM:FullControl"]
+  },
+  "runKey": {
+    "path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+    "name": "AutoNet",
+    "value": "\"C:\\Program Files\\AutoNet\\tray\\AutoNet.Tray.exe\" --tray"
+  },
+  "shortcut": {
+    "path": "<CommonPrograms>\\AutoNet.lnk",
+    "target": "C:\\Program Files\\AutoNet\\tray\\AutoNet.Tray.exe"
+  },
+  "uninstall": {
+    "retainsByDefault": ["private", "status.json", "logs"],
+    "stopsServiceBeforeRemoval": true
+  }
+}

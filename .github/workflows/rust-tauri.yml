@@ -1,0 +1,103 @@
+name: Rust / Tauri read-only preview
+
+# P1 新增技术栈的独立校验。existing .NET CI（windows.yml / release.yml）保持不变。
+on:
+  push:
+    paths:
+      - 'apps/desktop/**'
+      - 'crates/**'
+      - 'fixtures/cross-language/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'tests/AutoNet.Tests/**'
+      - 'src/AutoNet.Core/**'
+      - 'scripts/install.ps1'
+      - 'scripts/build-rust.ps1'
+      - 'scripts/qa-crosslang-parity.ps1'
+      - 'scripts/qa-tauri-ui.ps1'
+      - '.github/workflows/rust-tauri.yml'
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'crates/**'
+      - 'fixtures/cross-language/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'tests/AutoNet.Tests/**'
+      - 'src/AutoNet.Core/**'
+      - 'scripts/install.ps1'
+      - 'scripts/build-rust.ps1'
+      - 'scripts/qa-crosslang-parity.ps1'
+      - 'scripts/qa-tauri-ui.ps1'
+      - '.github/workflows/rust-tauri.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: Cross-language golden parity
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.401'
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Re-export fixtures and replay them in Rust
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/qa-crosslang-parity.ps1
+      - name: Upload parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosslang-parity
+          path: artifacts/validation/crosslang/
+          if-no-files-found: warn
+
+  rust-tauri:
+    name: Rust workspace and Tauri preview
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: Frontend typecheck, tests and build
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
+          pnpm build
+      - name: Rust format, lint and tests
+        shell: pwsh
+        run: pwsh.exe -NoLogo -NoProfile -File scripts/build-rust.ps1 -Full
+      - name: Tauri build (no installer)
+        working-directory: apps/desktop
+        run: pnpm tauri build --no-bundle
+      - name: Upload preview executable and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autonet-preview
+          path: |
+            artifacts/validation/rust/
+            target/release/autonet-preview.exe
+          if-no-files-found: warn

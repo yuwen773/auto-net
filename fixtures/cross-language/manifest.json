@@ -1,0 +1,38 @@
+{
+  "schema": "autonet.golden.manifest/1",
+  "sourceBaselineCommit": "43c3b0e4b23f0b3f0c080de8945664add7182a1d",
+  "generator": "tests/AutoNet.Tests/bin/Release/net10.0-windows/AutoNet.Tests.dll --export-golden-fixtures <dir> [--dpapi]",
+  "fixtures": [
+    {
+      "file": "recovery-policy.json",
+      "schema": "autonet.golden.recovery/1",
+      "cases": 13
+    },
+    {
+      "file": "authentication-block.json",
+      "schema": "autonet.golden.authentication-block/1",
+      "cases": 37
+    },
+    {
+      "file": "submission-budget.json",
+      "schema": "autonet.golden.submission-budget/1",
+      "cases": 20
+    },
+    {
+      "file": "status-log-projection.json",
+      "schema": "autonet.golden.projection/1",
+      "cases": 2
+    },
+    {
+      "file": "dpapi-credential.json",
+      "schema": "autonet.golden.dpapi/1",
+      "cases": 1
+    }
+  ],
+  "notes": [
+    "install-lifecycle.json 为手工维护，来源是 scripts/install.ps1；qa-crosslang-parity.ps1 会逐项核对。",
+    "status-log-projection.json 由 C# 的 StatusSnapshot/ActivityLog 序列化结果组成，并刻意包含敏感哨兵；Rust 投影不得带出这些哨兵。",
+    "dpapi-credential.json 只在显式传入 --dpapi 时重写；密文随机且绑定本机，其他机器的解密用例必须跳过。",
+    "所有时间均为 Unix 毫秒；C# 的 DateTimeOffset.MinValue 不出现，缺省时刻用 null 表示。"
+  ]
+}
